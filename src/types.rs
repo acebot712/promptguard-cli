@@ -8,6 +8,8 @@ pub enum Provider {
     Anthropic,
     Cohere,
     HuggingFace,
+    Gemini,
+    Groq,
 }
 
 impl Provider {
@@ -17,6 +19,8 @@ impl Provider {
             Provider::Anthropic => "anthropic",
             Provider::Cohere => "cohere",
             Provider::HuggingFace => "huggingface",
+            Provider::Gemini => "gemini",
+            Provider::Groq => "groq",
         }
     }
 
@@ -26,6 +30,8 @@ impl Provider {
             "anthropic" => Some(Provider::Anthropic),
             "cohere" => Some(Provider::Cohere),
             "huggingface" | "hf" => Some(Provider::HuggingFace),
+            "gemini" | "google" => Some(Provider::Gemini),
+            "groq" => Some(Provider::Groq),
             _ => None,
         }
     }
@@ -36,6 +42,8 @@ impl Provider {
             Provider::Anthropic => "Anthropic",
             Provider::Cohere => "CohereClient",
             Provider::HuggingFace => "HfInference",
+            Provider::Gemini => "Client",
+            Provider::Groq => "Groq",
         }
     }
 

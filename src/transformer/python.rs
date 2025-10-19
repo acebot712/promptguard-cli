@@ -50,6 +50,28 @@ impl PythonTransformer {
                 ) @call_expr
             "#
             },
+            Provider::Gemini => {
+                r#"
+                (call
+                    function: (attribute
+                        object: (identifier) @module
+                        (#eq? @module "genai")
+                        attribute: (identifier) @class
+                        (#eq? @class "Client")
+                    )
+                    arguments: (argument_list) @args
+                ) @call_expr
+            "#
+            },
+            Provider::Groq => {
+                r#"
+                (call
+                    function: (identifier) @function
+                    (#eq? @function "Groq")
+                    arguments: (argument_list) @args
+                ) @call_expr
+            "#
+            },
         }
     }
 

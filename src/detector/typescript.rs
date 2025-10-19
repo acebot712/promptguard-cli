@@ -49,6 +49,24 @@ impl TypeScriptDetector {
                 ) @new_expr
             "#
             },
+            Provider::Gemini => {
+                r#"
+                (new_expression
+                    constructor: (identifier) @constructor
+                    (#eq? @constructor "GoogleGenAI")
+                    arguments: (arguments) @args
+                ) @new_expr
+            "#
+            },
+            Provider::Groq => {
+                r#"
+                (new_expression
+                    constructor: (identifier) @constructor
+                    (#eq? @constructor "Groq")
+                    arguments: (arguments) @args
+                ) @new_expr
+            "#
+            },
         }
     }
 
