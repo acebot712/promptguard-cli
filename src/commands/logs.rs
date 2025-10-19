@@ -21,7 +21,7 @@ impl LogsCommand {
         println!("  https://app.promptguard.co/dashboard/activity");
 
         if let Some(project_id) = config.project_id {
-            println!("\nProject: {}", project_id);
+            println!("\nProject: {project_id}");
         }
 
         println!("\nRecent activity:");

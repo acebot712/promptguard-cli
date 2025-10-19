@@ -44,7 +44,7 @@ impl ApplyCommand {
         let providers_to_check: Vec<Provider> = config
             .providers
             .iter()
-            .filter_map(|p| Provider::from_str(p))
+            .filter_map(|p| Provider::parse(p))
             .collect();
 
         let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
@@ -55,7 +55,7 @@ impl ApplyCommand {
                     if providers_to_check.contains(&provider) && !result.instances.is_empty() {
                         detection_results
                             .entry(provider)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(file_path.clone());
                     }
                 }
@@ -100,17 +100,21 @@ impl ApplyCommand {
                             let rel_path = file_path.strip_prefix(&root_path).unwrap_or(&file_path);
                             Output::step(&format!("✓ {}", rel_path.display()));
                         }
-                    }
+                    },
                     Err(e) => {
-                        Output::warning(&format!("Failed to transform {}: {}", file_path.display(), e));
-                    }
+                        Output::warning(&format!(
+                            "Failed to transform {}: {}",
+                            file_path.display(),
+                            e
+                        ));
+                    },
                 }
             }
         }
 
         println!();
         Output::success("Configuration applied!");
-        println!("\n  • {} files modified", files_modified);
+        println!("\n  • {files_modified} files modified");
 
         Ok(())
     }

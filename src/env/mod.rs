@@ -12,15 +12,18 @@ impl EnvManager {
             String::new()
         };
 
-        let mut lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+        let mut lines: Vec<String> = content
+            .lines()
+            .map(std::string::ToString::to_string)
+            .collect();
 
         // Find and update existing key
-        let key_prefix = format!("{}=", key);
+        let key_prefix = format!("{key}=");
         let mut found = false;
 
-        for line in lines.iter_mut() {
-            if line.starts_with(&key_prefix) || line.starts_with(&format!("export {}", key_prefix)) {
-                *line = format!("{}={}", key, value);
+        for line in &mut lines {
+            if line.starts_with(&key_prefix) || line.starts_with(&format!("export {key_prefix}")) {
+                *line = format!("{key}={value}");
                 found = true;
                 break;
             }
@@ -28,10 +31,12 @@ impl EnvManager {
 
         // Add if not found
         if !found {
-            if !lines.is_empty() && !lines.last().unwrap().is_empty() {
-                lines.push(String::new()); // Add blank line before
+            if let Some(last_line) = lines.last() {
+                if !last_line.is_empty() {
+                    lines.push(String::new()); // Add blank line before
+                }
             }
-            lines.push(format!("{}={}", key, value));
+            lines.push(format!("{key}={value}"));
         }
 
         let new_content = lines.join("\n");
@@ -51,14 +56,14 @@ impl EnvManager {
         }
 
         let content = fs::read_to_string(env_path)?;
-        let key_prefix = format!("{}=", key);
+        let key_prefix = format!("{key}=");
 
         let new_lines: Vec<String> = content
             .lines()
             .filter(|line| {
-                !line.starts_with(&key_prefix) && !line.starts_with(&format!("export {}", key_prefix))
+                !line.starts_with(&key_prefix) && !line.starts_with(&format!("export {key_prefix}"))
             })
-            .map(|l| l.to_string())
+            .map(std::string::ToString::to_string)
             .collect();
 
         let removed = new_lines.len() < content.lines().count();
@@ -76,33 +81,12 @@ impl EnvManager {
         }
 
         if let Ok(content) = fs::read_to_string(env_path) {
-            let key_prefix = format!("{}=", key);
-            content
-                .lines()
-                .any(|line| line.starts_with(&key_prefix) || line.starts_with(&format!("export {}", key_prefix)))
+            let key_prefix = format!("{key}=");
+            content.lines().any(|line| {
+                line.starts_with(&key_prefix) || line.starts_with(&format!("export {key_prefix}"))
+            })
         } else {
             false
         }
-    }
-
-    pub fn get_value(env_path: &Path, key: &str) -> Option<String> {
-        if !env_path.exists() {
-            return None;
-        }
-
-        let content = fs::read_to_string(env_path).ok()?;
-        let key_prefix = format!("{}=", key);
-
-        for line in content.lines() {
-            if line.starts_with(&key_prefix) {
-                return Some(line[key_prefix.len()..].to_string());
-            }
-            let export_prefix = format!("export {}=", key);
-            if line.starts_with(&export_prefix) {
-                return Some(line[export_prefix.len()..].to_string());
-            }
-        }
-
-        None
     }
 }

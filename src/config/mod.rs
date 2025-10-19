@@ -49,6 +49,8 @@ pub struct PromptGuardConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default)]
+    pub runtime_mode: bool,
+    #[serde(default)]
     pub metadata: ConfigMetadata,
 }
 
@@ -83,11 +85,7 @@ fn default_env_var_name() -> String {
 }
 
 impl PromptGuardConfig {
-    pub fn new(
-        api_key: String,
-        proxy_url: String,
-        providers: Vec<String>,
-    ) -> Result<Self> {
+    pub fn new(api_key: String, proxy_url: String, providers: Vec<String>) -> Result<Self> {
         // Validate API key format
         if !api_key.starts_with("pg_sk_test_") && !api_key.starts_with("pg_sk_prod_") {
             return Err(PromptGuardError::InvalidApiKey);
@@ -106,6 +104,7 @@ impl PromptGuardConfig {
             env_var_name: "PROMPTGUARD_API_KEY".to_string(),
             framework: None,
             enabled: true,
+            runtime_mode: false,
             metadata: ConfigMetadata::default(),
         })
     }
@@ -121,7 +120,7 @@ impl ConfigManager {
     pub fn new(config_path: Option<PathBuf>) -> Self {
         let path = config_path.unwrap_or_else(|| {
             std::env::current_dir()
-                .unwrap()
+                .expect("Failed to get current directory")
                 .join(Self::DEFAULT_CONFIG_FILE)
         });
 
@@ -135,14 +134,21 @@ impl ConfigManager {
 
         let content = fs::read_to_string(&self.config_path)?;
         let config: PromptGuardConfig = serde_json::from_str(&content)
-            .map_err(|e| PromptGuardError::Config(format!("Failed to parse config: {}", e)))?;
+            .map_err(|e| PromptGuardError::Config(format!("Failed to parse config: {e}")))?;
+
+        // Security: Validate paths don't escape project directory
+        if config.env_file.contains("..") || config.env_file.starts_with('/') {
+            return Err(PromptGuardError::Config(
+                "Invalid env_file in config: must be relative path within project".to_string(),
+            ));
+        }
 
         Ok(config)
     }
 
     pub fn save(&self, config: &PromptGuardConfig) -> Result<()> {
         let content = serde_json::to_string_pretty(&config)
-            .map_err(|e| PromptGuardError::Config(format!("Failed to serialize config: {}", e)))?;
+            .map_err(|e| PromptGuardError::Config(format!("Failed to serialize config: {e}")))?;
 
         fs::write(&self.config_path, content)?;
 

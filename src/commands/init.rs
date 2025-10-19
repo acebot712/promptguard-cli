@@ -25,7 +25,10 @@ pub struct InitCommand {
 impl InitCommand {
     pub fn execute(&self) -> Result<()> {
         if !self.dry_run {
-            Output::header(&format!("🛡️  PromptGuard CLI v{}", env!("CARGO_PKG_VERSION")));
+            Output::header(&format!(
+                "🛡️  PromptGuard CLI v{}",
+                env!("CARGO_PKG_VERSION")
+            ));
         }
 
         // Check if already initialized
@@ -54,12 +57,18 @@ impl InitCommand {
         )?;
 
         if let Some(git_root) = scanner.find_git_root() {
-            Output::step(&format!("Found .git directory (root: {})", git_root.display()));
+            Output::step(&format!(
+                "Found .git directory (root: {})",
+                git_root.display()
+            ));
         }
 
-        let framework = self.framework.clone().or_else(|| scanner.detect_framework());
+        let framework = self
+            .framework
+            .clone()
+            .or_else(|| scanner.detect_framework());
         if let Some(ref fw) = framework {
-            Output::step(&format!("Detected framework: {}", fw));
+            Output::step(&format!("Detected framework: {fw}"));
         }
 
         let files = scanner.scan_files(None)?;
@@ -68,14 +77,20 @@ impl InitCommand {
         // Detect SDK usage
         Output::section("Detected LLM SDKs:", "🔍");
 
-        let providers_to_check: Vec<Provider> = if self.provider.is_empty() || self.provider.contains(&"all".to_string()) {
-            vec![Provider::OpenAI, Provider::Anthropic, Provider::Cohere, Provider::HuggingFace]
-        } else {
-            self.provider
-                .iter()
-                .filter_map(|p| Provider::from_str(p))
-                .collect()
-        };
+        let providers_to_check: Vec<Provider> =
+            if self.provider.is_empty() || self.provider.contains(&"all".to_string()) {
+                vec![
+                    Provider::OpenAI,
+                    Provider::Anthropic,
+                    Provider::Cohere,
+                    Provider::HuggingFace,
+                ]
+            } else {
+                self.provider
+                    .iter()
+                    .filter_map(|p| Provider::parse(p))
+                    .collect()
+            };
 
         let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
 
@@ -85,7 +100,7 @@ impl InitCommand {
                     if providers_to_check.contains(&provider) && !result.instances.is_empty() {
                         detection_results
                             .entry(provider)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(file_path.clone());
                     }
                 }
@@ -108,8 +123,12 @@ impl InitCommand {
             unique_files.sort();
             unique_files.dedup();
 
-            println!("   • {} SDK ({} files)", provider.class_name(), unique_files.len());
-            for (i, file) in unique_files.iter().take(5).enumerate() {
+            println!(
+                "   • {} SDK ({} files)",
+                provider.class_name(),
+                unique_files.len()
+            );
+            for file in unique_files.iter().take(5) {
                 let rel_path = file.strip_prefix(&root_path).unwrap_or(file);
                 Output::step(&format!("{}", rel_path.display()));
             }
@@ -122,7 +141,10 @@ impl InitCommand {
         println!();
         Output::section("Configuration:", "📝");
         println!("   • Proxy URL: {}", self.base_url);
-        println!("   • Backup files: {}", if self.no_backup { "No" } else { "Yes (*.bak)" });
+        println!(
+            "   • Backup files: {}",
+            if self.no_backup { "No" } else { "Yes (*.bak)" }
+        );
         println!("   • Environment: {}", self.env_file);
 
         // Confirm changes
@@ -141,7 +163,11 @@ impl InitCommand {
         // Apply transformations
         println!();
         Output::section(
-            if self.dry_run { "Preview:" } else { "Applying changes..." },
+            if self.dry_run {
+                "Preview:"
+            } else {
+                "Applying changes..."
+            },
             "🔧",
         );
 
@@ -187,30 +213,50 @@ impl InitCommand {
                                 provider.as_str()
                             ));
                         } else {
-                            Output::excluded(&format!("{} (no changes needed)", rel_path.display()));
+                            Output::excluded(&format!(
+                                "{} (no changes needed)",
+                                rel_path.display()
+                            ));
                         }
-                    }
+                    },
                     Err(e) => {
-                        Output::warning(&format!("Failed to transform {}: {}", file_path.display(), e));
-                    }
+                        Output::warning(&format!(
+                            "Failed to transform {}: {}",
+                            file_path.display(),
+                            e
+                        ));
+                    },
                 }
             }
         }
 
         // Update .env file
+        // Security: Validate env_file doesn't escape project directory
+        if self.env_file.contains("..") || self.env_file.starts_with('/') {
+            return Err(crate::error::PromptGuardError::Custom(
+                "Invalid env file path: must be relative and within project directory".to_string(),
+            ));
+        }
         let env_path = root_path.join(&self.env_file);
         if !self.dry_run {
             EnvManager::add_or_update_key(&env_path, "PROMPTGUARD_API_KEY", &api_key)?;
             Output::step(&format!("{} (added PROMPTGUARD_API_KEY)", self.env_file));
         } else {
-            Output::step(&format!("{} (would add PROMPTGUARD_API_KEY)", self.env_file));
+            Output::step(&format!(
+                "{} (would add PROMPTGUARD_API_KEY)",
+                self.env_file
+            ));
         }
 
         // Save configuration
         if !self.dry_run {
-            let providers_list: Vec<String> = detection_results.keys().map(|p| p.as_str().to_string()).collect();
+            let providers_list: Vec<String> = detection_results
+                .keys()
+                .map(|p| p.as_str().to_string())
+                .collect();
 
-            let mut config = PromptGuardConfig::new(api_key, self.base_url.clone(), providers_list)?;
+            let mut config =
+                PromptGuardConfig::new(api_key, self.base_url.clone(), providers_list)?;
 
             config.exclude_patterns = if self.exclude.is_empty() {
                 crate::config::default_exclude_patterns()
@@ -224,7 +270,12 @@ impl InitCommand {
 
             config.metadata.files_managed = files_modified
                 .iter()
-                .map(|f| f.strip_prefix(&root_path).unwrap_or(f).to_string_lossy().to_string())
+                .map(|f| {
+                    f.strip_prefix(&root_path)
+                        .unwrap_or(f)
+                        .to_string_lossy()
+                        .to_string()
+                })
                 .collect();
 
             if let Some(ref bm) = backup_manager {
@@ -232,7 +283,8 @@ impl InitCommand {
                     .iter()
                     .map(|f| {
                         let backup_path = bm.backup_path(f);
-                        backup_path.strip_prefix(&root_path)
+                        backup_path
+                            .strip_prefix(&root_path)
                             .unwrap_or(&backup_path)
                             .to_string_lossy()
                             .to_string()
@@ -285,7 +337,9 @@ impl InitCommand {
         };
 
         if api_key.is_empty() {
-            return Err(crate::error::PromptGuardError::Custom("API key is required".to_string()));
+            return Err(crate::error::PromptGuardError::Custom(
+                "API key is required".to_string(),
+            ));
         }
 
         // Validate API key format

@@ -10,11 +10,16 @@ pub struct FileScanner {
 }
 
 impl FileScanner {
-    pub fn new<P: AsRef<Path>>(root_path: P, exclude_patterns: Option<Vec<String>>) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        root_path: P,
+        exclude_patterns: Option<Vec<String>>,
+    ) -> Result<Self> {
         let patterns = exclude_patterns.unwrap_or_else(Self::default_exclude_patterns);
         let exclude_patterns: Result<Vec<Pattern>> = patterns
             .iter()
-            .map(|p| Pattern::new(p).map_err(|e| crate::error::PromptGuardError::Custom(e.to_string())))
+            .map(|p| {
+                Pattern::new(p).map_err(|e| crate::error::PromptGuardError::Custom(e.to_string()))
+            })
             .collect();
 
         Ok(Self {
@@ -69,7 +74,9 @@ impl FileScanner {
                 if let Some(dependencies) = json.get("dependencies").and_then(|v| v.as_object()) {
                     deps.extend(dependencies.keys());
                 }
-                if let Some(dev_dependencies) = json.get("devDependencies").and_then(|v| v.as_object()) {
+                if let Some(dev_dependencies) =
+                    json.get("devDependencies").and_then(|v| v.as_object())
+                {
                     deps.extend(dev_dependencies.keys());
                 }
 
@@ -151,7 +158,7 @@ impl FileScanner {
         for entry in WalkDir::new(&self.root_path)
             .follow_links(false)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
         {
             let path = entry.path();
 
@@ -180,9 +187,5 @@ impl FileScanner {
         });
 
         Ok(files)
-    }
-
-    pub fn root_path(&self) -> &Path {
-        &self.root_path
     }
 }

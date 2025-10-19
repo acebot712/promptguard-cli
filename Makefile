@@ -1,6 +1,6 @@
 # PromptGuard CLI - Makefile
 
-.PHONY: help build release install clean test check format cross-compile
+.PHONY: help build release install uninstall clean test check format lint fmt-check ci cross-compile
 
 help:
 	@echo "PromptGuard CLI - Build Targets"
@@ -9,9 +9,15 @@ help:
 	@echo "  make build          Build debug binary"
 	@echo "  make release        Build optimized release binary"
 	@echo "  make install        Install binary to ~/.cargo/bin"
+	@echo "  make uninstall      Uninstall binary from ~/.cargo/bin"
+	@echo ""
+	@echo "Quality:"
 	@echo "  make test           Run tests"
-	@echo "  make check          Check for errors"
-	@echo "  make format         Format code"
+	@echo "  make check          Quick sanity check"
+	@echo "  make lint           Run clippy linter"
+	@echo "  make format         Format code with rustfmt"
+	@echo "  make fmt-check      Check if code is formatted"
+	@echo "  make ci             Run all CI checks locally"
 	@echo ""
 	@echo "Distribution:"
 	@echo "  make cross-compile  Build for all platforms"
@@ -34,20 +40,61 @@ install:
 	@echo "✓ Installed to ~/.cargo/bin/promptguard"
 	@which promptguard
 
+uninstall:
+	@echo "Uninstalling PromptGuard CLI..."
+	cargo uninstall promptguard-cli || cargo uninstall promptguard || true
+	@echo ""
+	@if command -v promptguard >/dev/null 2>&1; then \
+		echo "⚠ Warning: promptguard still found in PATH"; \
+		echo "Location: $$(which promptguard)"; \
+		echo "You may need to remove it manually"; \
+	else \
+		echo "✓ PromptGuard CLI uninstalled successfully"; \
+	fi
+	@echo ""
+	@if [ -d "$$HOME/.promptguard" ]; then \
+		echo "Configuration directory still exists: $$HOME/.promptguard"; \
+		echo "To remove it, run: rm -rf $$HOME/.promptguard"; \
+	fi
+
 clean:
 	cargo clean
 	rm -rf target/
 	@echo "✓ Cleaned build artifacts"
 
 test:
-	cargo test
+	@echo "🧪 Running tests..."
+	@cargo test
 
 check:
-	cargo check
-	cargo clippy -- -D warnings
+	@echo "🔍 Quick sanity check..."
+	@cargo check --all-targets
+
+lint:
+	@echo "🔬 Running clippy..."
+	@cargo clippy --all-targets --all-features
 
 format:
-	cargo fmt
+	@echo "🎨 Formatting code..."
+	@cargo fmt
+
+fmt-check:
+	@echo "🔍 Checking formatting..."
+	@cargo fmt -- --check
+
+# Run the same checks as CI - catch issues before pushing
+ci:
+	@echo "🚀 Running full CI checks locally..."
+	@echo ""
+	@$(MAKE) fmt-check
+	@echo ""
+	@$(MAKE) lint
+	@echo ""
+	@$(MAKE) test
+	@echo ""
+	@$(MAKE) build
+	@echo ""
+	@echo "✅ All CI checks passed! Safe to push."
 
 # Cross-compile for all platforms
 cross-compile:

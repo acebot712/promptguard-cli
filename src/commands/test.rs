@@ -23,18 +23,18 @@ impl TestCommand {
         let client = PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()));
 
         match client.health_check() {
-            Ok(_) => {
+            Ok(()) => {
                 Output::success("✓ API key is valid");
                 Output::success("✓ Proxy endpoint is reachable");
-            }
+            },
             Err(e) => {
-                Output::warning(&format!("✗ Connection failed: {}", e));
+                Output::warning(&format!("✗ Connection failed: {e}"));
                 println!("\nPossible issues:");
                 println!("  • Invalid API key");
                 println!("  • Network connectivity");
                 println!("  • Proxy endpoint unavailable");
                 return Ok(());
-            }
+            },
         }
 
         println!();

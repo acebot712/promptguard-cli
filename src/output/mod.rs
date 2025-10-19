@@ -1,4 +1,4 @@
-use colored::*;
+use colored::Colorize;
 use std::io::{self, Write};
 
 pub struct Output;
@@ -44,16 +44,18 @@ impl Output {
 
         let prefix = &key[..12];
         let masked_part = "*".repeat(key.len() - 12);
-        format!("{}{}", prefix, masked_part)
+        format!("{prefix}{masked_part}")
     }
 
     pub fn confirm(prompt: &str, default: bool) -> bool {
         let default_str = if default { "Y/n" } else { "y/N" };
         print!("{} [{}]: ", prompt.bold(), default_str);
-        io::stdout().flush().unwrap();
+        io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read user input");
 
         let input = input.trim().to_lowercase();
 
@@ -66,10 +68,12 @@ impl Output {
 
     pub fn input(prompt: &str) -> String {
         print!("{}: ", prompt.bold());
-        io::stdout().flush().unwrap();
+        io::stdout().flush().expect("Failed to flush stdout");
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input).unwrap();
+        io::stdin()
+            .read_line(&mut input)
+            .expect("Failed to read user input");
 
         input.trim().to_string()
     }

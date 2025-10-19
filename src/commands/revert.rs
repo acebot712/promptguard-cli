@@ -1,7 +1,7 @@
 use crate::backup::BackupManager;
 use crate::config::ConfigManager;
 use crate::env::EnvManager;
-use crate::error::{PromptGuardError, Result};
+use crate::error::Result;
 use crate::output::Output;
 
 pub struct RevertCommand {
@@ -42,7 +42,8 @@ impl RevertCommand {
 
         for backup_path in &backups {
             if let Some(original_path_str) = backup_path.to_str() {
-                if let Some(original_str) = original_path_str.strip_suffix(&config.backup_extension) {
+                if let Some(original_str) = original_path_str.strip_suffix(&config.backup_extension)
+                {
                     let original_path = std::path::PathBuf::from(original_str);
                     if backup_manager.restore_backup(&original_path).is_ok() {
                         Output::step(&format!("Restored {}", original_path.display()));
@@ -59,7 +60,10 @@ impl RevertCommand {
         // Remove API key from .env
         let env_path = root_path.join(&config.env_file);
         if EnvManager::remove_key(&env_path, &config.env_var_name)? {
-            Output::step(&format!("Removed {} from {}", config.env_var_name, config.env_file));
+            Output::step(&format!(
+                "Removed {} from {}",
+                config.env_var_name, config.env_file
+            ));
         }
 
         // Delete config file
@@ -68,7 +72,7 @@ impl RevertCommand {
 
         println!();
         Output::success("PromptGuard has been completely removed!");
-        println!("\n  • {} files restored", restored_count);
+        println!("\n  • {restored_count} files restored");
         println!("  • {} backups deleted", deleted.len());
         println!("  • Configuration removed");
         println!("\nYour project is back to its original state.");

@@ -17,9 +17,6 @@ pub enum PromptGuardError {
     #[error("API error: {0}")]
     Api(String),
 
-    #[error("Transformation error: {0}")]
-    Transform(String),
-
     #[error("Not initialized. Run 'promptguard init' first")]
     NotInitialized,
 

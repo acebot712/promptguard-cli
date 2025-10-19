@@ -21,11 +21,12 @@ impl KeyCommand {
 
         // Show current key (masked)
         println!("\nCurrent API key:");
-        println!("  {} = {}...{}",
+        println!(
+            "  {} = {}...{}",
             config.env_var_name,
-            &config.api_key[..12],  // pg_sk_test_
+            &config.api_key[..12], // pg_sk_test_
             if config.api_key.len() > 16 {
-                &config.api_key[config.api_key.len()-4..]
+                &config.api_key[config.api_key.len() - 4..]
             } else {
                 ""
             }
@@ -69,13 +70,13 @@ impl KeyCommand {
                 println!("\nThe new key has been saved to:");
                 println!("  • .promptguard.json");
                 println!("  • {}", config.env_file);
-            }
+            },
             "2" => {
                 // Show full key
                 println!("\nFull API key:");
                 println!("  {}", config.api_key);
                 println!("\n⚠️  Keep this key secure. Don't share it publicly.");
-            }
+            },
             "3" => {
                 // Rotate key - requires API call
                 Output::info("Key rotation requires API access.");
@@ -84,10 +85,10 @@ impl KeyCommand {
                 println!("  2. Generate a new key");
                 println!("  3. Run: promptguard key");
                 println!("  4. Select option 1 to update");
-            }
+            },
             _ => {
                 Output::info("Cancelled");
-            }
+            },
         }
 
         Ok(())

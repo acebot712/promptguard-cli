@@ -13,7 +13,10 @@ impl DoctorCommand {
         println!("\n🩺 Running diagnostics...\n");
 
         // Check CLI version
-        Output::step(&format!("CLI version: {} (latest)", env!("CARGO_PKG_VERSION")));
+        Output::step(&format!(
+            "CLI version: {} (latest)",
+            env!("CARGO_PKG_VERSION")
+        ));
 
         // Check config file
         let config_manager = ConfigManager::new(None);
@@ -22,15 +25,17 @@ impl DoctorCommand {
                 Ok(config) => {
                     Output::step("Configuration file: .promptguard.json (valid)");
 
-                    if config.api_key.starts_with("pg_sk_test_") || config.api_key.starts_with("pg_sk_prod_") {
+                    if config.api_key.starts_with("pg_sk_test_")
+                        || config.api_key.starts_with("pg_sk_prod_")
+                    {
                         Output::step("API key: valid format");
                     } else {
                         Output::warning("API key: invalid format");
                     }
-                }
+                },
                 Err(e) => {
-                    Output::warning(&format!("Configuration file: invalid ({})", e));
-                }
+                    Output::warning(&format!("Configuration file: invalid ({e})"));
+                },
             }
         } else {
             Output::warning("Configuration file: not found (run 'promptguard init')");
@@ -54,7 +59,10 @@ impl DoctorCommand {
         if backups.is_empty() {
             Output::step("No backup files found");
         } else {
-            Output::warning(&format!("Git: {} uncommitted files (*.bak backups)", backups.len()));
+            Output::warning(&format!(
+                "Git: {} uncommitted files (*.bak backups)",
+                backups.len()
+            ));
             println!("\nRecommendations:");
             println!("  1. Commit or remove *.bak backup files");
         }
