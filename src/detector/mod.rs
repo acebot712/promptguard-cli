@@ -1,8 +1,10 @@
 mod core;
 mod python;
+mod registry;
 mod typescript;
 
 pub use python::PythonDetector;
+pub use registry::PROVIDERS;
 pub use typescript::TypeScriptDetector;
 
 use crate::error::Result;
@@ -21,16 +23,12 @@ pub fn detect_all_providers(file_path: &Path) -> Result<Vec<(Provider, Detection
     let Some(language) = language else {
         return Ok(Vec::new());
     };
-    let providers = vec![
-        Provider::OpenAI,
-        Provider::Anthropic,
-        Provider::Cohere,
-        Provider::HuggingFace,
-    ];
 
+    // Use registry instead of hardcoded list
     let mut results = Vec::new();
 
-    for provider in providers {
+    for provider_info in PROVIDERS {
+        let provider = provider_info.provider;
         let result = match language {
             Language::TypeScript | Language::JavaScript => {
                 let detector = TypeScriptDetector::new();
