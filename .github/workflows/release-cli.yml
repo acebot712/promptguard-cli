@@ -31,6 +31,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             name: promptguard-linux-x86_64
 
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            name: promptguard-windows-x86_64
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -44,29 +49,40 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }}
 
       - name: Prepare binary
+        shell: bash
         run: |
           cd target/${{ matrix.target }}/release
-          cp promptguard ${{ matrix.name }}
-          chmod +x ${{ matrix.name }}
+
+          # Handle Windows .exe extension
+          if [ "${{ matrix.os }}" = "windows-latest" ]; then
+            BINARY_NAME="promptguard.exe"
+            OUTPUT_NAME="${{ matrix.name }}.exe"
+          else
+            BINARY_NAME="promptguard"
+            OUTPUT_NAME="${{ matrix.name }}"
+          fi
+
+          cp $BINARY_NAME $OUTPUT_NAME
+
+          # Make executable (no-op on Windows, required on Unix)
+          chmod +x $OUTPUT_NAME || true
 
           # Generate checksum
           if [ "${{ matrix.os }}" = "macos-latest" ]; then
-            shasum -a 256 ${{ matrix.name }} > ${{ matrix.name }}.sha256
+            shasum -a 256 $OUTPUT_NAME > ${OUTPUT_NAME}.sha256
           else
-            sha256sum ${{ matrix.name }} > ${{ matrix.name }}.sha256
+            sha256sum $OUTPUT_NAME > ${OUTPUT_NAME}.sha256
           fi
 
           # Move to workspace root
-          mv ${{ matrix.name }} $GITHUB_WORKSPACE/
-          mv ${{ matrix.name }}.sha256 $GITHUB_WORKSPACE/
+          mv $OUTPUT_NAME $GITHUB_WORKSPACE/
+          mv ${OUTPUT_NAME}.sha256 $GITHUB_WORKSPACE/
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
-          path: |
-            ${{ matrix.name }}
-            ${{ matrix.name }}.sha256
+          path: ${{ matrix.name }}*
 
   release:
     name: Create Release
@@ -130,6 +146,7 @@ jobs:
             - macOS ARM64 (M1/M2/M3)
             - macOS x86_64 (Intel)
             - Linux x86_64
+            - Windows x86_64
 
             ---
 
