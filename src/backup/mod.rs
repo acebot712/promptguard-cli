@@ -46,18 +46,6 @@ impl BackupManager {
         Ok(())
     }
 
-    pub fn has_backup(&self, file_path: &Path) -> bool {
-        self.backup_path(file_path).exists()
-    }
-
-    pub fn delete_backup(&self, file_path: &Path) -> Result<()> {
-        let backup_path = self.backup_path(file_path);
-        if backup_path.exists() {
-            fs::remove_file(&backup_path)?;
-        }
-        Ok(())
-    }
-
     pub fn list_backups(&self, root_path: &Path) -> Vec<PathBuf> {
         let mut backups = Vec::new();
         let pattern = format!("*{}", self.backup_extension);
@@ -65,13 +53,13 @@ impl BackupManager {
         for entry in WalkDir::new(root_path)
             .follow_links(false)
             .into_iter()
-            .filter_map(|e| e.ok())
+            .filter_map(std::result::Result::ok)
         {
             let path = entry.path();
             if path.is_file() {
                 if let Some(filename) = path.file_name() {
                     if glob::Pattern::new(&pattern)
-                        .unwrap()
+                        .expect("Backup pattern should be valid glob")
                         .matches(&filename.to_string_lossy())
                     {
                         backups.push(path.to_path_buf());

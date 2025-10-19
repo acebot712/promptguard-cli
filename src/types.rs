@@ -20,7 +20,7 @@ impl Provider {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "openai" => Some(Provider::OpenAI),
             "anthropic" => Some(Provider::Anthropic),
@@ -36,15 +36,6 @@ impl Provider {
             Provider::Anthropic => "Anthropic",
             Provider::Cohere => "CohereClient",
             Provider::HuggingFace => "HfInference",
-        }
-    }
-
-    pub fn python_class_name(&self) -> &'static str {
-        match self {
-            Provider::OpenAI => "OpenAI",
-            Provider::Anthropic => "Anthropic",
-            Provider::Cohere => "CohereClient",
-            Provider::HuggingFace => "InferenceClient",
         }
     }
 
@@ -74,7 +65,7 @@ pub struct DetectionInstance {
     pub current_base_url: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Language {
     TypeScript,
     JavaScript,
@@ -105,25 +96,17 @@ pub struct DetectionResult {
     pub instances: Vec<DetectionInstance>,
 }
 
+impl Default for DetectionResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DetectionResult {
     pub fn new() -> Self {
         Self {
             instances: Vec::new(),
         }
-    }
-
-    pub fn file_count(&self) -> usize {
-        let mut files: Vec<_> = self.instances.iter().map(|i| &i.file_path).collect();
-        files.sort();
-        files.dedup();
-        files.len()
-    }
-
-    pub fn get_files(&self) -> Vec<PathBuf> {
-        let mut files: Vec<_> = self.instances.iter().map(|i| i.file_path.clone()).collect();
-        files.sort();
-        files.dedup();
-        files
     }
 }
 

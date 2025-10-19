@@ -1,8 +1,9 @@
-mod typescript;
+mod core;
 mod python;
+mod typescript;
 
-pub use typescript::TypeScriptDetector;
 pub use python::PythonDetector;
+pub use typescript::TypeScriptDetector;
 
 use crate::error::Result;
 use crate::types::{DetectionResult, Language, Provider};
@@ -14,17 +15,12 @@ pub trait Detector {
 }
 
 pub fn detect_all_providers(file_path: &Path) -> Result<Vec<(Provider, DetectionResult)>> {
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let language = Language::from_extension(ext);
-    if language.is_none() {
+    let Some(language) = language else {
         return Ok(Vec::new());
-    }
-
-    let language = language.unwrap();
+    };
     let providers = vec![
         Provider::OpenAI,
         Provider::Anthropic,
@@ -39,11 +35,11 @@ pub fn detect_all_providers(file_path: &Path) -> Result<Vec<(Provider, Detection
             Language::TypeScript | Language::JavaScript => {
                 let detector = TypeScriptDetector::new();
                 detector.detect_in_file(file_path, provider)?
-            }
+            },
             Language::Python => {
                 let detector = PythonDetector::new();
                 detector.detect_in_file(file_path, provider)?
-            }
+            },
         };
 
         if !result.instances.is_empty() {

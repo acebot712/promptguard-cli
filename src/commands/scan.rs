@@ -14,7 +14,10 @@ pub struct ScanCommand {
 impl ScanCommand {
     pub fn execute(&self) -> Result<()> {
         if !self.json {
-            Output::header(&format!("🛡️  PromptGuard CLI v{}", env!("CARGO_PKG_VERSION")));
+            Output::header(&format!(
+                "🛡️  PromptGuard CLI v{}",
+                env!("CARGO_PKG_VERSION")
+            ));
             Output::section("LLM SDK Detection Report", "📊");
         }
 
@@ -36,7 +39,7 @@ impl ScanCommand {
                     if !result.instances.is_empty() {
                         detection_results
                             .entry(provider)
-                            .or_insert_with(Vec::new)
+                            .or_default()
                             .push(file_path.clone());
                     }
                 }
@@ -52,7 +55,12 @@ impl ScanCommand {
         Ok(())
     }
 
-    fn print_json(&self, results: &HashMap<Provider, Vec<PathBuf>>, root: &PathBuf, total_files: usize) -> Result<()> {
+    fn print_json(
+        &self,
+        results: &HashMap<Provider, Vec<PathBuf>>,
+        root: &PathBuf,
+        total_files: usize,
+    ) -> Result<()> {
         let mut providers_data = Vec::new();
 
         for (provider, files) in results {
@@ -73,7 +81,7 @@ impl ScanCommand {
         let output = serde_json::json!({
             "total_files_scanned": total_files,
             "files_with_sdks": results.values().flat_map(|v| v.iter()).count(),
-            "total_instances": results.values().map(|v| v.len()).sum::<usize>(),
+            "total_instances": results.values().map(std::vec::Vec::len).sum::<usize>(),
             "providers": providers_data,
         });
 
@@ -82,13 +90,23 @@ impl ScanCommand {
         Ok(())
     }
 
-    fn print_human(&self, results: &HashMap<Provider, Vec<PathBuf>>, root: &PathBuf, total_files: usize) -> Result<()> {
+    fn print_human(
+        &self,
+        results: &HashMap<Provider, Vec<PathBuf>>,
+        root: &PathBuf,
+        total_files: usize,
+    ) -> Result<()> {
         for (provider, files) in results {
             let mut unique_files = files.clone();
             unique_files.sort();
             unique_files.dedup();
 
-            println!("\n{} SDK ({} files, {} instances)", provider.class_name(), unique_files.len(), files.len());
+            println!(
+                "\n{} SDK ({} files, {} instances)",
+                provider.class_name(),
+                unique_files.len(),
+                files.len()
+            );
 
             for file in unique_files.iter().take(10) {
                 let rel_path = file.strip_prefix(root).unwrap_or(file);
@@ -101,10 +119,10 @@ impl ScanCommand {
         }
 
         println!("\nSummary:");
-        println!("  • Total files scanned: {}", total_files);
+        println!("  • Total files scanned: {total_files}");
 
-        let total_instances: usize = results.values().map(|v| v.len()).sum();
-        println!("  • Total instances: {}", total_instances);
+        let total_instances: usize = results.values().map(std::vec::Vec::len).sum();
+        println!("  • Total instances: {total_instances}");
 
         println!("\nProviders detected:");
         if results.is_empty() {

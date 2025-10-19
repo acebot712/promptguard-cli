@@ -97,6 +97,48 @@ npm install -g promptguard
 
 ---
 
+## Uninstallation
+
+### Uninstall (if installed via install.sh)
+
+**macOS / Linux:**
+```bash
+curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/uninstall.sh | sh
+```
+
+The uninstall script will:
+- Remove the binary from `/usr/local/bin/promptguard`
+- Ask if you want to remove configuration files
+- Verify successful removal
+
+**Manual uninstall:**
+```bash
+# Remove binary
+sudo rm /usr/local/bin/promptguard
+
+# Optionally remove configuration
+rm -rf ~/.promptguard
+```
+
+### Uninstall (if installed via make install)
+
+**From the project directory:**
+```bash
+make uninstall
+```
+
+**Or using cargo directly:**
+```bash
+cargo uninstall promptguard-cli
+```
+
+**Optionally remove configuration:**
+```bash
+rm -rf ~/.promptguard
+```
+
+---
+
 ## Quick Start
 
 ### Usage

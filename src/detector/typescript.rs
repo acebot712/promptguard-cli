@@ -1,9 +1,8 @@
+use crate::detector::core::{detect_in_file_generic, DetectorConfig};
 use crate::detector::Detector;
-use crate::error::{PromptGuardError, Result};
-use crate::types::{DetectionInstance, DetectionResult, Language, Provider};
-use std::fs;
+use crate::error::Result;
+use crate::types::{DetectionResult, Language, Provider};
 use std::path::Path;
-use tree_sitter::{Parser, Query, QueryCursor};
 
 pub struct TypeScriptDetector;
 
@@ -12,46 +11,58 @@ impl TypeScriptDetector {
         Self
     }
 
-    fn get_query_for_provider(&self, provider: Provider) -> &'static str {
+    fn get_query_for_provider(provider: Provider) -> &'static str {
         match provider {
-            Provider::OpenAI => r#"
+            Provider::OpenAI => {
+                r#"
                 (new_expression
                     constructor: (identifier) @constructor
                     (#eq? @constructor "OpenAI")
                     arguments: (arguments) @args
                 ) @new_expr
-            "#,
-            Provider::Anthropic => r#"
+            "#
+            },
+            Provider::Anthropic => {
+                r#"
                 (new_expression
                     constructor: (identifier) @constructor
                     (#eq? @constructor "Anthropic")
                     arguments: (arguments) @args
                 ) @new_expr
-            "#,
-            Provider::Cohere => r#"
+            "#
+            },
+            Provider::Cohere => {
+                r#"
                 (new_expression
                     constructor: (identifier) @constructor
                     (#eq? @constructor "CohereClient")
                     arguments: (arguments) @args
                 ) @new_expr
-            "#,
-            Provider::HuggingFace => r#"
+            "#
+            },
+            Provider::HuggingFace => {
+                r#"
                 (new_expression
                     constructor: (identifier) @constructor
                     (#eq? @constructor "HfInference")
                     arguments: (arguments) @args
                 ) @new_expr
-            "#,
+            "#
+            },
         }
     }
 
-    fn check_has_base_url(&self, source: &str, args_node: tree_sitter::Node, provider: Provider) -> (bool, Option<String>) {
+    fn check_has_base_url(
+        source: &str,
+        args_node: tree_sitter::Node,
+        provider: Provider,
+    ) -> (bool, Option<String>) {
         let base_url_param = provider.base_url_param();
         let args_text = &source[args_node.start_byte()..args_node.end_byte()];
 
-        let has_base_url = args_text.contains(&format!("{}:", base_url_param))
-            || args_text.contains(&format!("\"{}\": ", base_url_param))
-            || args_text.contains(&format!("'{}': ", base_url_param))
+        let has_base_url = args_text.contains(&format!("{base_url_param}:"))
+            || args_text.contains(&format!("\"{base_url_param}\": "))
+            || args_text.contains(&format!("'{base_url_param}': "))
             || args_text.contains("base_url:");
 
         let current_base_url = if has_base_url {
@@ -66,50 +77,21 @@ impl TypeScriptDetector {
 
 impl Detector for TypeScriptDetector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult> {
-        let source = fs::read_to_string(file_path)?;
+        let config = DetectorConfig {
+            ts_language: tree_sitter_typescript::language_typescript(),
+            language: Language::TypeScript,
+            capture_name: "new_expr",
+        };
 
-        let mut parser = Parser::new();
-        parser.set_language(tree_sitter_typescript::language_typescript())
-            .map_err(|_| PromptGuardError::Parse("Failed to set language".to_string()))?;
+        let query_str = Self::get_query_for_provider(provider);
 
-        let tree = parser
-            .parse(&source, None)
-            .ok_or_else(|| PromptGuardError::Parse("Failed to parse TypeScript file".to_string()))?;
-
-        let query_str = self.get_query_for_provider(provider);
-        let query = Query::new(tree_sitter_typescript::language_typescript(), query_str)
-            .map_err(|e| PromptGuardError::Parse(format!("Query error: {}", e)))?;
-
-        let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
-        let mut instances = Vec::new();
-
-        for match_ in matches {
-            for capture in match_.captures {
-                if query.capture_names()[capture.index as usize] == "new_expr" {
-                    let node = capture.node;
-                    let start_position = node.start_position();
-
-                    let has_base_url = match_.captures.iter()
-                        .find(|c| query.capture_names()[c.index as usize] == "args")
-                        .map(|c| self.check_has_base_url(&source, c.node, provider))
-                        .unwrap_or((false, None));
-
-                    instances.push(DetectionInstance {
-                        file_path: file_path.to_path_buf(),
-                        line: start_position.row + 1,
-                        column: start_position.column + 1,
-                        provider,
-                        language: self.language(),
-                        has_base_url: has_base_url.0,
-                        current_base_url: has_base_url.1,
-                    });
-                }
-            }
-        }
-
-        Ok(DetectionResult { instances })
+        detect_in_file_generic(
+            file_path,
+            provider,
+            &config,
+            query_str,
+            Self::check_has_base_url,
+        )
     }
 
     fn language(&self) -> Language {

@@ -8,7 +8,7 @@ impl UpdateCommand {
         Output::header("Update PromptGuard CLI");
 
         let current_version = env!("CARGO_PKG_VERSION");
-        println!("\nCurrent version: v{}", current_version);
+        println!("\nCurrent version: v{current_version}");
 
         Output::info("Checking for updates...");
 

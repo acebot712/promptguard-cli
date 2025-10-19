@@ -1,6 +1,6 @@
 use crate::error::{PromptGuardError, Result};
 use crate::transformer::Transformer;
-use crate::types::{Language, Provider, TransformResult};
+use crate::types::{Provider, TransformResult};
 use std::fs;
 use std::path::Path;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
@@ -14,34 +14,42 @@ impl PythonTransformer {
 
     fn get_query_for_provider(&self, provider: Provider) -> &'static str {
         match provider {
-            Provider::OpenAI => r#"
+            Provider::OpenAI => {
+                r#"
                 (call
                     function: (identifier) @function
                     (#eq? @function "OpenAI")
                     arguments: (argument_list) @args
                 ) @call_expr
-            "#,
-            Provider::Anthropic => r#"
+            "#
+            },
+            Provider::Anthropic => {
+                r#"
                 (call
                     function: (identifier) @function
                     (#eq? @function "Anthropic")
                     arguments: (argument_list) @args
                 ) @call_expr
-            "#,
-            Provider::Cohere => r#"
+            "#
+            },
+            Provider::Cohere => {
+                r#"
                 (call
                     function: (identifier) @function
                     (#eq? @function "CohereClient")
                     arguments: (argument_list) @args
                 ) @call_expr
-            "#,
-            Provider::HuggingFace => r#"
+            "#
+            },
+            Provider::HuggingFace => {
+                r#"
                 (call
                     function: (identifier) @function
                     (#eq? @function "InferenceClient")
                     arguments: (argument_list) @args
                 ) @call_expr
-            "#,
+            "#
+            },
         }
     }
 
@@ -50,7 +58,13 @@ impl PythonTransformer {
         args_text.contains("base_url=") || args_text.contains("base_url =")
     }
 
-    fn transform_args(&self, source: &str, args_node: Node, proxy_url: &str, api_key_env_var: &str) -> Option<String> {
+    fn transform_args(
+        &self,
+        source: &str,
+        args_node: Node,
+        proxy_url: &str,
+        api_key_env_var: &str,
+    ) -> Option<String> {
         if self.has_base_url(source, args_node) {
             return None;
         }
@@ -59,13 +73,18 @@ impl PythonTransformer {
         let args_end = args_node.end_byte();
         let args_text = &source[args_start..args_end];
 
-        let inner = args_text.trim_start_matches('(').trim_end_matches(')').trim();
+        let inner = args_text
+            .trim_start_matches('(')
+            .trim_end_matches(')')
+            .trim();
 
         let mut new_args = String::from("(\n");
 
         if inner.is_empty() {
-            new_args.push_str(&format!("    api_key=os.environ.get(\"{}\"),\n", api_key_env_var));
-            new_args.push_str(&format!("    base_url=\"{}\"\n", proxy_url));
+            new_args.push_str(&format!(
+                "    api_key=os.environ.get(\"{api_key_env_var}\"),\n"
+            ));
+            new_args.push_str(&format!("    base_url=\"{proxy_url}\"\n"));
         } else {
             let trimmed = inner.trim();
             new_args.push_str("    ");
@@ -74,7 +93,7 @@ impl PythonTransformer {
                 new_args.push(',');
             }
             new_args.push('\n');
-            new_args.push_str(&format!("    base_url=\"{}\"\n", proxy_url));
+            new_args.push_str(&format!("    base_url=\"{proxy_url}\"\n"));
         }
 
         new_args.push(')');
@@ -86,7 +105,7 @@ impl PythonTransformer {
             return source.to_string();
         }
 
-        format!("import os\n\n{}", source)
+        format!("import os\n\n{source}")
     }
 }
 
@@ -111,7 +130,7 @@ impl Transformer for PythonTransformer {
 
         let query_str = self.get_query_for_provider(provider);
         let query = Query::new(tree_sitter_python::language(), query_str)
-            .map_err(|e| PromptGuardError::Parse(format!("Query error: {}", e)))?;
+            .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 
         let mut cursor = QueryCursor::new();
         let matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
@@ -119,12 +138,18 @@ impl Transformer for PythonTransformer {
         let mut modifications = Vec::new();
 
         for match_ in matches {
-            let args_node = match match_.captures.iter().find(|c| query.capture_names()[c.index as usize] == "args") {
+            let args_node = match match_
+                .captures
+                .iter()
+                .find(|c| query.capture_names()[c.index as usize] == "args")
+            {
                 Some(capture) => capture.node,
                 None => continue,
             };
 
-            if let Some(new_args) = self.transform_args(&source, args_node, proxy_url, api_key_env_var) {
+            if let Some(new_args) =
+                self.transform_args(&source, args_node, proxy_url, api_key_env_var)
+            {
                 modifications.push((args_node.start_byte(), args_node.end_byte(), new_args));
             }
         }
@@ -155,9 +180,5 @@ impl Transformer for PythonTransformer {
             modified: true,
             error: None,
         })
-    }
-
-    fn language(&self) -> Language {
-        Language::Python
     }
 }

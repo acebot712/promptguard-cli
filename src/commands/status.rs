@@ -49,13 +49,19 @@ impl StatusCommand {
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
             println!("\nStatus: ✓ Active");
-            println!("API Key: {} (configured)", Output::mask_api_key(&config.api_key));
+            println!(
+                "API Key: {} (configured)",
+                Output::mask_api_key(&config.api_key)
+            );
             println!("Proxy URL: {}", config.proxy_url);
 
             println!("\nConfiguration:");
             println!("  • Config file: .promptguard.json");
             if let Some(last_applied) = config.metadata.last_applied {
-                println!("  • Last applied: {}", last_applied.format("%Y-%m-%d %H:%M:%S"));
+                println!(
+                    "  • Last applied: {}",
+                    last_applied.format("%Y-%m-%d %H:%M:%S")
+                );
             }
             println!("  • Files managed: {}", config.metadata.files_managed.len());
             println!("  • Providers: {}", config.providers.join(", "));

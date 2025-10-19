@@ -1,8 +1,8 @@
-mod typescript;
 mod python;
+mod typescript;
 
-pub use typescript::TypeScriptTransformer;
 pub use python::PythonTransformer;
+pub use typescript::TypeScriptTransformer;
 
 use crate::error::Result;
 use crate::types::{Language, Provider, TransformResult};
@@ -16,8 +16,6 @@ pub trait Transformer {
         proxy_url: &str,
         api_key_env_var: &str,
     ) -> Result<TransformResult>;
-
-    fn language(&self) -> Language;
 }
 
 pub fn transform_file(
@@ -26,25 +24,20 @@ pub fn transform_file(
     proxy_url: &str,
     api_key_env_var: &str,
 ) -> Result<TransformResult> {
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let language = Language::from_extension(ext);
-    if language.is_none() {
+    let Some(language) = language else {
         return Ok(TransformResult {
             file_path: file_path.to_path_buf(),
             success: false,
             modified: false,
             error: Some("Unsupported file type".to_string()),
         });
-    }
+    };
 
-    let transformer: Box<dyn Transformer> = match language.unwrap() {
-        Language::TypeScript | Language::JavaScript => {
-            Box::new(TypeScriptTransformer::new())
-        }
+    let transformer: Box<dyn Transformer> = match language {
+        Language::TypeScript | Language::JavaScript => Box::new(TypeScriptTransformer::new()),
         Language::Python => Box::new(PythonTransformer::new()),
     };
 

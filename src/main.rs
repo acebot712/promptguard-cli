@@ -1,3 +1,16 @@
+// Clippy configuration for CLI binary
+#![allow(clippy::exit)] // process::exit is appropriate in main.rs
+#![allow(clippy::expect_used)] // CLI startup should fail fast with clear messages
+#![allow(clippy::trivially_copy_pass_by_ref)] // &self for Copy types maintains API consistency
+#![allow(clippy::if_not_else)] // Negative conditions often clearer in CLI code
+#![allow(clippy::assigning_clones)] // Micro-optimization, not worth the noise
+#![allow(clippy::too_many_lines)] // Some CLI commands are legitimately complex
+#![allow(clippy::unnecessary_wraps)] // Consistent Result returns across commands
+#![allow(clippy::unused_self)] // Methods may need self for future extension
+#![allow(clippy::manual_let_else)] // Match syntax can be clearer
+#![allow(dead_code)] // Some public API fields/methods unused internally
+
+mod analyzer;
 mod api;
 mod backup;
 mod commands;
@@ -7,11 +20,15 @@ mod env;
 mod error;
 mod output;
 mod scanner;
+mod shim;
 mod transformer;
 mod types;
 
 use clap::{Parser, Subcommand};
-use commands::*;
+use commands::{
+    ApplyCommand, ConfigCommand, DisableCommand, DoctorCommand, EnableCommand, InitCommand,
+    KeyCommand, LogsCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
+};
 
 #[derive(Parser)]
 #[command(name = "promptguard")]
@@ -24,7 +41,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize PromptGuard in this project
+    /// Initialize `PromptGuard` in this project
     Init {
         #[arg(long)]
         provider: Vec<String>,
@@ -63,7 +80,7 @@ enum Commands {
         json: bool,
     },
 
-    /// Show current PromptGuard configuration
+    /// Show current `PromptGuard` configuration
     Status {
         #[arg(long)]
         json: bool,
@@ -78,13 +95,17 @@ enum Commands {
         yes: bool,
     },
 
-    /// Temporarily disable PromptGuard
+    /// Temporarily disable `PromptGuard`
     Disable,
 
-    /// Re-enable PromptGuard
-    Enable,
+    /// Re-enable `PromptGuard`
+    Enable {
+        /// Use runtime shims for 100% coverage
+        #[arg(long)]
+        runtime: bool,
+    },
 
-    /// Completely remove PromptGuard
+    /// Completely remove `PromptGuard`
     Revert {
         /// Skip confirmation prompt
         #[arg(short = 'y', long)]
@@ -145,7 +166,7 @@ fn main() {
         Commands::Revert { yes } => RevertCommand { yes }.execute(),
 
         Commands::Disable => DisableCommand::execute(),
-        Commands::Enable => EnableCommand::execute(),
+        Commands::Enable { runtime } => EnableCommand { runtime }.execute(),
         Commands::Config => ConfigCommand::execute(),
         Commands::Key => KeyCommand::execute(),
         Commands::Logs => LogsCommand::execute(),
@@ -154,7 +175,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {}", e);
+        eprintln!("Error: {e}");
         std::process::exit(1);
     }
 }

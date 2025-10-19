@@ -1,0 +1,23 @@
+# PromptGuard rustfmt configuration
+# Stable channel only - no nightly features needed.
+
+# Edition must match Cargo.toml
+edition = "2021"
+
+# Line length - 100 is the sweet spot (not 80, not 120)
+max_width = 100
+
+# Hard limit - prevent absurdly long lines
+hard_tabs = false
+
+# Imports - keep them sorted
+reorder_imports = true
+
+# Formatting choices
+use_small_heuristics = "Default"
+
+# Use field init shorthand (cleaner)
+use_field_init_shorthand = true
+
+# Match blocks
+match_block_trailing_comma = true

@@ -37,6 +37,35 @@ anyhow = "1.0"
 thiserror = "1.0"
 regex = "1.10"
 
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+# Pedantic mode - comprehensive checks (set to lower priority)
+pedantic = { level = "warn", priority = -1 }
+
+# Deny these - they catch real bugs and we want zero tolerance
+panic = "deny"
+exit = "deny"
+
+# Warn on these - should fix eventually but don't block builds
+# TODO: Graduate these to deny once codebase is cleaned up
+unwrap_used = "warn"
+expect_used = "warn"
+todo = "warn"
+unimplemented = "warn"
+
+# Allow some pedantic lints that are too noisy for now
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+return_self_not_must_use = "allow"
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+missing_docs_in_private_items = "allow"
+
 [profile.release]
 opt-level = "z"
 lto = true
