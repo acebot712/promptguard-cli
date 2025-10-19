@@ -113,10 +113,6 @@ cross-compile:
 	cargo build --release --target x86_64-unknown-linux-gnu
 	cp target/x86_64-unknown-linux-gnu/release/promptguard dist/promptguard-linux-amd64
 
-	@echo "→ Linux (ARM64)"
-	cargo build --release --target aarch64-unknown-linux-gnu
-	cp target/aarch64-unknown-linux-gnu/release/promptguard dist/promptguard-linux-arm64
-
 	@echo "→ Windows (AMD64)"
 	cargo build --release --target x86_64-pc-windows-msvc
 	cp target/x86_64-pc-windows-msvc/release/promptguard.exe dist/promptguard-windows-amd64.exe
