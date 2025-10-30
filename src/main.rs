@@ -61,8 +61,9 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Proceed without version control (not recommended)
         #[arg(long)]
-        no_backup: bool,
+        force: bool,
 
         #[arg(long)]
         exclude: Vec<String>,
@@ -139,7 +140,7 @@ fn main() {
             env_file,
             auto,
             dry_run,
-            no_backup,
+            force,
             exclude,
             framework,
         } => InitCommand {
@@ -149,7 +150,7 @@ fn main() {
             env_file,
             auto,
             dry_run,
-            no_backup,
+            force,
             exclude,
             framework,
         }

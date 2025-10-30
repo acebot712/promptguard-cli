@@ -1,4 +1,3 @@
-use crate::backup::BackupManager;
 use crate::config::{ConfigManager, PromptGuardConfig};
 use crate::detector::detect_all_providers;
 use crate::env::EnvManager;
@@ -8,7 +7,7 @@ use crate::scanner::FileScanner;
 use crate::transformer;
 use crate::types::Provider;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct InitCommand {
     pub provider: Vec<String>,
@@ -17,7 +16,7 @@ pub struct InitCommand {
     pub env_file: String,
     pub auto: bool,
     pub dry_run: bool,
-    pub no_backup: bool,
+    pub force: bool,
     pub exclude: Vec<String>,
     pub framework: Option<String>,
 }
@@ -29,6 +28,12 @@ impl InitCommand {
                 "🛡️  PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
+        }
+
+        // Check for git repository (Linus-approved safety)
+        let root_path = std::env::current_dir()?;
+        if !self.check_version_control(&root_path)? {
+            return Ok(());
         }
 
         // Check if already initialized
@@ -46,7 +51,6 @@ impl InitCommand {
         // Scan project
         Output::section("Scanning project...", "📁");
 
-        let root_path = std::env::current_dir()?;
         let scanner = FileScanner::new(
             &root_path,
             if self.exclude.is_empty() {
@@ -141,11 +145,8 @@ impl InitCommand {
         println!();
         Output::section("Configuration:", "📝");
         println!("   • Proxy URL: {}", self.base_url);
-        println!(
-            "   • Backup files: {}",
-            if self.no_backup { "No" } else { "Yes (*.bak)" }
-        );
         println!("   • Environment: {}", self.env_file);
+        println!("   • Version control: Git (backups via git diff/revert)");
 
         // Confirm changes
         if !self.auto && !self.dry_run {
@@ -171,12 +172,6 @@ impl InitCommand {
             "🔧",
         );
 
-        let backup_manager = if self.no_backup {
-            None
-        } else {
-            Some(BackupManager::new(None))
-        };
-
         let mut files_modified = Vec::new();
 
         for (provider, files) in &detection_results {
@@ -185,13 +180,6 @@ impl InitCommand {
             unique_files.dedup();
 
             for file_path in unique_files {
-                // Create backup BEFORE transformation
-                if !self.dry_run {
-                    if let Some(ref bm) = backup_manager {
-                        let _ = bm.create_backup(&file_path);
-                    }
-                }
-
                 match transformer::transform_file(
                     &file_path,
                     *provider,
@@ -264,7 +252,6 @@ impl InitCommand {
                 self.exclude.clone()
             };
 
-            config.backup_enabled = !self.no_backup;
             config.env_file = self.env_file.clone();
             config.framework = framework;
 
@@ -277,20 +264,6 @@ impl InitCommand {
                         .to_string()
                 })
                 .collect();
-
-            if let Some(ref bm) = backup_manager {
-                config.metadata.backups = files_modified
-                    .iter()
-                    .map(|f| {
-                        let backup_path = bm.backup_path(f);
-                        backup_path
-                            .strip_prefix(&root_path)
-                            .unwrap_or(&backup_path)
-                            .to_string_lossy()
-                            .to_string()
-                    })
-                    .collect();
-            }
 
             config_manager.save(&config)?;
             Output::step(".promptguard.json (created)");
@@ -306,18 +279,52 @@ impl InitCommand {
             println!("  • Run your app normally - all LLM requests now go through PromptGuard");
             println!("  • View logs: promptguard logs --follow");
             println!("  • Check dashboard: https://app.promptguard.co/dashboard");
+            println!("\n💡 To revert changes: git diff (review) | git checkout -- . (undo)");
         } else {
             println!("✓ {} files would be modified", files_modified.len());
             println!("✓ 1 file would be created (.promptguard.json)");
-            if !self.no_backup {
-                println!("✓ {} backups would be created", files_modified.len());
-            }
             println!("\nTo apply: promptguard init");
         }
 
         println!("\nNeed help? https://docs.promptguard.co/cli");
 
         Ok(())
+    }
+
+    fn check_version_control(&self, root_path: &Path) -> Result<bool> {
+        let git_dir = root_path.join(".git");
+
+        if !git_dir.exists() {
+            println!();
+            Output::warning("⚠️  NOT A GIT REPOSITORY");
+            println!();
+            println!("PromptGuard will modify your source files.");
+            println!("Without version control, you cannot easily revert these changes.");
+            println!();
+            println!("Recommended:");
+            println!("  git init");
+            println!("  git add .");
+            println!("  git commit -m 'Initial commit before PromptGuard'");
+            println!("  promptguard init");
+            println!();
+
+            if !self.force {
+                println!("To proceed anyway: promptguard init --force");
+                println!();
+                return Ok(false);
+            }
+
+            println!("⚠️  Proceeding with --force (no backups will be created)");
+            println!();
+
+            if !self.auto && !self.dry_run {
+                if !Output::confirm("Are you SURE you want to continue without version control?", false) {
+                    return Ok(false);
+                }
+            }
+        }
+
+        Ok(true)
     }
 
     fn get_api_key(&self) -> Result<String> {

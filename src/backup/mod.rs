@@ -34,7 +34,10 @@ impl BackupManager {
 
     pub fn create_backup(&self, file_path: &Path) -> Result<PathBuf> {
         let backup_path = self.backup_path(file_path);
-        fs::copy(file_path, &backup_path)?;
+        // CRITICAL: Never overwrite existing backups - they contain the original state
+        if !backup_path.exists() {
+            fs::copy(file_path, &backup_path)?;
+        }
         Ok(backup_path)
     }
 
