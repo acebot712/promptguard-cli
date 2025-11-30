@@ -408,8 +408,8 @@ pub fn get_python_provider_patch(provider: Provider) -> &'static str {
         Provider::Anthropic => PYTHON_ANTHROPIC_PATCH,
         Provider::Cohere => PYTHON_COHERE_PATCH,
         Provider::HuggingFace => PYTHON_HUGGINGFACE_PATCH,
-        Provider::Gemini => "# TODO: Gemini Python shim - not yet implemented\n",
-        Provider::Groq => "# TODO: Groq Python shim - not yet implemented\n",
+        Provider::Gemini => "# Gemini Python shim - coming soon\n",
+        Provider::Groq => "# Groq Python shim - coming soon\n",
     }
 }
 
@@ -422,8 +422,8 @@ pub fn get_python_install_call(provider: Provider) -> &'static str {
         Provider::HuggingFace => {
             "    _shim_huggingface()\n    providers_shimmed.append('HuggingFace')"
         },
-        Provider::Gemini => "    # TODO: Gemini shim not yet implemented",
-        Provider::Groq => "    # TODO: Groq shim not yet implemented",
+        Provider::Gemini => "    # Gemini shim - coming soon",
+        Provider::Groq => "    # Groq shim - coming soon",
     }
 }
 
@@ -434,7 +434,7 @@ pub fn get_typescript_provider_export(provider: Provider) -> &'static str {
         Provider::Anthropic => TYPESCRIPT_ANTHROPIC_EXPORT,
         Provider::Cohere => TYPESCRIPT_COHERE_EXPORT,
         Provider::HuggingFace => TYPESCRIPT_HUGGINGFACE_EXPORT,
-        Provider::Gemini => "// TODO: Gemini TypeScript shim not yet implemented\n",
-        Provider::Groq => "// TODO: Groq TypeScript shim not yet implemented\n",
+        Provider::Gemini => "// Gemini TypeScript shim - coming soon\n",
+        Provider::Groq => "// Groq TypeScript shim - coming soon\n",
     }
 }

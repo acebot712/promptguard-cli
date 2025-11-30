@@ -17,7 +17,7 @@ impl ApplyCommand {
     pub fn execute(&self) -> Result<()> {
         Output::header("Apply Configuration");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             return Err(PromptGuardError::NotInitialized);
         }
@@ -28,7 +28,7 @@ impl ApplyCommand {
         println!("  • Proxy URL: {}", config.proxy_url);
         println!("  • Providers: {}", config.providers.join(", "));
 
-        if !self.yes && !Output::confirm("Proceed?", true) {
+        if !self.yes && !Output::confirm("Proceed?", true)? {
             return Ok(());
         }
 

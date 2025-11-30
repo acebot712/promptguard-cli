@@ -10,7 +10,7 @@ impl DisableCommand {
     pub fn execute() -> Result<()> {
         Output::header("Disable PromptGuard");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             return Err(PromptGuardError::NotInitialized);
         }
@@ -47,7 +47,7 @@ impl DisableCommand {
             }
         );
 
-        if !Output::confirm("Continue?", true) {
+        if !Output::confirm("Continue?", true)? {
             return Ok(());
         }
 

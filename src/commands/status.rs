@@ -12,7 +12,7 @@ impl StatusCommand {
             Output::header("PromptGuard Status");
         }
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
 
         if !config_manager.exists() {
             if self.json {

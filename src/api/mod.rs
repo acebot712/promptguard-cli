@@ -20,19 +20,19 @@ pub struct PromptGuardClient {
 }
 
 impl PromptGuardClient {
-    pub fn new(api_key: String, base_url: Option<String>) -> Self {
+    pub fn new(api_key: String, base_url: Option<String>) -> Result<Self> {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .expect("Failed to build HTTP client - TLS backend not available");
+            .map_err(|e| PromptGuardError::Api(format!("Failed to build HTTP client: {}", e)))?;
 
         let base_url = base_url.unwrap_or_else(|| "https://api.promptguard.co".to_string());
 
-        Self {
+        Ok(Self {
             client,
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key,
-        }
+        })
     }
 
     fn request<T: serde::de::DeserializeOwned>(

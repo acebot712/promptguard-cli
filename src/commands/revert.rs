@@ -11,7 +11,7 @@ impl RevertCommand {
     pub fn execute(&self) -> Result<()> {
         Output::header("Revert PromptGuard");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             Output::warning("No PromptGuard configuration found. Nothing to revert.");
             return Ok(());
@@ -36,7 +36,7 @@ impl RevertCommand {
             println!("You'll need to manually undo the transformations.");
         }
 
-        if !self.yes && !Output::confirm("\nContinue with cleanup?", true) {
+        if !self.yes && !Output::confirm("\nContinue with cleanup?", true)? {
             Output::info("Revert cancelled");
             return Ok(());
         }

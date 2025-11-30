@@ -7,6 +7,7 @@ use crate::scanner::FileScanner;
 use crate::transformer;
 use crate::types::Provider;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 pub struct InitCommand {
@@ -37,10 +38,10 @@ impl InitCommand {
         }
 
         // Check if already initialized
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if config_manager.exists() && !self.dry_run {
             Output::warning("PromptGuard is already initialized in this project.");
-            if !self.auto && !Output::confirm("Reinitialize?", false) {
+            if !self.auto && !Output::confirm("Reinitialize?", false)? {
                 return Ok(());
             }
         }
@@ -151,7 +152,7 @@ impl InitCommand {
         // Confirm changes
         if !self.auto && !self.dry_run {
             println!();
-            if !Output::confirm("Apply these changes?", true) {
+            if !Output::confirm("Apply these changes?", true)? {
                 return Ok(());
             }
         }
@@ -318,7 +319,10 @@ impl InitCommand {
             println!();
 
             if !self.auto && !self.dry_run {
-                if !Output::confirm("Are you SURE you want to continue without version control?", false) {
+                if !Output::confirm(
+                    "Are you SURE you want to continue without version control?",
+                    false,
+                )? {
                     return Ok(false);
                 }
             }
@@ -333,8 +337,62 @@ impl InitCommand {
         } else if let Ok(key) = std::env::var("PROMPTGUARD_API_KEY") {
             key
         } else if !self.auto && !self.dry_run {
+            // Interactive mode - offer signup flow
             println!();
-            Output::input("🔑 Paste your PromptGuard API key")
+            Output::section("API Key Required", "🔑");
+            println!();
+            println!("You need a PromptGuard API key to continue.");
+            println!();
+            println!("Options:");
+            println!("  1. I have an API key");
+            println!("  2. Sign up / Get API key");
+            println!("  3. Cancel");
+            println!();
+
+            let mut choice = String::new();
+            print!("Select option (1-3): ");
+            std::io::stdout().flush()?;
+            std::io::stdin().read_line(&mut choice)?;
+            let choice = choice.trim();
+
+            match choice {
+                "1" => {
+                    // User has API key - prompt for it
+                    println!();
+                    Output::input("🔑 Paste your PromptGuard API key")?
+                },
+                "2" => {
+                    // Signup flow
+                    println!();
+                    Output::info("Opening signup page in your browser...");
+                    let signup_url = "https://app.promptguard.co/signup";
+
+                    // Try to open browser, but don't fail if it doesn't work
+                    if let Err(e) = open::that(signup_url) {
+                        Output::warning(&format!("Could not open browser automatically: {}", e));
+                    }
+
+                    println!();
+                    println!("Please sign up at: {}", signup_url);
+                    println!("After signing up, you can get your API key from:");
+                    println!("  https://app.promptguard.co/settings/api-keys");
+                    println!();
+
+                    if Output::confirm("Have you signed up and got your API key?", false)? {
+                        println!();
+                        Output::input("🔑 Paste your PromptGuard API key")?
+                    } else {
+                        return Err(crate::error::PromptGuardError::Custom(
+                            "API key is required to continue".to_string(),
+                        ));
+                    }
+                },
+                _ => {
+                    return Err(crate::error::PromptGuardError::Custom(
+                        "Initialization cancelled".to_string(),
+                    ));
+                },
+            }
         } else if self.dry_run {
             return Ok("pg_sk_test_demo123456789012345678901234".to_string());
         } else {

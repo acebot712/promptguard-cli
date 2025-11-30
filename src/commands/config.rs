@@ -8,7 +8,7 @@ impl ConfigCommand {
     pub fn execute() -> Result<()> {
         Output::header("PromptGuard Configuration");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             return Err(PromptGuardError::NotInitialized);
         }

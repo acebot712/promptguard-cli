@@ -19,7 +19,7 @@ impl DoctorCommand {
         ));
 
         // Check config file
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if config_manager.exists() {
             match config_manager.load() {
                 Ok(config) => {

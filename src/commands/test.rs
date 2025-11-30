@@ -9,7 +9,7 @@ impl TestCommand {
     pub fn execute() -> Result<()> {
         Output::header("Test PromptGuard Configuration");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             return Err(PromptGuardError::NotInitialized);
         }
@@ -20,7 +20,8 @@ impl TestCommand {
         Output::section("API Key Validation", "🔑");
 
         // Test API key by calling health endpoint
-        let client = PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()));
+        let client =
+            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
 
         match client.health_check() {
             Ok(()) => {

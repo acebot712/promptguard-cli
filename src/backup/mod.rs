@@ -61,11 +61,10 @@ impl BackupManager {
             let path = entry.path();
             if path.is_file() {
                 if let Some(filename) = path.file_name() {
-                    if glob::Pattern::new(&pattern)
-                        .expect("Backup pattern should be valid glob")
-                        .matches(&filename.to_string_lossy())
-                    {
-                        backups.push(path.to_path_buf());
+                    if let Ok(glob_pattern) = glob::Pattern::new(&pattern) {
+                        if glob_pattern.matches(&filename.to_string_lossy()) {
+                            backups.push(path.to_path_buf());
+                        }
                     }
                 }
             }

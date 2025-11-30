@@ -1,3 +1,4 @@
+use crate::error::{PromptGuardError, Result};
 use colored::Colorize;
 use std::io::{self, Write};
 
@@ -47,34 +48,34 @@ impl Output {
         format!("{prefix}{masked_part}")
     }
 
-    pub fn confirm(prompt: &str, default: bool) -> bool {
+    pub fn confirm(prompt: &str, default: bool) -> Result<bool> {
         let default_str = if default { "Y/n" } else { "y/N" };
         print!("{} [{}]: ", prompt.bold(), default_str);
-        io::stdout().flush().expect("Failed to flush stdout");
+        io::stdout().flush().map_err(PromptGuardError::Io)?;
 
         let mut input = String::new();
         io::stdin()
             .read_line(&mut input)
-            .expect("Failed to read user input");
+            .map_err(PromptGuardError::Io)?;
 
         let input = input.trim().to_lowercase();
 
         if input.is_empty() {
-            return default;
+            return Ok(default);
         }
 
-        matches!(input.as_str(), "y" | "yes")
+        Ok(matches!(input.as_str(), "y" | "yes"))
     }
 
-    pub fn input(prompt: &str) -> String {
+    pub fn input(prompt: &str) -> Result<String> {
         print!("{}: ", prompt.bold());
-        io::stdout().flush().expect("Failed to flush stdout");
+        io::stdout().flush().map_err(PromptGuardError::Io)?;
 
         let mut input = String::new();
         io::stdin()
             .read_line(&mut input)
-            .expect("Failed to read user input");
+            .map_err(PromptGuardError::Io)?;
 
-        input.trim().to_string()
+        Ok(input.trim().to_string())
     }
 }

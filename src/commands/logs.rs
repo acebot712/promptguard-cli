@@ -8,7 +8,7 @@ impl LogsCommand {
     pub fn execute() -> Result<()> {
         Output::header("Activity Logs");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             return Err(PromptGuardError::NotInitialized);
         }

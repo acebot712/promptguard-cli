@@ -18,7 +18,7 @@ impl EnableCommand {
     pub fn execute(&self) -> Result<()> {
         Output::header("Enable PromptGuard");
 
-        let config_manager = ConfigManager::new(None);
+        let config_manager = ConfigManager::new(None)?;
         if !config_manager.exists() {
             return Err(PromptGuardError::NotInitialized);
         }
@@ -54,7 +54,7 @@ impl EnableCommand {
             println!("  ✓ No code modification needed");
         }
 
-        if !Output::confirm("Continue?", true) {
+        if !Output::confirm("Continue?", true)? {
             return Ok(());
         }
 

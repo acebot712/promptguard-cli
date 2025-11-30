@@ -117,14 +117,15 @@ pub struct ConfigManager {
 impl ConfigManager {
     const DEFAULT_CONFIG_FILE: &'static str = ".promptguard.json";
 
-    pub fn new(config_path: Option<PathBuf>) -> Self {
+    pub fn new(config_path: Option<PathBuf>) -> Result<Self> {
         let path = config_path.unwrap_or_else(|| {
             std::env::current_dir()
-                .expect("Failed to get current directory")
-                .join(Self::DEFAULT_CONFIG_FILE)
+                .map_err(|e| PromptGuardError::Io(e))
+                .map(|dir| dir.join(Self::DEFAULT_CONFIG_FILE))
+                .unwrap_or_else(|_| PathBuf::from(Self::DEFAULT_CONFIG_FILE))
         });
 
-        Self { config_path: path }
+        Ok(Self { config_path: path })
     }
 
     pub fn load(&self) -> Result<PromptGuardConfig> {
