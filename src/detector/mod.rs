@@ -1,9 +1,11 @@
 mod core;
 mod python;
+pub mod queries;
 mod registry;
 mod typescript;
 
 pub use python::PythonDetector;
+pub use queries::{get_python_transform_query, get_typescript_query};
 pub use registry::PROVIDERS;
 pub use typescript::TypeScriptDetector;
 

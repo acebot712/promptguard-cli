@@ -1,5 +1,6 @@
-use crate::detector::core::{detect_in_file_generic, DetectorConfig};
-use crate::detector::Detector;
+use super::core::{detect_in_file_generic, DetectorConfig};
+use super::queries::get_typescript_query;
+use super::Detector;
 use crate::error::Result;
 use crate::types::{DetectionResult, Language, Provider};
 use std::path::Path;
@@ -9,65 +10,6 @@ pub struct TypeScriptDetector;
 impl TypeScriptDetector {
     pub fn new() -> Self {
         Self
-    }
-
-    fn get_query_for_provider(provider: Provider) -> &'static str {
-        match provider {
-            Provider::OpenAI => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "OpenAI")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Anthropic => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "Anthropic")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Cohere => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "CohereClient")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::HuggingFace => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "HfInference")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Gemini => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "GoogleGenAI")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Groq => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "Groq")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-        }
     }
 
     fn check_has_base_url(
@@ -101,7 +43,7 @@ impl Detector for TypeScriptDetector {
             capture_name: "new_expr",
         };
 
-        let query_str = Self::get_query_for_provider(provider);
+        let query_str = get_typescript_query(provider);
 
         detect_in_file_generic(
             file_path,

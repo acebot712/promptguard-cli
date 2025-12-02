@@ -1,3 +1,4 @@
+use crate::detector::get_typescript_query;
 use crate::error::{PromptGuardError, Result};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
@@ -10,65 +11,6 @@ pub struct TypeScriptTransformer;
 impl TypeScriptTransformer {
     pub fn new() -> Self {
         Self
-    }
-
-    fn get_query_for_provider(&self, provider: Provider) -> &'static str {
-        match provider {
-            Provider::OpenAI => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "OpenAI")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Anthropic => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "Anthropic")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Cohere => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "CohereClient")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::HuggingFace => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "HfInference")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Gemini => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "GoogleGenAI")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-            Provider::Groq => {
-                r#"
-                (new_expression
-                    constructor: (identifier) @constructor
-                    (#eq? @constructor "Groq")
-                    arguments: (arguments) @args
-                ) @new_expr
-            "#
-            },
-        }
     }
 
     fn has_base_url(&self, source: &str, object_node: Node, provider: Provider) -> bool {
@@ -148,7 +90,7 @@ impl Transformer for TypeScriptTransformer {
             PromptGuardError::Parse("Failed to parse TypeScript file".to_string())
         })?;
 
-        let query_str = self.get_query_for_provider(provider);
+        let query_str = get_typescript_query(provider);
         let query = Query::new(tree_sitter_typescript::language_typescript(), query_str)
             .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 

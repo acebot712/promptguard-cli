@@ -1,3 +1,4 @@
+use crate::detector::get_python_transform_query;
 use crate::error::{PromptGuardError, Result};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
@@ -10,69 +11,6 @@ pub struct PythonTransformer;
 impl PythonTransformer {
     pub fn new() -> Self {
         Self
-    }
-
-    fn get_query_for_provider(&self, provider: Provider) -> &'static str {
-        match provider {
-            Provider::OpenAI => {
-                r#"
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "OpenAI")
-                    arguments: (argument_list) @args
-                ) @call_expr
-            "#
-            },
-            Provider::Anthropic => {
-                r#"
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "Anthropic")
-                    arguments: (argument_list) @args
-                ) @call_expr
-            "#
-            },
-            Provider::Cohere => {
-                r#"
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "CohereClient")
-                    arguments: (argument_list) @args
-                ) @call_expr
-            "#
-            },
-            Provider::HuggingFace => {
-                r#"
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "InferenceClient")
-                    arguments: (argument_list) @args
-                ) @call_expr
-            "#
-            },
-            Provider::Gemini => {
-                r#"
-                (call
-                    function: (attribute
-                        object: (identifier) @module
-                        (#eq? @module "genai")
-                        attribute: (identifier) @class
-                        (#eq? @class "Client")
-                    )
-                    arguments: (argument_list) @args
-                ) @call_expr
-            "#
-            },
-            Provider::Groq => {
-                r#"
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "Groq")
-                    arguments: (argument_list) @args
-                ) @call_expr
-            "#
-            },
-        }
     }
 
     fn has_base_url(&self, source: &str, args_node: Node) -> bool {
@@ -150,7 +88,7 @@ impl Transformer for PythonTransformer {
             .parse(&source, None)
             .ok_or_else(|| PromptGuardError::Parse("Failed to parse Python file".to_string()))?;
 
-        let query_str = self.get_query_for_provider(provider);
+        let query_str = get_python_transform_query(provider);
         let query = Query::new(tree_sitter_python::language(), query_str)
             .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 

@@ -12,6 +12,9 @@ impl DoctorCommand {
 
         println!("\n🩺 Running diagnostics...\n");
 
+        let mut warnings_count = 0;
+        let mut errors_count = 0;
+
         // Check CLI version
         Output::step(&format!(
             "CLI version: {} (latest)",
@@ -31,14 +34,17 @@ impl DoctorCommand {
                         Output::step("API key: valid format");
                     } else {
                         Output::warning("API key: invalid format");
+                        errors_count += 1;
                     }
                 },
                 Err(e) => {
                     Output::warning(&format!("Configuration file: invalid ({e})"));
+                    errors_count += 1;
                 },
             }
         } else {
             Output::warning("Configuration file: not found (run 'promptguard init')");
+            warnings_count += 1;
         }
 
         // Check .env file
@@ -48,9 +54,11 @@ impl DoctorCommand {
                 Output::step("Environment file: .env (found, contains PROMPTGUARD_API_KEY)");
             } else {
                 Output::warning("Environment file: .env (found, but missing PROMPTGUARD_API_KEY)");
+                warnings_count += 1;
             }
         } else {
             Output::warning("Environment file: .env (not found)");
+            warnings_count += 1;
         }
 
         // Check for backups
@@ -65,9 +73,24 @@ impl DoctorCommand {
             ));
             println!("\nRecommendations:");
             println!("  1. Commit or remove *.bak backup files");
+            warnings_count += 1;
         }
 
-        println!("\nOverall health: ✓ All checks passed");
+        // Report overall health based on actual findings
+        println!();
+        if errors_count > 0 {
+            Output::error(&format!(
+                "Overall health: ✗ {} error(s), {} warning(s)",
+                errors_count, warnings_count
+            ));
+        } else if warnings_count > 0 {
+            Output::warning(&format!(
+                "Overall health: ⚠ {} warning(s) (see above)",
+                warnings_count
+            ));
+        } else {
+            Output::success("Overall health: ✓ All checks passed");
+        }
 
         Ok(())
     }
