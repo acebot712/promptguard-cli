@@ -1,6 +1,6 @@
 [package]
 name = "promptguard"
-version = "1.0.0"
+version = "1.0.4"
 edition = "2021"
 authors = ["PromptGuard <hello@promptguard.co>"]
 description = "Drop-in LLM security for your applications"
