@@ -91,4 +91,31 @@ impl PromptGuardClient {
 
         Ok(())
     }
+
+    // GET request helper
+    pub fn get<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
+        self.request(reqwest::Method::GET, endpoint, None)
+    }
+
+    // POST request helper
+    pub fn post<T: serde::de::DeserializeOwned, B: serde::Serialize>(
+        &self,
+        endpoint: &str,
+        body: &B,
+    ) -> Result<T> {
+        self.request(
+            reqwest::Method::POST,
+            endpoint,
+            Some(
+                serde_json::to_value(body).map_err(|e| {
+                    PromptGuardError::Api(format!("Failed to serialize body: {}", e))
+                })?,
+            ),
+        )
+    }
+
+    // DELETE request helper
+    pub fn delete<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
+        self.request(reqwest::Method::DELETE, endpoint, None)
+    }
 }
