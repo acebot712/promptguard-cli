@@ -15,7 +15,6 @@ pub mod test;
 pub mod update;
 
 pub use apply::ApplyCommand;
-pub use benchmark::BenchmarkCommand;
 pub use config::ConfigCommand;
 pub use disable::DisableCommand;
 pub use doctor::DoctorCommand;
@@ -23,7 +22,6 @@ pub use enable::EnableCommand;
 pub use init::InitCommand;
 pub use key::KeyCommand;
 pub use logs::LogsCommand;
-pub use redteam::RedTeamCommand;
 pub use revert::RevertCommand;
 pub use scan::ScanCommand;
 pub use status::StatusCommand;
