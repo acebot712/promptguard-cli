@@ -265,7 +265,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let generator = ShimGenerator::new(
             temp_dir.path(),
-            "https://api.promptguard.co/v1".to_string(),
+            "https://api.promptguard.co/api/v1".to_string(),
             "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
@@ -278,7 +278,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let generator = ShimGenerator::new(
             temp_dir.path(),
-            "https://api.promptguard.co/v1".to_string(),
+            "https://api.promptguard.co/api/v1".to_string(),
             "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI, Provider::Anthropic],
         );
@@ -289,7 +289,7 @@ mod tests {
         let content = fs::read_to_string(&shim_path).unwrap();
         assert!(content.contains("def _shim_openai()"));
         assert!(content.contains("def _shim_anthropic()"));
-        assert!(content.contains("https://api.promptguard.co/v1"));
+        assert!(content.contains("https://api.promptguard.co/api/v1"));
     }
 
     #[test]
@@ -297,7 +297,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let generator = ShimGenerator::new(
             temp_dir.path(),
-            "https://api.promptguard.co/v1".to_string(),
+            "https://api.promptguard.co/api/v1".to_string(),
             "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
@@ -307,7 +307,7 @@ mod tests {
 
         let content = fs::read_to_string(&shim_path).unwrap();
         assert!(content.contains("export class OpenAI"));
-        assert!(content.contains("https://api.promptguard.co/v1"));
+        assert!(content.contains("https://api.promptguard.co/api/v1"));
     }
 
     #[test]
@@ -315,7 +315,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let generator = ShimGenerator::new(
             temp_dir.path(),
-            "https://api.promptguard.co/v1".to_string(),
+            "https://api.promptguard.co/api/v1".to_string(),
             "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );

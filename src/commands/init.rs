@@ -318,13 +318,14 @@ impl InitCommand {
             println!("⚠️  Proceeding with --force (no backups will be created)");
             println!();
 
-            if !self.auto && !self.dry_run {
-                if !Output::confirm(
+            if !self.auto
+                && !self.dry_run
+                && !Output::confirm(
                     "Are you SURE you want to continue without version control?",
                     false,
-                )? {
-                    return Ok(false);
-                }
+                )?
+            {
+                return Ok(false);
             }
         }
 

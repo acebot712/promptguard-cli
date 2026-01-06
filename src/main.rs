@@ -49,7 +49,7 @@ enum Commands {
         #[arg(long)]
         api_key: Option<String>,
 
-        #[arg(long, default_value = "https://api.promptguard.co/api/v1/proxy")]
+        #[arg(long, default_value = "https://api.promptguard.co/api/v1")]
         base_url: String,
 
         #[arg(long, default_value = ".env")]

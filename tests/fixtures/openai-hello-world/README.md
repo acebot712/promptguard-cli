@@ -70,7 +70,7 @@ After:
 ```typescript
 const openai = new OpenAI({
   apiKey: process.env.PROMPTGUARD_API_KEY,
-  baseURL: "https://api.promptguard.co/api/v1/proxy"
+  baseURL: "https://api.promptguard.co/api/v1"
 });
 ```
 
@@ -86,6 +86,6 @@ After:
 ```python
 client = OpenAI(
     api_key=os.environ.get("PROMPTGUARD_API_KEY"),
-    base_url="https://api.promptguard.co/api/v1/proxy"
+    base_url="https://api.promptguard.co/api/v1"
 )
 ```

@@ -21,7 +21,7 @@
 /// // Generate shim files
 /// let generator = ShimGenerator::new(
 ///     "/path/to/project",
-///     "https://api.promptguard.co/v1".to_string(),
+///     "https://api.promptguard.co/api/v1".to_string(),
 ///     "PROMPTGUARD_API_KEY".to_string(),
 ///     vec![Provider::OpenAI, Provider::Anthropic],
 /// );

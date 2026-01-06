@@ -172,7 +172,7 @@ const openai = new OpenAI({
 ```typescript
 const openai = new OpenAI({
   apiKey: process.env.PROMPTGUARD_API_KEY,
-  baseURL: "https://api.promptguard.co/api/v1/proxy"
+  baseURL: "https://api.promptguard.co/api/v1"
 });
 ```
 
@@ -326,7 +326,7 @@ $ promptguard status
 
 Status: ✓ Active
 API Key: pg_sk_test_*** (configured)
-Proxy URL: https://api.promptguard.co/api/v1/proxy
+Proxy URL: https://api.promptguard.co/api/v1
 
 Configuration:
   • Files managed: 3

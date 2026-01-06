@@ -3,7 +3,7 @@ from openai import OpenAI
 
 client = OpenAI(
     api_key=os.environ.get("OPENAI_API_KEY"),
-    base_url="https://api.promptguard.co/api/v1/proxy"
+    base_url="https://api.promptguard.co/api/v1"
 )
 
 completion = client.chat.completions.create(

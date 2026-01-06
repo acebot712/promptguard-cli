@@ -24,9 +24,9 @@ impl PromptGuardClient {
         let client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| PromptGuardError::Api(format!("Failed to build HTTP client: {}", e)))?;
+            .map_err(|e| PromptGuardError::Api(format!("Failed to build HTTP client: {e}")))?;
 
-        let base_url = base_url.unwrap_or_else(|| "https://api.promptguard.co".to_string());
+        let base_url = base_url.unwrap_or_else(|| "https://api.promptguard.co/api/v1".to_string());
 
         Ok(Self {
             client,
@@ -107,9 +107,8 @@ impl PromptGuardClient {
             reqwest::Method::POST,
             endpoint,
             Some(
-                serde_json::to_value(body).map_err(|e| {
-                    PromptGuardError::Api(format!("Failed to serialize body: {}", e))
-                })?,
+                serde_json::to_value(body)
+                    .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
             ),
         )
     }

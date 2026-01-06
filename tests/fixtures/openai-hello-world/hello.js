@@ -2,7 +2,7 @@ const OpenAI = require("openai");
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
-  baseURL: "https://api.promptguard.co/api/v1/proxy"
+  baseURL: "https://api.promptguard.co/api/v1"
 });
 
 async function main() {

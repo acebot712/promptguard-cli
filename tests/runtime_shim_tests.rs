@@ -17,7 +17,7 @@ fn test_python_shim_generation() {
 
     let generator = ShimGenerator::new(
         temp_dir.path(),
-        "https://api.promptguard.co/v1".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
         "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI, Provider::Anthropic],
     );
@@ -47,7 +47,7 @@ fn test_python_shim_generation() {
 
     // Should contain proxy URL
     assert!(
-        content.contains("https://api.promptguard.co/v1"),
+        content.contains("https://api.promptguard.co/api/v1"),
         "Shim should contain proxy URL"
     );
 
@@ -69,7 +69,7 @@ fn test_typescript_shim_generation() {
 
     let generator = ShimGenerator::new(
         temp_dir.path(),
-        "https://api.promptguard.co/v1".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
         "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
@@ -93,7 +93,7 @@ fn test_typescript_shim_generation() {
 
     // Should contain proxy URL
     assert!(
-        content.contains("https://api.promptguard.co/v1"),
+        content.contains("https://api.promptguard.co/api/v1"),
         "Shim should contain proxy URL"
     );
 
@@ -115,7 +115,7 @@ fn test_multi_language_shim_generation() {
 
     let generator = ShimGenerator::new(
         temp_dir.path(),
-        "https://api.promptguard.co/v1".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
         "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI, Provider::Anthropic, Provider::Cohere],
     );
@@ -326,7 +326,7 @@ fn test_shim_cleanup() {
 
     let generator = ShimGenerator::new(
         temp_dir.path(),
-        "https://api.promptguard.co/v1".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
         "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
@@ -416,7 +416,7 @@ fn test_all_providers_in_shim() {
 
     let generator = ShimGenerator::new(
         temp_dir.path(),
-        "https://api.promptguard.co/v1".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
         "PROMPTGUARD_API_KEY".to_string(),
         all_providers.clone(),
     );

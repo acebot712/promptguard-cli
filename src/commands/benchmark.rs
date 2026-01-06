@@ -196,12 +196,10 @@ impl BenchmarkCommand {
                 } else {
                     "⚠️"
                 }
+            } else if actual >= target {
+                "✅"
             } else {
-                if actual >= target {
-                    "✅"
-                } else {
-                    "⚠️"
-                }
+                "⚠️"
             };
 
             println!(
