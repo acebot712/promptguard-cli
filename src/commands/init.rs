@@ -370,11 +370,11 @@ impl InitCommand {
 
                     // Try to open browser, but don't fail if it doesn't work
                     if let Err(e) = open::that(signup_url) {
-                        Output::warning(&format!("Could not open browser automatically: {}", e));
+                        Output::warning(&format!("Could not open browser automatically: {e}"));
                     }
 
                     println!();
-                    println!("Please sign up at: {}", signup_url);
+                    println!("Please sign up at: {signup_url}");
                     println!("After signing up, you can get your API key from:");
                     println!("  https://app.promptguard.co/settings/api-keys");
                     println!();

@@ -73,6 +73,8 @@ impl BackupManager {
         backups
     }
 
+    /// Delete all backup files (public API for future use)
+    #[allow(dead_code)]
     pub fn delete_all_backups(&self, root_path: &Path) -> Result<Vec<PathBuf>> {
         let backups = self.list_backups(root_path);
         let mut deleted = Vec::new();

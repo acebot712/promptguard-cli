@@ -8,7 +8,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+/// An environment variable found in a .env file.
+/// All fields are intentionally public for programmatic access.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EnvVariable {
     pub name: String,
     pub value: Option<String>,
@@ -16,7 +19,10 @@ pub struct EnvVariable {
     pub line: usize,
 }
 
+/// An environment variable usage found in source code.
+/// All fields are intentionally public for programmatic access.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct EnvUsage {
     pub var_name: String,
     pub file: PathBuf,

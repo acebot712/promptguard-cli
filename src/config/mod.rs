@@ -118,15 +118,19 @@ impl ConfigManager {
     const DEFAULT_CONFIG_FILE: &'static str = ".promptguard.json";
 
     pub fn new(config_path: Option<PathBuf>) -> Result<Self> {
-        let path = config_path.unwrap_or_else(|| {
-            std::env::current_dir()
-                .map_err(|e| PromptGuardError::Io(e))
-                .map(|dir| dir.join(Self::DEFAULT_CONFIG_FILE))
-                .unwrap_or_else(|_| PathBuf::from(Self::DEFAULT_CONFIG_FILE))
-        });
+        let path = match config_path {
+            Some(p) => p,
+            None => std::env::current_dir().map_or_else(
+                |_| PathBuf::from(Self::DEFAULT_CONFIG_FILE),
+                |dir| dir.join(Self::DEFAULT_CONFIG_FILE),
+            ),
+        };
 
         Ok(Self { config_path: path })
     }
+
+    /// Supported config versions (for migration compatibility)
+    const SUPPORTED_VERSIONS: &'static [&'static str] = &["1.0", "1.1", "2.0"];
 
     pub fn load(&self) -> Result<PromptGuardConfig> {
         if !self.config_path.exists() {
@@ -137,10 +141,30 @@ impl ConfigManager {
         let config: PromptGuardConfig = serde_json::from_str(&content)
             .map_err(|e| PromptGuardError::Config(format!("Failed to parse config: {e}")))?;
 
+        // Validate config version
+        if !Self::SUPPORTED_VERSIONS.contains(&config.version.as_str()) {
+            return Err(PromptGuardError::Config(format!(
+                "Unsupported config version '{}'. Supported versions: {}. \
+                 Please run 'promptguard init' to create a new configuration.",
+                config.version,
+                Self::SUPPORTED_VERSIONS.join(", ")
+            )));
+        }
+
         // Security: Validate paths don't escape project directory
         if config.env_file.contains("..") || config.env_file.starts_with('/') {
             return Err(PromptGuardError::Config(
                 "Invalid env_file in config: must be relative path within project".to_string(),
+            ));
+        }
+
+        // Security: Validate proxy_url is a valid HTTPS URL (unless localhost for development)
+        if !config.proxy_url.starts_with("https://")
+            && !config.proxy_url.starts_with("http://localhost")
+            && !config.proxy_url.starts_with("http://127.0.0.1")
+        {
+            return Err(PromptGuardError::Config(
+                "Invalid proxy_url: must use HTTPS (or localhost for development)".to_string(),
             ));
         }
 

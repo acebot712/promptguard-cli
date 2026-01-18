@@ -1,18 +1,15 @@
 # PromptGuard clippy configuration
 # Strict enough to catch bugs, pragmatic enough to ship code.
 
-# Cognitive complexity threshold - don't write god functions
-cognitive-complexity-threshold = 30
-
-# Documentation - all public items must be documented (this is a library-ish tool)
-# Enforced via deny in Cargo.toml
+# Cognitive complexity threshold - keep functions focused
+cognitive-complexity-threshold = 20
 
 # Avoid too many arguments (usually indicates bad design)
-too-many-arguments-threshold = 7
+too-many-arguments-threshold = 6
 
 # Type complexity limit
-type-complexity-threshold = 250
+type-complexity-threshold = 200
 
 # Single char names are sometimes fine (i, x, y in loops)
 # But warn about them in function signatures
-single-char-binding-names-threshold = 4
+single-char-binding-names-threshold = 3

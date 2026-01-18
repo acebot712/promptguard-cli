@@ -1,7 +1,12 @@
 //! Red Team Command - Adversarial security testing
 //!
 //! Run automated security tests against your AI application.
-//! Uses PromptGuard's Red Team API to evaluate security posture.
+//! Uses `PromptGuard`'s Red Team API to evaluate security posture.
+//!
+//! Note: This module is scaffolding for a future feature and is not yet
+//! integrated into the CLI. Dead code warnings are intentionally suppressed.
+
+#![allow(dead_code)]
 
 use crate::api::PromptGuardClient;
 use crate::config::ConfigManager;
@@ -98,7 +103,7 @@ impl RedTeamCommand {
 
         let base_url = self.target_url.clone();
         let client = PromptGuardClient::new(api_key, base_url)
-            .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {}", e)))?;
+            .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
 
         // Check if we should run a specific test, custom test, or all tests
         if let Some(prompt) = &self.custom_prompt {
@@ -127,7 +132,7 @@ impl RedTeamCommand {
                     custom_prompt: None,
                 },
             )
-            .map_err(|e| PromptGuardError::Api(format!("Failed to run tests: {}", e)))?;
+            .map_err(|e| PromptGuardError::Api(format!("Failed to run tests: {e}")))?;
 
         // Print results
         for result in &summary.results {
@@ -150,7 +155,7 @@ impl RedTeamCommand {
                 );
                 println!("    Reason: {}", result.reason);
                 if let Some(threat) = &result.threat_type {
-                    println!("    Threat: {}", threat);
+                    println!("    Threat: {threat}");
                 }
             }
         }
@@ -175,26 +180,26 @@ impl RedTeamCommand {
 
         let result: RedTeamTestResult = client
             .post(
-                &format!("/internal/redteam/test/{}", test_name),
+                &format!("/internal/redteam/test/{test_name}"),
                 &TestRequest {
                     target_preset: self.preset.clone(),
                     custom_prompt: None,
                 },
             )
-            .map_err(|e| PromptGuardError::Api(format!("Failed to run test: {}", e)))?;
+            .map_err(|e| PromptGuardError::Api(format!("Failed to run test: {e}")))?;
 
         let status = if result.blocked {
             "✅ BLOCKED"
         } else {
             "❌ PASSED THROUGH"
         };
-        println!("Result: {}", status);
+        println!("Result: {status}");
         println!("Decision: {}", result.decision);
         println!("Reason: {}", result.reason);
         println!("Confidence: {:.0}%", result.confidence * 100.0);
 
         if let Some(threat) = &result.threat_type {
-            println!("Threat Type: {}", threat);
+            println!("Threat Type: {threat}");
         }
 
         if self.output_format == "json" {
@@ -222,14 +227,14 @@ impl RedTeamCommand {
                     custom_prompt: Some(prompt.to_string()),
                 },
             )
-            .map_err(|e| PromptGuardError::Api(format!("Failed to run custom test: {}", e)))?;
+            .map_err(|e| PromptGuardError::Api(format!("Failed to run custom test: {e}")))?;
 
         let status = if result.blocked {
             "✅ BLOCKED"
         } else {
             "❌ PASSED THROUGH"
         };
-        println!("Result: {}", status);
+        println!("Result: {status}");
         println!("Decision: {}", result.decision);
         println!("Reason: {}", result.reason);
         println!("Confidence: {:.0}%", result.confidence * 100.0);
@@ -254,7 +259,7 @@ impl RedTeamCommand {
         println!("  Total Attacks:      {}", summary.total_tests);
         println!("  Attacks Blocked:    {} ✅", summary.blocked);
         println!("  Attacks Passed:     {} ❌", summary.allowed);
-        println!("  Security Score:     {:.1}/100\n", score);
+        println!("  Security Score:     {score:.1}/100\n");
 
         if summary.allowed > 0 {
             println!("⚠️  Vulnerabilities Found:\n");

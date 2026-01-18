@@ -1,6 +1,11 @@
 //! Benchmark Command - Measure detection accuracy and performance
 //!
-//! Run benchmarks against PromptGuard detection capabilities.
+//! Run benchmarks against `PromptGuard` detection capabilities.
+//!
+//! Note: This module is scaffolding for a future feature and is not yet
+//! integrated into the CLI. Dead code warnings are intentionally suppressed.
+
+#![allow(dead_code)]
 
 use crate::error::Result;
 use std::time::Instant;
@@ -118,14 +123,14 @@ impl BenchmarkCommand {
         }
 
         let total = true_positives + true_negatives + false_positives + false_negatives;
-        let accuracy = (true_positives + true_negatives) as f64 / total as f64;
+        let accuracy = f64::from(true_positives + true_negatives) / f64::from(total);
         let precision = if true_positives + false_positives > 0 {
-            true_positives as f64 / (true_positives + false_positives) as f64
+            f64::from(true_positives) / f64::from(true_positives + false_positives)
         } else {
             0.0
         };
         let recall = if true_positives + false_negatives > 0 {
-            true_positives as f64 / (true_positives + false_negatives) as f64
+            f64::from(true_positives) / f64::from(true_positives + false_negatives)
         } else {
             0.0
         };
@@ -135,15 +140,15 @@ impl BenchmarkCommand {
             0.0
         };
 
-        // Sort latencies for percentiles
-        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        // Sort latencies for percentiles (use Ordering::Equal for NaN safety)
+        latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let avg_latency = latencies.iter().sum::<f64>() / latencies.len() as f64;
         let p50_latency = latencies[latencies.len() / 2];
         let p95_latency = latencies[(latencies.len() as f64 * 0.95) as usize];
         let p99_latency = latencies[(latencies.len() as f64 * 0.99) as usize];
 
         let duration = start.elapsed().as_secs_f64();
-        let throughput = total as f64 / duration;
+        let throughput = f64::from(total) / duration;
 
         BenchmarkResults {
             accuracy,
@@ -155,8 +160,10 @@ impl BenchmarkCommand {
             p95_latency_ms: p95_latency,
             p99_latency_ms: p99_latency,
             throughput,
-            false_positive_rate: false_positives as f64 / (false_positives + true_negatives) as f64,
-            false_negative_rate: false_negatives as f64 / (false_negatives + true_positives) as f64,
+            false_positive_rate: f64::from(false_positives)
+                / f64::from(false_positives + true_negatives),
+            false_negative_rate: f64::from(false_negatives)
+                / f64::from(false_negatives + true_positives),
             total_samples: total as u32,
         }
     }
@@ -202,10 +209,7 @@ impl BenchmarkCommand {
                 "⚠️"
             };
 
-            println!(
-                "  {} {}: {:.2}{} (target: {:.2}{})",
-                status, name, actual, unit, target, unit
-            );
+            println!("  {status} {name}: {actual:.2}{unit} (target: {target:.2}{unit})");
         }
     }
 

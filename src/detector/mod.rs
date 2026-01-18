@@ -15,6 +15,9 @@ use std::path::Path;
 
 pub trait Detector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult>;
+
+    /// Returns the language this detector handles (for trait completeness)
+    #[allow(dead_code)]
     fn language(&self) -> Language;
 }
 

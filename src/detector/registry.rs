@@ -7,26 +7,28 @@
 /// This is how you scale without creating technical debt.
 use crate::types::Provider;
 
-/// Provider detection metadata
+/// Provider detection metadata.
+/// All fields are intentionally public for extensibility.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ProviderInfo {
     /// Provider enum variant
     pub provider: Provider,
 
     /// Python package names that indicate this provider
-    /// Examples: ["openai"], ["anthropic"], ["google.genai"]
+    /// Examples: `openai`, `anthropic`, `google.genai`
     pub python_packages: &'static [&'static str],
 
     /// TypeScript/JavaScript package names
-    /// Examples: ["openai"], ["@anthropic-ai/sdk"], ["groq-sdk"]
+    /// Examples: `openai`, `@anthropic-ai/sdk`, `groq-sdk`
     pub typescript_packages: &'static [&'static str],
 
     /// API endpoint domains (for URL-based fallback detection)
-    /// Examples: ["api.openai.com"], ["api.anthropic.com"]
+    /// Examples: `api.openai.com`, `api.anthropic.com`
     pub api_endpoints: &'static [&'static str],
 
     /// Parameter name for base URL in this provider's SDK
-    /// Most use "baseURL", some use "base_url" or custom names
+    /// Most use `baseURL`, some use `base_url` or custom names
     pub base_url_param: &'static str,
 }
 
@@ -77,25 +79,28 @@ pub const PROVIDERS: &[ProviderInfo] = &[
 ];
 
 impl ProviderInfo {
-    /// Find provider by Python package import
+    /// Find provider by Python package import (public API for extensibility)
+    #[allow(dead_code)]
     pub fn from_python_package(package: &str) -> Option<&'static ProviderInfo> {
         PROVIDERS.iter().find(|p| {
             p.python_packages.iter().any(|pkg| {
                 // Match exact package or submodule
                 // "google.genai" matches "google.genai" or "google"
-                package == *pkg || package.starts_with(&format!("{}.", pkg))
+                package == *pkg || package.starts_with(&format!("{pkg}."))
             })
         })
     }
 
-    /// Find provider by TypeScript/JavaScript package import
+    /// Find provider by TypeScript/JavaScript package import (public API for extensibility)
+    #[allow(dead_code)]
     pub fn from_typescript_package(package: &str) -> Option<&'static ProviderInfo> {
         PROVIDERS
             .iter()
             .find(|p| p.typescript_packages.iter().any(|pkg| *pkg == package))
     }
 
-    /// Find provider by API endpoint URL
+    /// Find provider by API endpoint URL (public API for extensibility)
+    #[allow(dead_code)]
     pub fn from_api_url(url: &str) -> Option<&'static ProviderInfo> {
         PROVIDERS.iter().find(|p| {
             p.api_endpoints
@@ -104,7 +109,8 @@ impl ProviderInfo {
         })
     }
 
-    /// Get all provider names as strings (for CLI display)
+    /// Get all provider names as strings (for CLI display, public API)
+    #[allow(dead_code)]
     pub fn all_provider_names() -> Vec<&'static str> {
         PROVIDERS.iter().map(|p| p.provider.as_str()).collect()
     }
