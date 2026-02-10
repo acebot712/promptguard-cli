@@ -25,7 +25,8 @@ mod types;
 use clap::{Parser, Subcommand};
 use commands::{
     ApplyCommand, ConfigCommand, DisableCommand, DoctorCommand, EnableCommand, InitCommand,
-    KeyCommand, LogsCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
+    KeyCommand, LogsCommand, RedTeamCommand, RedactCommand, RevertCommand, ScanCommand,
+    StatusCommand, TestCommand, UpdateCommand,
 };
 
 #[derive(Parser)]
@@ -93,18 +94,29 @@ enum Commands {
         framework: Option<String>,
     },
 
-    /// Scan project for LLM SDK usage without making changes
+    /// Scan project for LLM SDK usage or scan text for security threats
     ///
-    /// Detects `OpenAI`, Anthropic, Cohere, and `HuggingFace` SDK usage
+    /// Without --text or --file: Detects `OpenAI`, Anthropic, Cohere, and `HuggingFace` SDK usage
     /// in your Python and TypeScript/JavaScript files.
+    ///
+    /// With --text or --file: Scans content for security threats (prompt injection, jailbreaks, etc.)
+    /// via the `PromptGuard` API.
     Scan {
-        /// Filter by specific provider
+        /// Filter by specific provider (for SDK detection mode)
         #[arg(long)]
         provider: Option<String>,
 
         /// Output results as JSON (for scripting)
         #[arg(long)]
         json: bool,
+
+        /// Text content to scan for security threats via the API
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+
+        /// File path to scan for security threats via the API
+        #[arg(long, conflicts_with = "text")]
+        file: Option<String>,
     },
 
     /// Show current `PromptGuard` status and configuration
@@ -168,10 +180,27 @@ enum Commands {
     /// Keys can be test (`pg_sk_test`_*) or production (`pg_sk_prod`_*).
     Key,
 
-    /// View activity logs from `PromptGuard` dashboard
+    /// View activity logs from `PromptGuard` API
     ///
-    /// Shows recent LLM requests, security events, and usage metrics.
-    Logs,
+    /// Fetches recent LLM requests, security events, and usage metrics
+    /// directly from the `PromptGuard` backend.
+    Logs {
+        /// Number of log entries to fetch
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Filter by log type (security, request, response, error)
+        #[arg(short = 't', long = "type")]
+        log_type: Option<String>,
+
+        /// Output results as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
+
+        /// Continuously poll for new logs (not yet implemented)
+        #[arg(short, long)]
+        follow: bool,
+    },
 
     /// Test `PromptGuard` configuration
     ///
@@ -179,8 +208,75 @@ enum Commands {
     /// that your setup is working correctly.
     Test,
 
-    /// Update CLI to the latest version
-    Update,
+    /// Check for CLI updates
+    ///
+    /// Checks GitHub releases for a newer version and provides
+    /// instructions for updating.
+    Update {
+        /// Only check for updates, don't install
+        #[arg(long, default_value = "true")]
+        check_only: bool,
+    },
+
+    /// Redact PII and sensitive data from text
+    ///
+    /// Calls the `PromptGuard` API to identify and redact sensitive information
+    /// like emails, phone numbers, SSNs, credit cards, etc.
+    Redact {
+        /// Text content to redact
+        #[arg(long, conflicts_with = "file")]
+        text: Option<String>,
+
+        /// File path to read and redact
+        #[arg(long, conflicts_with = "text")]
+        file: Option<String>,
+
+        /// Output file path (if not provided, prints to stdout)
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Output results as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Run adversarial security tests against your AI application
+    ///
+    /// Uses `PromptGuard`'s Red Team API to evaluate security posture
+    /// by testing with known attack patterns and jailbreak attempts.
+    Redteam {
+        /// Target API URL to test against
+        #[arg(long)]
+        target_url: Option<String>,
+
+        /// `PromptGuard` API key (or uses configured key)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Categories of attacks to test (e.g., jailbreak, injection)
+        #[arg(long)]
+        category: Vec<String>,
+
+        /// Output format: human or json
+        #[arg(long, default_value = "human")]
+        format: String,
+
+        /// Show detailed output for each test
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Run a specific test by name
+        #[arg(long)]
+        test: Option<String>,
+
+        /// Custom prompt to test
+        #[arg(long)]
+        prompt: Option<String>,
+
+        /// Preset to use for testing (default, strict, permissive)
+        #[arg(long, default_value = "default")]
+        preset: String,
+    },
 }
 
 fn main() {
@@ -217,7 +313,18 @@ fn main() {
         }
         .execute(),
 
-        Commands::Scan { provider, json } => ScanCommand { provider, json }.execute(),
+        Commands::Scan {
+            provider,
+            json,
+            text,
+            file,
+        } => ScanCommand {
+            provider,
+            json,
+            text,
+            file,
+        }
+        .execute(),
 
         Commands::Status { json } => StatusCommand { json }.execute(),
 
@@ -231,9 +338,54 @@ fn main() {
         Commands::Enable { runtime } => EnableCommand { runtime }.execute(),
         Commands::Config => ConfigCommand::execute(),
         Commands::Key => KeyCommand::execute(),
-        Commands::Logs => LogsCommand::execute(),
+        Commands::Logs {
+            limit,
+            log_type,
+            json,
+            follow,
+        } => LogsCommand {
+            limit,
+            log_type,
+            json,
+            follow,
+        }
+        .execute(),
         Commands::Test => TestCommand::execute(),
-        Commands::Update => UpdateCommand::execute(),
+        Commands::Update { check_only } => UpdateCommand { check_only }.execute(),
+
+        Commands::Redact {
+            text,
+            file,
+            output,
+            json,
+        } => RedactCommand {
+            text,
+            file,
+            output,
+            json,
+        }
+        .execute(),
+
+        Commands::Redteam {
+            target_url,
+            api_key,
+            category,
+            format,
+            verbose,
+            test,
+            prompt,
+            preset,
+        } => RedTeamCommand {
+            target_url,
+            api_key,
+            categories: category,
+            output_format: format,
+            verbose,
+            test_name: test,
+            custom_prompt: prompt,
+            preset,
+        }
+        .execute(),
     };
 
     if let Err(e) = result {

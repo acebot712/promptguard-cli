@@ -1,3 +1,4 @@
+use crate::api::PromptGuardClient;
 use crate::config::{ConfigManager, PromptGuardConfig};
 use crate::detector::detect_all_providers;
 use crate::env::EnvManager;
@@ -411,6 +412,36 @@ impl InitCommand {
         // Validate API key format
         if !api_key.starts_with("pg_sk_test_") && !api_key.starts_with("pg_sk_prod_") {
             return Err(crate::error::PromptGuardError::InvalidApiKey);
+        }
+
+        // Validate API key against the backend (skip in dry-run mode)
+        if !self.dry_run {
+            Output::info("Validating API key...");
+
+            let client = PromptGuardClient::new(api_key.clone(), Some(self.base_url.clone()))?;
+
+            match client.health_check() {
+                Ok(()) => {
+                    Output::success("API key validated successfully");
+                },
+                Err(e) => {
+                    Output::warning(&format!("Could not validate API key: {}", e));
+                    println!();
+                    println!("This could mean:");
+                    println!("  • The API key is invalid or expired");
+                    println!("  • The PromptGuard API is temporarily unavailable");
+                    println!("  • Network connectivity issues");
+                    println!();
+
+                    if !self.auto {
+                        if !Output::confirm("Continue anyway?", false)? {
+                            return Err(crate::error::PromptGuardError::Custom(
+                                "API key validation failed. Please check your API key.".to_string(),
+                            ));
+                        }
+                    }
+                },
+            }
         }
 
         Ok(api_key)

@@ -2,7 +2,7 @@
 
 > **Drop-in LLM security for your applications** - Built with Rust + Tree-sitter
 
-![Version](https://img.shields.io/badge/version-1.0.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.0-blue)
 ![Rust](https://img.shields.io/badge/rust-1.70+-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 ![Status](https://img.shields.io/badge/status-production%20ready-success)
@@ -294,7 +294,7 @@ src/
 ```bash
 $ promptguard scan
 
-🛡️  PromptGuard CLI v1.0.0
+🛡️  PromptGuard CLI v1.1.0
 
 📊 LLM SDK Detection Report
 

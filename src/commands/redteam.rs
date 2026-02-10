@@ -2,11 +2,6 @@
 //!
 //! Run automated security tests against your AI application.
 //! Uses `PromptGuard`'s Red Team API to evaluate security posture.
-//!
-//! Note: This module is scaffolding for a future feature and is not yet
-//! integrated into the CLI. Dead code warnings are intentionally suppressed.
-
-#![allow(dead_code)]
 
 use crate::api::PromptGuardClient;
 use crate::config::ConfigManager;
@@ -35,12 +30,15 @@ struct RedTeamSummary {
     results: Vec<RedTeamTestResult>,
 }
 
+// Reserved for future "list tests" functionality
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct TestList {
     total: usize,
     tests: Vec<TestInfo>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct TestInfo {
     name: String,
@@ -59,6 +57,8 @@ struct TestRequest {
 pub struct RedTeamCommand {
     pub target_url: Option<String>,
     pub api_key: Option<String>,
+    /// Reserved for category filtering functionality
+    #[allow(dead_code)]
     pub categories: Vec<String>,
     pub output_format: String,
     pub verbose: bool,
