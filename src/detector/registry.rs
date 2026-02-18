@@ -76,6 +76,13 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         api_endpoints: &["api.groq.com"],
         base_url_param: "base_url",
     },
+    ProviderInfo {
+        provider: Provider::Bedrock,
+        python_packages: &["boto3", "botocore"],
+        typescript_packages: &["@aws-sdk/client-bedrock-runtime"],
+        api_endpoints: &["bedrock-runtime", "bedrock.amazonaws.com"],
+        base_url_param: "",
+    },
 ];
 
 impl ProviderInfo {

@@ -1,8 +1,8 @@
 # PromptGuard CLI
 
-> **Drop-in LLM security for your applications** - Built with Rust + Tree-sitter
+> **Scan, detect, and secure LLM SDK usage in your codebase** - Built with Rust + Tree-sitter
 
-![Version](https://img.shields.io/badge/version-1.1.0-blue)
+![Version](https://img.shields.io/badge/version-1.1.1-blue)
 ![Rust](https://img.shields.io/badge/rust-1.70+-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 ![Status](https://img.shields.io/badge/status-production%20ready-success)
@@ -17,7 +17,7 @@
 
 - ✅ **Core Features**: Init, Scan, Apply, Revert, Disable, Enable
 - ✅ **AST Transformations**: TypeScript, JavaScript, Python (Tree-sitter powered)
-- ✅ **Provider Support**: OpenAI, Anthropic, Cohere, HuggingFace
+- ✅ **Provider Support**: OpenAI, Anthropic, Cohere, HuggingFace, Gemini, Groq, AWS Bedrock
 - ✅ **Backup/Restore**: Automatic backups with safe revert
 - ✅ **Configuration**: Persistent config with enabled/disabled states
 - ✅ **Management**: Config viewer, API key management, status checks
@@ -40,7 +40,7 @@ This is a complete **Rust rewrite** using proper Tree-sitter AST parsing. Unlike
 - ✅ **Zero false positives** - Precise detection and modification
 - ✅ **Single static binary** - No Python, Node.js, or runtime dependencies
 - ✅ **Instant startup** - <10ms cold start
-- ✅ **4 Providers** - OpenAI, Anthropic, Cohere, HuggingFace
+- ✅ **7 Providers** - OpenAI, Anthropic, Cohere, HuggingFace, Gemini, Groq, AWS Bedrock
 
 ---
 
@@ -159,7 +159,20 @@ promptguard doctor
 
 ---
 
-## How It Works
+## Integration Options
+
+The CLI provides **proxy-mode integration** — it rewrites SDK constructors to route traffic through PromptGuard. This is one of several ways to integrate:
+
+| Method | Best For | How |
+|--------|----------|-----|
+| **SDK Auto-Instrumentation** (recommended) | New projects, all providers | `promptguard.init()` in Python/Node.js |
+| **CLI Proxy Transform** (this tool) | Existing codebases, bulk migration | `promptguard init` rewrites constructors |
+| **HTTP Proxy** | Any language, OpenAI-compatible APIs | Change `baseURL` manually |
+| **Guard API** | Custom pipelines, any framework | `POST /api/v1/guard` |
+
+For new projects, the [PromptGuard SDK](https://docs.promptguard.co/sdks/python) with auto-instrumentation is the recommended approach — one line of code secures all LLM calls with no code rewrites.
+
+## How the CLI Works
 
 ### Before
 ```typescript
@@ -176,7 +189,7 @@ const openai = new OpenAI({
 });
 ```
 
-**Result:** All LLM requests now go through PromptGuard's security layer with zero code changes!
+**Result:** All LLM requests now go through PromptGuard's security layer!
 
 ---
 
@@ -216,12 +229,17 @@ const openai = new OpenAI({
 
 ### Supported Languages & Providers
 
-| Provider | TypeScript | JavaScript | Python |
-|----------|------------|------------|--------|
-| OpenAI | ✅ | ✅ | ✅ |
-| Anthropic | ✅ | ✅ | ✅ |
-| Cohere | ✅ | ✅ | ✅ |
-| HuggingFace | ✅ | ✅ | ✅ |
+| Provider | TypeScript | JavaScript | Python | Proxy Transform |
+|----------|------------|------------|--------|-----------------|
+| OpenAI | ✅ | ✅ | ✅ | ✅ |
+| Anthropic | ✅ | ✅ | ✅ | ✅ |
+| Cohere | ✅ | ✅ | ✅ | ✅ |
+| HuggingFace | ✅ | ✅ | ✅ | ✅ |
+| Gemini | ✅ | ✅ | ✅ | ✅ |
+| Groq | ✅ | ✅ | ✅ | ✅ |
+| AWS Bedrock | ✅ | ✅ | ✅ | — (use SDK) |
+
+> **Note:** AWS Bedrock uses the AWS SDK command pattern and cannot be transformed via proxy URL injection. For Bedrock, use the [PromptGuard SDK auto-instrumentation](https://docs.promptguard.co/sdks/python) instead.
 
 ---
 
@@ -356,7 +374,8 @@ Apache 2.0 - See [LICENSE](LICENSE)
 ## Links
 
 - **Homepage**: https://promptguard.co
-- **Documentation**: https://docs.promptguard.co/cli
+- **Documentation**: https://docs.promptguard.co
+- **SDK Docs**: https://docs.promptguard.co/sdks/python
 - **Dashboard**: https://app.promptguard.co
 - **GitHub**: https://github.com/acebot712/promptguard-cli
 

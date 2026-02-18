@@ -61,6 +61,15 @@ pub fn get_typescript_query(provider: Provider) -> &'static str {
             ) @new_expr
         "#
         },
+        Provider::Bedrock => {
+            r#"
+            (new_expression
+                constructor: (identifier) @constructor
+                (#eq? @constructor "BedrockRuntimeClient")
+                arguments: (arguments) @args
+            ) @new_expr
+        "#
+        },
     }
 }
 
@@ -197,6 +206,22 @@ pub fn get_python_detection_query(provider: Provider) -> &'static str {
             ]
         "#
         },
+        Provider::Bedrock => {
+            r#"
+            [
+                ; Pattern: boto3.client("bedrock-runtime")
+                (call
+                    function: (attribute
+                        object: (identifier) @module
+                        (#eq? @module "boto3")
+                        attribute: (identifier) @method
+                        (#eq? @method "client")
+                    )
+                    arguments: (argument_list) @args
+                ) @call_expr
+            ]
+        "#
+        },
     }
 }
 
@@ -257,6 +282,21 @@ pub fn get_python_transform_query(provider: Provider) -> &'static str {
             (call
                 function: (identifier) @function
                 (#eq? @function "Groq")
+                arguments: (argument_list) @args
+            ) @call_expr
+        "#
+        },
+        Provider::Bedrock => {
+            // Bedrock does not support proxy-mode transformation.
+            // Detection-only; use auto-instrumentation SDK instead.
+            r#"
+            (call
+                function: (attribute
+                    object: (identifier) @module
+                    (#eq? @module "boto3")
+                    attribute: (identifier) @method
+                    (#eq? @method "client")
+                )
                 arguments: (argument_list) @args
             ) @call_expr
         "#

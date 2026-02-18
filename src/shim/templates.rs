@@ -410,6 +410,7 @@ pub fn get_python_provider_patch(provider: Provider) -> &'static str {
         Provider::HuggingFace => PYTHON_HUGGINGFACE_PATCH,
         Provider::Gemini => "# Gemini Python shim - coming soon\n",
         Provider::Groq => "# Groq Python shim - coming soon\n",
+        Provider::Bedrock => "# Bedrock: use promptguard SDK auto-instrumentation instead\n# pip install promptguard-sdk && promptguard.init()\n",
     }
 }
 
@@ -424,6 +425,9 @@ pub fn get_python_install_call(provider: Provider) -> &'static str {
         },
         Provider::Gemini => "    # Gemini shim - coming soon",
         Provider::Groq => "    # Groq shim - coming soon",
+        Provider::Bedrock => {
+            "    # Bedrock: use promptguard SDK auto-instrumentation (promptguard.init())"
+        },
     }
 }
 
@@ -436,5 +440,6 @@ pub fn get_typescript_provider_export(provider: Provider) -> &'static str {
         Provider::HuggingFace => TYPESCRIPT_HUGGINGFACE_EXPORT,
         Provider::Gemini => "// Gemini TypeScript shim - coming soon\n",
         Provider::Groq => "// Groq TypeScript shim - coming soon\n",
+        Provider::Bedrock => "// Bedrock: use promptguard SDK auto-instrumentation instead\n// npm install promptguard-sdk && require('promptguard-sdk').init()\n",
     }
 }

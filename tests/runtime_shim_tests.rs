@@ -437,12 +437,21 @@ fn test_all_providers_in_shim() {
             Provider::HuggingFace => "huggingface",
             Provider::Gemini => "gemini",
             Provider::Groq => "groq",
+            Provider::Bedrock => "bedrock",
         };
 
-        assert!(
-            content.contains(&format!("_shim_{provider_name}")),
-            "Shim should contain {provider_name} patch"
-        );
+        // Bedrock uses SDK auto-instrumentation, not shim patches
+        if matches!(provider, Provider::Bedrock) {
+            assert!(
+                content.contains("Bedrock") || content.contains("bedrock"),
+                "Shim should reference bedrock"
+            );
+        } else {
+            assert!(
+                content.contains(&format!("_shim_{provider_name}")),
+                "Shim should contain {provider_name} patch"
+            );
+        }
     }
 }
 

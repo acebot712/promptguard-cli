@@ -10,6 +10,7 @@ pub enum Provider {
     HuggingFace,
     Gemini,
     Groq,
+    Bedrock,
 }
 
 impl Provider {
@@ -21,6 +22,7 @@ impl Provider {
             Provider::HuggingFace => "huggingface",
             Provider::Gemini => "gemini",
             Provider::Groq => "groq",
+            Provider::Bedrock => "bedrock",
         }
     }
 
@@ -32,6 +34,7 @@ impl Provider {
             "huggingface" | "hf" => Some(Provider::HuggingFace),
             "gemini" | "google" => Some(Provider::Gemini),
             "groq" => Some(Provider::Groq),
+            "bedrock" | "aws-bedrock" | "aws" => Some(Provider::Bedrock),
             _ => None,
         }
     }
@@ -44,6 +47,7 @@ impl Provider {
             Provider::HuggingFace => "HfInference",
             Provider::Gemini => "Client",
             Provider::Groq => "Groq",
+            Provider::Bedrock => "BedrockRuntimeClient",
         }
     }
 
@@ -59,6 +63,14 @@ impl Provider {
             Provider::HuggingFace => "accessToken",
             _ => "apiKey",
         }
+    }
+
+    /// Whether this provider supports proxy-mode transformation (baseURL injection).
+    /// Providers like AWS Bedrock use a different SDK pattern and require
+    /// auto-instrumentation instead.
+    #[allow(dead_code)]
+    pub fn supports_proxy_transform(&self) -> bool {
+        !matches!(self, Provider::Bedrock)
     }
 }
 

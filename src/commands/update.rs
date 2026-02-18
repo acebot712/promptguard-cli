@@ -76,7 +76,7 @@ impl UpdateCommand {
         }
 
         println!("\nDocumentation:");
-        println!("  https://docs.promptguard.co/cli");
+        println!("  https://docs.promptguard.co");
 
         Ok(())
     }
