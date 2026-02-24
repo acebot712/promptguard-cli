@@ -96,7 +96,7 @@ enum Commands {
 
     /// Scan project for LLM SDK usage or scan text for security threats
     ///
-    /// Without --text or --file: Detects `OpenAI`, Anthropic, Cohere, and `HuggingFace` SDK usage
+    /// Without --text or --file: Detects OpenAI, Anthropic, Cohere, HuggingFace, Gemini, Groq, and AWS Bedrock SDK usage
     /// in your Python and TypeScript/JavaScript files.
     ///
     /// With --text or --file: Scans content for security threats (prompt injection, jailbreaks, etc.)
