@@ -103,7 +103,7 @@ impl ProviderInfo {
     pub fn from_typescript_package(package: &str) -> Option<&'static ProviderInfo> {
         PROVIDERS
             .iter()
-            .find(|p| p.typescript_packages.iter().any(|pkg| *pkg == package))
+            .find(|p| p.typescript_packages.contains(&package))
     }
 
     /// Find provider by API endpoint URL (public API for extensibility)

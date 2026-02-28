@@ -7,6 +7,7 @@
 /// - apply/revert: Configuration application and removal
 /// - status: State reporting
 /// - config: Configuration management
+use std::fmt::Write;
 use std::fs;
 use tempfile::TempDir;
 
@@ -592,7 +593,7 @@ fn test_long_file_handling() {
 
     // Add many lines
     for i in 0..1000 {
-        content.push_str(&format!("def function_{i}():\n    pass\n\n"));
+        let _ = write!(content, "def function_{i}():\n    pass\n\n");
     }
 
     fs::write(&long_file, content).expect("Failed to write");

@@ -4,6 +4,7 @@
 /// Helps users understand what environment variables need to be configured.
 use crate::error::Result;
 use std::collections::HashMap;
+use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
@@ -61,7 +62,7 @@ impl EnvScanner {
             .max_depth(3)
             .follow_links(false)
         {
-            let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
             // Skip node_modules and other build directories
@@ -80,7 +81,7 @@ impl EnvScanner {
 
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-            if env_patterns.iter().any(|pattern| file_name == *pattern) {
+            if env_patterns.contains(&file_name) {
                 env_files.push(path.to_path_buf());
             }
         }
@@ -178,7 +179,7 @@ impl EnvScanner {
             .max_depth(5)
             .follow_links(false)
         {
-            let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
             // Skip non-Python files and build directories
@@ -224,7 +225,7 @@ impl EnvScanner {
             .max_depth(5)
             .follow_links(false)
         {
-            let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
             // Check for JS/TS files
@@ -360,9 +361,9 @@ impl EnvScanner {
         report.push_str("Environment Variables Detected:\n\n");
 
         for (var_name, locations) in &var_map {
-            report.push_str(&format!("  {var_name}\n"));
+            let _ = writeln!(report, "  {var_name}");
             for location in locations {
-                report.push_str(&format!("    - {location}\n"));
+                let _ = writeln!(report, "    - {location}");
             }
             report.push('\n');
         }

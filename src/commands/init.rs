@@ -136,7 +136,7 @@ impl InitCommand {
             );
             for file in unique_files.iter().take(5) {
                 let rel_path = file.strip_prefix(&root_path).unwrap_or(file);
-                Output::step(&format!("{}", rel_path.display()));
+                Output::step(&rel_path.display().to_string());
             }
             if unique_files.len() > 5 {
                 Output::step(&format!("... and {} more", unique_files.len() - 5));

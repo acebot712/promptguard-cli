@@ -3,6 +3,7 @@ use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 /// Log entry from the API
 #[derive(Debug, Deserialize, Serialize)]
@@ -72,10 +73,10 @@ impl LogsCommand {
         // Build query parameters
         let mut endpoint = format!("/logs?limit={}", self.limit);
         if let Some(ref log_type) = self.log_type {
-            endpoint.push_str(&format!("&type={log_type}"));
+            let _ = write!(endpoint, "&type={log_type}");
         }
         if let Some(ref project_id) = config.project_id {
-            endpoint.push_str(&format!("&project_id={project_id}"));
+            let _ = write!(endpoint, "&project_id={project_id}");
         }
 
         // Try to fetch logs from the API
