@@ -1,6 +1,6 @@
 //! Redact Command - Remove PII and sensitive data from text
 //!
-//! Calls the PromptGuard `/security/redact` API endpoint to redact
+//! Calls the `PromptGuard` `/security/redact` API endpoint to redact
 //! sensitive information like emails, phone numbers, SSNs, etc.
 
 use crate::api::PromptGuardClient;
@@ -52,7 +52,7 @@ impl RedactCommand {
             fs::read_to_string(file_path).map_err(|e| {
                 PromptGuardError::Io(std::io::Error::new(
                     e.kind(),
-                    format!("Failed to read file '{}': {}", file_path, e),
+                    format!("Failed to read file '{file_path}': {e}"),
                 ))
             })?
         } else {
@@ -89,12 +89,12 @@ impl RedactCommand {
             fs::write(output_path, &response.redacted_text).map_err(|e| {
                 PromptGuardError::Io(std::io::Error::new(
                     e.kind(),
-                    format!("Failed to write output file '{}': {}", output_path, e),
+                    format!("Failed to write output file '{output_path}': {e}"),
                 ))
             })?;
 
             if !self.json {
-                Output::success(&format!("Redacted content written to {}", output_path));
+                Output::success(&format!("Redacted content written to {output_path}"));
                 println!();
                 println!("Entities redacted: {}", response.entity_count);
                 for entity in &response.entities_found {

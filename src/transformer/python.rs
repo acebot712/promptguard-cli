@@ -4,9 +4,16 @@ use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
 use std::fs;
 use std::path::Path;
+use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
 pub struct PythonTransformer;
+
+impl Default for PythonTransformer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl PythonTransformer {
     pub fn new() -> Self {
@@ -81,7 +88,7 @@ impl Transformer for PythonTransformer {
 
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_python::language())
+            .set_language(&tree_sitter_python::LANGUAGE.into())
             .map_err(|_| PromptGuardError::Parse("Failed to set Python language".to_string()))?;
 
         let tree = parser
@@ -89,15 +96,15 @@ impl Transformer for PythonTransformer {
             .ok_or_else(|| PromptGuardError::Parse("Failed to parse Python file".to_string()))?;
 
         let query_str = get_python_transform_query(provider);
-        let query = Query::new(tree_sitter_python::language(), query_str)
+        let query = Query::new(&tree_sitter_python::LANGUAGE.into(), query_str)
             .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
-        let mut modifications = Vec::new();
+        let mut modifications: Vec<(usize, usize, String)> = Vec::new();
 
-        for match_ in matches {
+        while let Some(match_) = matches.next() {
             let args_node = match match_
                 .captures
                 .iter()

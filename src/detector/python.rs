@@ -7,6 +7,12 @@ use std::path::Path;
 
 pub struct PythonDetector;
 
+impl Default for PythonDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PythonDetector {
     pub fn new() -> Self {
         Self
@@ -33,7 +39,7 @@ impl PythonDetector {
 impl Detector for PythonDetector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult> {
         let config = DetectorConfig {
-            ts_language: tree_sitter_python::language(),
+            ts_language: tree_sitter_python::LANGUAGE.into(),
             language: Language::Python,
             capture_name: "call_expr",
         };

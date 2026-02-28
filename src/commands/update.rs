@@ -43,14 +43,14 @@ impl UpdateCommand {
 
                 if self.is_newer_version(current_version, latest_version) {
                     println!();
-                    Output::success(&format!("New version available: v{}", latest_version));
+                    Output::success(&format!("New version available: v{latest_version}"));
                     println!();
 
                     if let Some(ref body) = release.body {
                         println!("What's new:");
                         // Print first few lines of release notes
                         for line in body.lines().take(5) {
-                            println!("  {}", line);
+                            println!("  {line}");
                         }
                         println!();
                     }
@@ -66,7 +66,7 @@ impl UpdateCommand {
                 }
             },
             Err(e) => {
-                Output::warning(&format!("Could not check for updates: {}", e));
+                Output::warning(&format!("Could not check for updates: {e}"));
                 println!();
                 println!("You can manually check for updates at:");
                 println!("  https://github.com/acebot712/promptguard-cli/releases");
@@ -86,13 +86,13 @@ impl UpdateCommand {
             .timeout(Duration::from_secs(10))
             .user_agent(format!("promptguard-cli/{}", env!("CARGO_PKG_VERSION")))
             .build()
-            .map_err(|e| PromptGuardError::Api(format!("Failed to create HTTP client: {}", e)))?;
+            .map_err(|e| PromptGuardError::Api(format!("Failed to create HTTP client: {e}")))?;
 
         let response = client
             .get(GITHUB_API_URL)
             .header("Accept", "application/vnd.github.v3+json")
             .send()
-            .map_err(|e| PromptGuardError::Api(format!("Failed to check for updates: {}", e)))?;
+            .map_err(|e| PromptGuardError::Api(format!("Failed to check for updates: {e}")))?;
 
         if !response.status().is_success() {
             return Err(PromptGuardError::Api(format!(
@@ -103,7 +103,7 @@ impl UpdateCommand {
 
         response
             .json()
-            .map_err(|e| PromptGuardError::Api(format!("Failed to parse GitHub response: {}", e)))
+            .map_err(|e| PromptGuardError::Api(format!("Failed to parse GitHub response: {e}")))
     }
 
     fn is_newer_version(&self, current: &str, latest: &str) -> bool {

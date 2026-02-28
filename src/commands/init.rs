@@ -425,7 +425,7 @@ impl InitCommand {
                     Output::success("API key validated successfully");
                 },
                 Err(e) => {
-                    Output::warning(&format!("Could not validate API key: {}", e));
+                    Output::warning(&format!("Could not validate API key: {e}"));
                     println!();
                     println!("This could mean:");
                     println!("  • The API key is invalid or expired");
@@ -433,12 +433,10 @@ impl InitCommand {
                     println!("  • Network connectivity issues");
                     println!();
 
-                    if !self.auto {
-                        if !Output::confirm("Continue anyway?", false)? {
-                            return Err(crate::error::PromptGuardError::Custom(
-                                "API key validation failed. Please check your API key.".to_string(),
-                            ));
-                        }
+                    if !self.auto && !Output::confirm("Continue anyway?", false)? {
+                        return Err(crate::error::PromptGuardError::Custom(
+                            "API key validation failed. Please check your API key.".to_string(),
+                        ));
                     }
                 },
             }

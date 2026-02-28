@@ -72,10 +72,10 @@ impl LogsCommand {
         // Build query parameters
         let mut endpoint = format!("/logs?limit={}", self.limit);
         if let Some(ref log_type) = self.log_type {
-            endpoint.push_str(&format!("&type={}", log_type));
+            endpoint.push_str(&format!("&type={log_type}"));
         }
         if let Some(ref project_id) = config.project_id {
-            endpoint.push_str(&format!("&project_id={}", project_id));
+            endpoint.push_str(&format!("&project_id={project_id}"));
         }
 
         // Try to fetch logs from the API
@@ -102,7 +102,7 @@ impl LogsCommand {
             Err(e) => {
                 // Graceful fallback if the logs endpoint isn't available yet
                 if !self.json {
-                    Output::warning(&format!("Could not fetch logs from API: {}", e));
+                    Output::warning(&format!("Could not fetch logs from API: {e}"));
                     println!();
                     println!("View your complete activity logs at:");
                     println!("  https://app.promptguard.co/dashboard/activity");
@@ -114,10 +114,7 @@ impl LogsCommand {
                     println!("\nFor real-time monitoring:");
                     println!("  Visit the dashboard at https://app.promptguard.co/dashboard");
                 } else {
-                    return Err(PromptGuardError::Api(format!(
-                        "Failed to fetch logs: {}",
-                        e
-                    )));
+                    return Err(PromptGuardError::Api(format!("Failed to fetch logs: {e}")));
                 }
             },
         }
@@ -152,11 +149,11 @@ impl LogsCommand {
             print!("{} [{}] {}", icon, timestamp, log.log_type.to_uppercase());
 
             if let Some(ref decision) = log.decision {
-                print!(" - {}", decision);
+                print!(" - {decision}");
             }
 
             if let Some(ref threat_type) = log.threat_type {
-                print!(" ({})", threat_type);
+                print!(" ({threat_type})");
             }
 
             if let Some(confidence) = log.confidence {
@@ -164,13 +161,13 @@ impl LogsCommand {
             }
 
             if let Some(latency) = log.latency_ms {
-                print!(" {}ms", latency);
+                print!(" {latency}ms");
             }
 
             println!();
 
             if let Some(ref message) = log.message {
-                println!("   {}", message);
+                println!("   {message}");
             }
         }
 

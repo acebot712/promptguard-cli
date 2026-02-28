@@ -205,6 +205,9 @@ const openai = new OpenAI({
 | `disable` | Temporarily disable |
 | `enable` | Re-enable |
 | `revert` | Complete removal |
+| `redteam` | Red team testing tools |
+| `redteam --autonomous` | Run autonomous red team agent (LLM-powered) |
+| `policy` | Manage guardrails as YAML (apply/diff/export) |
 
 ---
 
@@ -274,7 +277,7 @@ src/
 ├── backup/              # Backup/restore system
 ├── env/                 # .env file manager
 ├── api/                 # HTTP API client (Reqwest)
-└── commands/            # 12 CLI commands
+└── commands/            # 17 CLI commands (incl. redteam, policy.rs)
 ```
 
 **Total:** 2,325 LOC Rust • 11 modules • Clean architecture
@@ -349,6 +352,52 @@ Proxy URL: https://api.promptguard.co/api/v1
 Configuration:
   • Files managed: 3
   • Providers: openai
+```
+
+### Autonomous Red Team
+
+```bash
+# Run autonomous agent with default budget (100 iterations)
+promptguard redteam --autonomous --preset strict
+
+# Higher budget for thorough testing
+promptguard redteam --autonomous --budget 500 --preset support_bot:strict
+
+# JSON output for CI
+promptguard redteam --autonomous --format json
+```
+
+### Policy-as-Code
+
+Define guardrails in YAML and version them in git:
+
+```bash
+# Export current config as YAML
+promptguard policy export --project-id proj_abc123 > policy.yaml
+
+# Preview changes
+promptguard policy diff policy.yaml --project-id proj_abc123
+
+# Apply changes (with dry-run)
+promptguard policy apply policy.yaml --project-id proj_abc123 --dry-run
+
+# Apply for real
+promptguard policy apply policy.yaml --project-id proj_abc123
+```
+
+Example `policy.yaml`:
+
+```yaml
+guardrails:
+  prompt_injection:
+    level: strict
+  pii_detection:
+    level: strict
+    mode: redact
+  toxicity:
+    threshold: 0.7
+  data_exfiltration:
+    level: moderate
 ```
 
 ---

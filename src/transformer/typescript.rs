@@ -4,9 +4,16 @@ use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
 use std::fs;
 use std::path::Path;
+use streaming_iterator::StreamingIterator;
 use tree_sitter::{Node, Parser, Query, QueryCursor};
 
 pub struct TypeScriptTransformer;
+
+impl Default for TypeScriptTransformer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl TypeScriptTransformer {
     pub fn new() -> Self {
@@ -81,7 +88,7 @@ impl Transformer for TypeScriptTransformer {
 
         let mut parser = Parser::new();
         parser
-            .set_language(tree_sitter_typescript::language_typescript())
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .map_err(|_| {
                 PromptGuardError::Parse("Failed to set TypeScript language".to_string())
             })?;
@@ -91,15 +98,18 @@ impl Transformer for TypeScriptTransformer {
         })?;
 
         let query_str = get_typescript_query(provider);
-        let query = Query::new(tree_sitter_typescript::language_typescript(), query_str)
-            .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
+        let query = Query::new(
+            &tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            query_str,
+        )
+        .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 
         let mut cursor = QueryCursor::new();
-        let matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
-        let mut modifications = Vec::new();
+        let mut modifications: Vec<(usize, usize, String)> = Vec::new();
 
-        for match_ in matches {
+        while let Some(match_) = matches.next() {
             let args_node = match match_
                 .captures
                 .iter()

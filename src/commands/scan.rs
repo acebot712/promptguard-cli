@@ -51,7 +51,7 @@ impl ScanCommand {
             fs::read_to_string(file_path).map_err(|e| {
                 PromptGuardError::Io(std::io::Error::new(
                     e.kind(),
-                    format!("Failed to read file '{}': {}", file_path, e),
+                    format!("Failed to read file '{file_path}': {e}"),
                 ))
             })?
         } else {
@@ -95,15 +95,15 @@ impl ScanCommand {
                 "allow" => "✅ ALLOWED",
                 _ => &response.decision,
             };
-            println!("Decision: {}", decision_display);
+            println!("Decision: {decision_display}");
             println!("Confidence: {:.1}%", response.confidence * 100.0);
 
             if let Some(ref threat_type) = response.threat_type {
-                println!("Threat Type: {}", threat_type);
+                println!("Threat Type: {threat_type}");
             }
 
             if let Some(ref reason) = response.reason {
-                println!("Reason: {}", reason);
+                println!("Reason: {reason}");
             }
 
             if response.decision == "block" {

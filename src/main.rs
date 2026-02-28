@@ -25,8 +25,8 @@ mod types;
 use clap::{Parser, Subcommand};
 use commands::{
     ApplyCommand, ConfigCommand, DisableCommand, DoctorCommand, EnableCommand, InitCommand,
-    KeyCommand, LogsCommand, RedTeamCommand, RedactCommand, RevertCommand, ScanCommand,
-    StatusCommand, TestCommand, UpdateCommand,
+    KeyCommand, LogsCommand, PolicyAction, PolicyCommand, RedTeamCommand, RedactCommand,
+    RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
 };
 
 #[derive(Parser)]
@@ -96,7 +96,7 @@ enum Commands {
 
     /// Scan project for LLM SDK usage or scan text for security threats
     ///
-    /// Without --text or --file: Detects OpenAI, Anthropic, Cohere, HuggingFace, Gemini, Groq, and AWS Bedrock SDK usage
+    /// Without --text or --file: Detects `OpenAI`, Anthropic, Cohere, `HuggingFace`, Gemini, Groq, and AWS Bedrock SDK usage
     /// in your Python and TypeScript/JavaScript files.
     ///
     /// With --text or --file: Scans content for security threats (prompt injection, jailbreaks, etc.)
@@ -276,7 +276,59 @@ enum Commands {
         /// Preset to use for testing (default, strict, permissive)
         #[arg(long, default_value = "default")]
         preset: String,
+
+        /// Run the autonomous red team agent (LLM-powered mutation)
+        #[arg(long)]
+        autonomous: bool,
+
+        /// Max iterations for autonomous mode (1-1000)
+        #[arg(long, default_value = "100")]
+        budget: u32,
     },
+
+    /// Manage guardrail policies as YAML files (policy-as-code)
+    ///
+    /// Define guardrails in YAML, version in git, and apply via CLI.
+    /// Supports apply, diff, and export operations.
+    Policy {
+        /// Action to perform: apply, diff, or export
+        #[command(subcommand)]
+        action: PolicySubcommand,
+
+        /// Project ID to manage policies for
+        #[arg(long, global = true)]
+        project_id: String,
+
+        /// `PromptGuard` API key (or uses configured key)
+        #[arg(long, global = true)]
+        api_key: Option<String>,
+
+        /// API base URL
+        #[arg(long, global = true)]
+        base_url: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum PolicySubcommand {
+    /// Apply a YAML policy file to the project
+    Apply {
+        /// Path to the YAML policy file
+        file: String,
+
+        /// Preview changes without applying
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Show differences between a YAML file and the live config
+    Diff {
+        /// Path to the YAML policy file
+        file: String,
+    },
+
+    /// Export the current live config as YAML (to stdout)
+    Export,
 }
 
 fn main() {
@@ -375,6 +427,8 @@ fn main() {
             test,
             prompt,
             preset,
+            autonomous,
+            budget,
         } => RedTeamCommand {
             target_url,
             api_key,
@@ -384,8 +438,30 @@ fn main() {
             test_name: test,
             custom_prompt: prompt,
             preset,
+            autonomous,
+            budget,
         }
         .execute(),
+
+        Commands::Policy {
+            action,
+            project_id,
+            api_key,
+            base_url,
+        } => {
+            let policy_action = match action {
+                PolicySubcommand::Apply { file, dry_run } => PolicyAction::Apply { file, dry_run },
+                PolicySubcommand::Diff { file } => PolicyAction::Diff { file },
+                PolicySubcommand::Export => PolicyAction::Export,
+            };
+            PolicyCommand {
+                action: policy_action,
+                project_id,
+                api_key,
+                base_url,
+            }
+            .execute()
+        },
     };
 
     if let Err(e) = result {

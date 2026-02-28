@@ -7,6 +7,12 @@ use std::path::Path;
 
 pub struct TypeScriptDetector;
 
+impl Default for TypeScriptDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeScriptDetector {
     pub fn new() -> Self {
         Self
@@ -38,7 +44,7 @@ impl TypeScriptDetector {
 impl Detector for TypeScriptDetector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult> {
         let config = DetectorConfig {
-            ts_language: tree_sitter_typescript::language_typescript(),
+            ts_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             language: Language::TypeScript,
             capture_name: "new_expr",
         };

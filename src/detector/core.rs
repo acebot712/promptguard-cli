@@ -6,6 +6,7 @@ use crate::error::{PromptGuardError, Result};
 use crate::types::{DetectionInstance, DetectionResult, Language, Provider};
 use std::fs;
 use std::path::Path;
+use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Parser, Query, QueryCursor};
 
 /// Configuration for a language-specific detector
@@ -33,22 +34,22 @@ pub fn detect_in_file_generic(
 
     let mut parser = Parser::new();
     parser
-        .set_language(config.ts_language)
+        .set_language(&config.ts_language)
         .map_err(|_| PromptGuardError::Parse("Failed to set language".to_string()))?;
 
     let tree = parser.parse(&source, None).ok_or_else(|| {
         PromptGuardError::Parse(format!("Failed to parse {} file", config.language.as_str()))
     })?;
 
-    let query = Query::new(config.ts_language, query_str)
+    let query = Query::new(&config.ts_language, query_str)
         .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 
     let mut cursor = QueryCursor::new();
-    let matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
 
     let mut instances = Vec::new();
 
-    for match_ in matches {
+    while let Some(match_) = matches.next() {
         for capture in match_.captures {
             if query.capture_names()[capture.index as usize] == config.capture_name {
                 let node = capture.node;
