@@ -2,6 +2,7 @@ use crate::detector::get_python_transform_query;
 use crate::error::{PromptGuardError, Result};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use streaming_iterator::StreamingIterator;
@@ -48,10 +49,11 @@ impl PythonTransformer {
         let mut new_args = String::from("(\n");
 
         if inner.is_empty() {
-            new_args.push_str(&format!(
-                "    api_key=os.environ.get(\"{api_key_env_var}\"),\n"
-            ));
-            new_args.push_str(&format!("    base_url=\"{proxy_url}\"\n"));
+            let _ = writeln!(
+                new_args,
+                "    api_key=os.environ.get(\"{api_key_env_var}\"),"
+            );
+            let _ = writeln!(new_args, "    base_url=\"{proxy_url}\"");
         } else {
             let trimmed = inner.trim();
             new_args.push_str("    ");
@@ -60,7 +62,7 @@ impl PythonTransformer {
                 new_args.push(',');
             }
             new_args.push('\n');
-            new_args.push_str(&format!("    base_url=\"{proxy_url}\"\n"));
+            let _ = writeln!(new_args, "    base_url=\"{proxy_url}\"");
         }
 
         new_args.push(')');

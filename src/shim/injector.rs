@@ -52,7 +52,7 @@ impl ShimInjector {
             .max_depth(3) // Don't go too deep
             .follow_links(false)
         {
-            let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
             // Skip common non-source directories
@@ -80,7 +80,7 @@ impl ShimInjector {
             let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
             // Check if it's a common entry point file
-            if common_entry_files.iter().any(|name| file_name == *name) {
+            if common_entry_files.contains(&file_name) {
                 entry_points.insert(path.to_path_buf());
                 continue;
             }
@@ -88,7 +88,7 @@ impl ShimInjector {
             // Check if file contains if __name__ == "__main__":
             if path
                 .extension()
-                .map_or(false, |ext| ext.eq_ignore_ascii_case("py"))
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("py"))
             {
                 if let Ok(content) = fs::read_to_string(path) {
                     if content.contains("if __name__ == \"__main__\":")
@@ -131,7 +131,7 @@ impl ShimInjector {
                             // Extract file from script like "node dist/index.js"
                             for word in start.split_whitespace() {
                                 let script_path = self.project_root.join(word);
-                                if script_path.extension().map_or(false, |ext| {
+                                if script_path.extension().is_some_and(|ext| {
                                     ext.eq_ignore_ascii_case("js") || ext.eq_ignore_ascii_case("ts")
                                 }) && script_path.exists()
                                 {
@@ -166,7 +166,7 @@ impl ShimInjector {
             }
 
             for entry in WalkDir::new(&search_path).max_depth(2).follow_links(false) {
-                let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+                let entry = entry.map_err(std::io::Error::other)?;
                 let path = entry.path();
 
                 // Skip node_modules and other build directories
@@ -185,7 +185,7 @@ impl ShimInjector {
 
                 let file_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
-                if common_entry_files.iter().any(|name| file_name == *name) {
+                if common_entry_files.contains(&file_name) {
                     entry_points.insert(path.to_path_buf());
                 }
             }
@@ -324,7 +324,7 @@ impl ShimInjector {
             .max_depth(5)
             .follow_links(false)
         {
-            let entry = entry.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+            let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
             if !path.is_file() {

@@ -2,7 +2,7 @@
 /// Integration tests for CLI API commands
 ///
 /// These tests verify that the CLI commands for interacting with the
-/// PromptGuard backend API are properly structured and can be invoked.
+/// `PromptGuard` backend API are properly structured and can be invoked.
 /// Note: These tests mock API responses since they shouldn't depend on
 /// a running backend server.
 // Import from the main crate
@@ -108,7 +108,7 @@ fn test_logs_command_requires_initialization() {
     assert!(result.is_err(), "Loading non-existent config should fail");
 }
 
-/// Test logs command with project_id in config
+/// Test logs command with `project_id` in config
 #[test]
 fn test_logs_command_uses_project_id() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -169,10 +169,10 @@ fn test_version_comparison() {
             let current_num = current_parts.get(i).copied().unwrap_or(0);
             let latest_num = latest_parts.get(i).copied().unwrap_or(0);
 
-            if latest_num > current_num {
-                return true;
-            } else if latest_num < current_num {
-                return false;
+            match latest_num.cmp(&current_num) {
+                std::cmp::Ordering::Greater => return true,
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Equal => {},
             }
         }
         false
@@ -211,14 +211,14 @@ fn test_api_endpoint_construction() {
     let base_url = "https://api.promptguard.co/api/v1";
 
     // Security scan endpoint
-    let scan_endpoint = format!("{}/security/scan", base_url);
+    let scan_endpoint = format!("{base_url}/security/scan");
     assert_eq!(
         scan_endpoint,
         "https://api.promptguard.co/api/v1/security/scan"
     );
 
     // Redact endpoint
-    let redact_endpoint = format!("{}/security/redact", base_url);
+    let redact_endpoint = format!("{base_url}/security/redact");
     assert_eq!(
         redact_endpoint,
         "https://api.promptguard.co/api/v1/security/redact"
@@ -226,11 +226,11 @@ fn test_api_endpoint_construction() {
 
     // Logs endpoint with query params
     let limit = 20;
-    let logs_endpoint = format!("{}/logs?limit={}", base_url, limit);
+    let logs_endpoint = format!("{base_url}/logs?limit={limit}");
     assert!(logs_endpoint.contains("limit=20"));
 
     // Health endpoint
-    let health_endpoint = format!("{}/health", base_url);
+    let health_endpoint = format!("{base_url}/health");
     assert!(health_endpoint.ends_with("/health"));
 }
 

@@ -8,7 +8,7 @@ use crate::api::PromptGuardClient;
 use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::fs;
 
 /// Wrapper for the guardrails API response.
@@ -160,12 +160,12 @@ impl PolicyCommand {
         let cur_map = current.as_object().cloned().unwrap_or_default();
         let des_map = desired.as_object().cloned().unwrap_or_default();
 
-        let mut all_keys: BTreeMap<String, ()> = BTreeMap::new();
+        let mut all_keys: BTreeSet<String> = BTreeSet::new();
         for k in cur_map.keys().chain(des_map.keys()) {
-            all_keys.insert(k.clone(), ());
+            all_keys.insert(k.clone());
         }
 
-        for key in all_keys.keys() {
+        for key in &all_keys {
             let old = cur_map.get(key);
             let new = des_map.get(key);
 
@@ -178,11 +178,11 @@ impl PolicyCommand {
                 new.and_then(|v| v.as_object()),
             ) {
                 (Some(old_obj), Some(new_obj)) => {
-                    let mut sub_keys: BTreeMap<String, ()> = BTreeMap::new();
+                    let mut sub_keys: BTreeSet<String> = BTreeSet::new();
                     for k in old_obj.keys().chain(new_obj.keys()) {
-                        sub_keys.insert(k.clone(), ());
+                        sub_keys.insert(k.clone());
                     }
-                    for sk in sub_keys.keys() {
+                    for sk in &sub_keys {
                         let ov = old_obj.get(sk);
                         let nv = new_obj.get(sk);
                         if ov != nv {

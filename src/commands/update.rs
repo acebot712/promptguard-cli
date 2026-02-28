@@ -117,10 +117,10 @@ impl UpdateCommand {
             let current_num = current_parts.get(i).copied().unwrap_or(0);
             let latest_num = latest_parts.get(i).copied().unwrap_or(0);
 
-            if latest_num > current_num {
-                return true;
-            } else if latest_num < current_num {
-                return false;
+            match latest_num.cmp(&current_num) {
+                std::cmp::Ordering::Greater => return true,
+                std::cmp::Ordering::Less => return false,
+                std::cmp::Ordering::Equal => {},
             }
         }
 

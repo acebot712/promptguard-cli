@@ -30,16 +30,14 @@ fn has_provider_instances(
     results: &[(Provider, promptguard::types::DetectionResult)],
     provider: Provider,
 ) -> bool {
-    find_provider(results, provider)
-        .map(|r| !r.instances.is_empty())
-        .unwrap_or(false)
+    find_provider(results, provider).is_some_and(|r| !r.instances.is_empty())
 }
 
 // =============================================================================
 // SCAN COMMAND TESTS - Core SDK Detection
 // =============================================================================
 
-/// Test that scan correctly detects OpenAI SDK usage in Python
+/// Test that scan correctly detects `OpenAI` SDK usage in Python
 #[test]
 fn test_scan_detects_openai_python() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -98,7 +96,7 @@ message = client.messages.create(
     );
 }
 
-/// Test that scan correctly detects OpenAI SDK usage in TypeScript
+/// Test that scan correctly detects `OpenAI` SDK usage in TypeScript
 #[test]
 fn test_scan_detects_openai_typescript() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
@@ -106,7 +104,7 @@ fn test_scan_detects_openai_typescript() {
     let ts_file = temp_dir.path().join("app.ts");
     fs::write(
         &ts_file,
-        r#"
+        r"
 import OpenAI from 'openai';
 
 const openai = new OpenAI();
@@ -117,7 +115,7 @@ async function main() {
         messages: [{ role: 'user', content: 'Hello' }]
     });
 }
-"#,
+",
     )
     .expect("Failed to write test file");
 
@@ -137,13 +135,13 @@ fn test_scan_detects_multiple_providers() {
     let python_file = temp_dir.path().join("multi_provider.py");
     fs::write(
         &python_file,
-        r#"
+        r"
 from openai import OpenAI
 from anthropic import Anthropic
 
 openai_client = OpenAI()
 anthropic_client = Anthropic()
-"#,
+",
     )
     .expect("Failed to write test file");
 
@@ -167,13 +165,13 @@ fn test_scan_ignores_non_sdk_files() {
     let python_file = temp_dir.path().join("utils.py");
     fs::write(
         &python_file,
-        r#"
+        r"
 def add(a, b):
     return a + b
 
 def multiply(a, b):
     return a * b
-"#,
+",
     )
     .expect("Failed to write test file");
 
@@ -270,16 +268,16 @@ fn test_scanner_finds_supported_files() {
 // TRANSFORMER TESTS - Code Modification
 // =============================================================================
 
-/// Test Python OpenAI transformation adds base_url parameter
+/// Test Python `OpenAI` transformation adds `base_url` parameter
 #[test]
 fn test_transform_python_openai_adds_base_url() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let python_file = temp_dir.path().join("app.py");
-    let original = r#"from openai import OpenAI
+    let original = r"from openai import OpenAI
 
 client = OpenAI()
-"#;
+";
     fs::write(&python_file, original).expect("Failed to write");
 
     let result = transformer::transform_file(
@@ -313,10 +311,10 @@ fn test_transform_python_anthropic_adds_base_url() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let python_file = temp_dir.path().join("anthropic_app.py");
-    let original = r#"from anthropic import Anthropic
+    let original = r"from anthropic import Anthropic
 
 client = Anthropic()
-"#;
+";
     fs::write(&python_file, original).expect("Failed to write");
 
     let result = transformer::transform_file(
@@ -375,10 +373,10 @@ fn test_transform_typescript_openai() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     let ts_file = temp_dir.path().join("app.ts");
-    let original = r#"import OpenAI from 'openai';
+    let original = r"import OpenAI from 'openai';
 
 const openai = new OpenAI();
-"#;
+";
     fs::write(&ts_file, original).expect("Failed to write");
 
     let result = transformer::transform_file(
@@ -390,20 +388,14 @@ const openai = new OpenAI();
 
     // TypeScript transformation may or may not be supported
     // This test just verifies it doesn't crash
-    match result {
-        Ok(r) => {
-            if r.modified {
-                let content = fs::read_to_string(&ts_file).expect("Failed to read");
-                assert!(
-                    content.contains("baseURL") || content.contains("base_url"),
-                    "Should add baseURL parameter in TypeScript"
-                );
-            }
-            // If not modified, that's also OK (TS support may be limited)
-        },
-        Err(_) => {
-            // TS transformation errors are acceptable
-        },
+    if let Ok(r) = result {
+        if r.modified {
+            let content = fs::read_to_string(&ts_file).expect("Failed to read");
+            assert!(
+                content.contains("baseURL") || content.contains("base_url"),
+                "Should add baseURL parameter in TypeScript"
+            );
+        }
     }
 }
 
@@ -573,12 +565,12 @@ fn test_unicode_file_handling() {
     let unicode_file = temp_dir.path().join("unicode.py");
     fs::write(
         &unicode_file,
-        r#"
+        r"
 # 日本語コメント
 from openai import OpenAI
 
 client = OpenAI()  # 初期化
-"#,
+",
     )
     .expect("Failed to write");
 

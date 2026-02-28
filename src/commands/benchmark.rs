@@ -142,13 +142,27 @@ impl BenchmarkCommand {
 
         // Sort latencies for percentiles (use Ordering::Equal for NaN safety)
         latencies.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        #[allow(clippy::cast_precision_loss)]
         let avg_latency = latencies.iter().sum::<f64>() / latencies.len() as f64;
         let p50_latency = latencies[latencies.len() / 2];
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
         let p95_latency = latencies[(latencies.len() as f64 * 0.95) as usize];
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss
+        )]
         let p99_latency = latencies[(latencies.len() as f64 * 0.99) as usize];
 
         let duration = start.elapsed().as_secs_f64();
         let throughput = f64::from(total) / duration;
+
+        #[allow(clippy::cast_sign_loss)]
+        let total_samples = total as u32;
 
         BenchmarkResults {
             accuracy,
@@ -164,7 +178,7 @@ impl BenchmarkCommand {
                 / f64::from(false_positives + true_negatives),
             false_negative_rate: f64::from(false_negatives)
                 / f64::from(false_negatives + true_positives),
-            total_samples: total as u32,
+            total_samples,
         }
     }
 

@@ -2,6 +2,7 @@ use crate::detector::get_typescript_query;
 use crate::error::{PromptGuardError, Result};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
+use std::fmt::Write;
 use std::fs;
 use std::path::Path;
 use streaming_iterator::StreamingIterator;
@@ -56,10 +57,11 @@ impl TypeScriptTransformer {
         let mut new_object = String::from("{\n");
 
         if inner.is_empty() {
-            new_object.push_str(&format!(
-                "  {api_key_param}: process.env.{api_key_env_var},\n"
-            ));
-            new_object.push_str(&format!("  {base_url_param}: \"{proxy_url}\"\n"));
+            let _ = writeln!(
+                new_object,
+                "  {api_key_param}: process.env.{api_key_env_var},"
+            );
+            let _ = writeln!(new_object, "  {base_url_param}: \"{proxy_url}\"");
         } else {
             let trimmed = inner.trim();
             new_object.push_str("  ");
@@ -68,7 +70,7 @@ impl TypeScriptTransformer {
                 new_object.push(',');
             }
             new_object.push('\n');
-            new_object.push_str(&format!("  {base_url_param}: \"{proxy_url}\"\n"));
+            let _ = writeln!(new_object, "  {base_url_param}: \"{proxy_url}\"");
         }
 
         new_object.push('}');

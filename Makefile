@@ -1,9 +1,12 @@
 # PromptGuard CLI - Makefile
 
-.PHONY: help build release install uninstall clean test check format lint fmt-check ci cross-compile
+.PHONY: help setup build release install uninstall clean test check format lint fmt-check ci cross-compile
 
 help:
 	@echo "PromptGuard CLI - Build Targets"
+	@echo ""
+	@echo "Setup:"
+	@echo "  make setup          Install git pre-commit hook"
 	@echo ""
 	@echo "Development:"
 	@echo "  make build          Build debug binary"
@@ -14,7 +17,7 @@ help:
 	@echo "Quality:"
 	@echo "  make test           Run tests"
 	@echo "  make check          Quick sanity check"
-	@echo "  make lint           Run clippy linter"
+	@echo "  make lint           Run clippy linter (warnings = errors)"
 	@echo "  make format         Format code with rustfmt"
 	@echo "  make fmt-check      Check if code is formatted"
 	@echo "  make ci             Run all CI checks locally"
@@ -22,6 +25,12 @@ help:
 	@echo "Distribution:"
 	@echo "  make cross-compile  Build for all platforms"
 	@echo "  make clean          Clean build artifacts"
+
+setup:
+	@echo "Installing git pre-commit hook..."
+	@printf '#!/bin/bash\nset -e\nmake ci\n' > .git/hooks/pre-commit
+	@chmod +x .git/hooks/pre-commit
+	@echo "✓ Pre-commit hook installed (runs make ci before each commit)"
 
 build:
 	cargo build
@@ -72,7 +81,7 @@ check:
 
 lint:
 	@echo "🔬 Running clippy..."
-	@cargo clippy --all-targets --all-features
+	@cargo clippy --all-targets --all-features -- -D warnings
 
 format:
 	@echo "🎨 Formatting code..."

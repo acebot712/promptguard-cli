@@ -64,9 +64,10 @@ impl PromptGuardClient {
             || status == reqwest::StatusCode::GATEWAY_TIMEOUT
     }
 
+    #[allow(clippy::needless_pass_by_value)]
     fn request<T: serde::de::DeserializeOwned>(
         &self,
-        method: reqwest::Method,
+        method: &reqwest::Method,
         endpoint: &str,
         body: Option<serde_json::Value>,
     ) -> Result<T> {
@@ -148,7 +149,7 @@ impl PromptGuardClient {
     // Health Check
 
     pub fn health_check(&self) -> Result<()> {
-        let _: serde_json::Value = self.request(reqwest::Method::GET, "/health", None)?;
+        let _: serde_json::Value = self.request(&reqwest::Method::GET, "/health", None)?;
 
         Ok(())
     }
@@ -156,7 +157,7 @@ impl PromptGuardClient {
     /// GET request helper (public API for future use)
     #[allow(dead_code)]
     pub fn get<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
-        self.request(reqwest::Method::GET, endpoint, None)
+        self.request(&reqwest::Method::GET, endpoint, None)
     }
 
     /// POST request helper (public API for future use)
@@ -167,7 +168,7 @@ impl PromptGuardClient {
         body: &B,
     ) -> Result<T> {
         self.request(
-            reqwest::Method::POST,
+            &reqwest::Method::POST,
             endpoint,
             Some(
                 serde_json::to_value(body)
@@ -184,7 +185,7 @@ impl PromptGuardClient {
         body: &B,
     ) -> Result<T> {
         self.request(
-            reqwest::Method::PUT,
+            &reqwest::Method::PUT,
             endpoint,
             Some(
                 serde_json::to_value(body)
@@ -196,6 +197,6 @@ impl PromptGuardClient {
     /// DELETE request helper (public API for future use)
     #[allow(dead_code)]
     pub fn delete<T: serde::de::DeserializeOwned>(&self, endpoint: &str) -> Result<T> {
-        self.request(reqwest::Method::DELETE, endpoint, None)
+        self.request(&reqwest::Method::DELETE, endpoint, None)
     }
 }
