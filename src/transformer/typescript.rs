@@ -16,6 +16,7 @@ impl Default for TypeScriptTransformer {
     }
 }
 
+#[allow(clippy::unused_self)]
 impl TypeScriptTransformer {
     pub fn new() -> Self {
         Self

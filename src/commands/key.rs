@@ -64,7 +64,7 @@ impl KeyCommand {
                 config_manager.save(&config)?;
 
                 // Update .env
-                EnvManager::set_key(&env_path, &config.env_var_name, &new_key)?;
+                EnvManager::add_or_update_key(&env_path, &config.env_var_name, &new_key)?;
 
                 Output::success("API key updated successfully!");
                 println!("\nThe new key has been saved to:");

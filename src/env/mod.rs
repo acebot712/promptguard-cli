@@ -45,11 +45,6 @@ impl EnvManager {
         Ok(())
     }
 
-    // Alias for add_or_update_key
-    pub fn set_key(env_path: &Path, key: &str, value: &str) -> Result<()> {
-        Self::add_or_update_key(env_path, key, value)
-    }
-
     pub fn remove_key(env_path: &Path, key: &str) -> Result<bool> {
         if !env_path.exists() {
             return Ok(false);

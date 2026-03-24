@@ -16,6 +16,7 @@ impl Default for PythonTransformer {
     }
 }
 
+#[allow(clippy::unused_self)]
 impl PythonTransformer {
     pub fn new() -> Self {
         Self

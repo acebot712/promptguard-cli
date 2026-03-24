@@ -130,7 +130,7 @@ impl ConfigManager {
     }
 
     /// Supported config versions (for migration compatibility)
-    const SUPPORTED_VERSIONS: &'static [&'static str] = &["1.0", "1.1", "2.0"];
+    const SUPPORTED_VERSIONS: &'static [&'static str] = &["1.0"];
 
     pub fn load(&self) -> Result<PromptGuardConfig> {
         if !self.config_path.exists() {

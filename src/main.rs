@@ -4,9 +4,10 @@
 #![allow(clippy::if_not_else)] // Negative conditions often clearer in CLI code
 #![allow(clippy::assigning_clones)] // Micro-optimization, not worth the noise
 #![allow(clippy::too_many_lines)] // Some CLI commands are legitimately complex
-#![allow(clippy::unnecessary_wraps)] // Consistent Result returns across commands
-#![allow(clippy::unused_self)] // Methods may need self for future extension
 #![allow(clippy::manual_let_else)] // Match syntax can be clearer
+#![allow(clippy::unused_self)] // Instance methods for API consistency
+#![allow(clippy::unnecessary_wraps)] // Result wrapping for API consistency
+#![allow(dead_code)] // Struct fields used via Debug/Clone derives or future use
 
 mod analyzer;
 mod api;
@@ -196,10 +197,6 @@ enum Commands {
         /// Output results as JSON (for scripting)
         #[arg(long)]
         json: bool,
-
-        /// Continuously poll for new logs (not yet implemented)
-        #[arg(short, long)]
-        follow: bool,
     },
 
     /// Test `PromptGuard` configuration
@@ -394,12 +391,10 @@ fn main() {
             limit,
             log_type,
             json,
-            follow,
         } => LogsCommand {
             limit,
             log_type,
             json,
-            follow,
         }
         .execute(),
         Commands::Test => TestCommand::execute(),

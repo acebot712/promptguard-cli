@@ -64,20 +64,10 @@ impl Provider {
             _ => "apiKey",
         }
     }
-
-    /// Whether this provider supports proxy-mode transformation (baseURL injection).
-    /// Providers like AWS Bedrock use a different SDK pattern and require
-    /// auto-instrumentation instead.
-    #[allow(dead_code)]
-    pub fn supports_proxy_transform(&self) -> bool {
-        !matches!(self, Provider::Bedrock)
-    }
 }
 
 /// A detected instance of LLM SDK usage in a source file.
-/// All fields are intentionally public for programmatic access.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct DetectionInstance {
     pub file_path: PathBuf,
     pub line: usize,
@@ -134,9 +124,7 @@ impl DetectionResult {
 }
 
 /// Result of a file transformation operation.
-/// All fields are intentionally public for programmatic access.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct TransformResult {
     pub file_path: PathBuf,
     pub success: bool,

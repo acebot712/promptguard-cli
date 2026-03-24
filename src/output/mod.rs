@@ -113,26 +113,6 @@ impl Output {
         println!("  {circle} {msg}");
     }
 
-    /// Print debug information (only with -v or higher)
-    /// This is a public API for verbose logging in commands.
-    #[allow(dead_code)]
-    pub fn debug(message: &str) {
-        if Self::verbosity() >= 1 {
-            let prefix = Self::colorize("[DEBUG]", |s| s.bright_black());
-            println!("{prefix} {message}");
-        }
-    }
-
-    /// Print trace information (only with -vv or higher)
-    /// This is a public API for verbose logging in commands.
-    #[allow(dead_code)]
-    pub fn trace(message: &str) {
-        if Self::verbosity() >= 2 {
-            let prefix = Self::colorize("[TRACE]", |s| s.bright_black());
-            println!("{prefix} {message}");
-        }
-    }
-
     pub fn mask_api_key(key: &str) -> String {
         if key.len() <= 12 {
             return "*".repeat(key.len());

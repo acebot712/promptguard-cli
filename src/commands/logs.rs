@@ -39,9 +39,6 @@ pub struct LogsCommand {
     pub limit: usize,
     pub log_type: Option<String>,
     pub json: bool,
-    /// Reserved for future streaming logs functionality
-    #[allow(dead_code)]
-    pub follow: bool,
 }
 
 impl Default for LogsCommand {
@@ -50,7 +47,6 @@ impl Default for LogsCommand {
             limit: 20,
             log_type: None,
             json: false,
-            follow: false,
         }
     }
 }
