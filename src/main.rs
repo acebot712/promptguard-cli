@@ -26,8 +26,8 @@ mod types;
 use clap::{Parser, Subcommand};
 use commands::{
     ApplyCommand, ConfigCommand, DisableCommand, DoctorCommand, EnableCommand, InitCommand,
-    KeyCommand, LogsCommand, PolicyAction, PolicyCommand, RedTeamCommand, RedactCommand,
-    RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
+    KeyCommand, LogsCommand, McpCommand, PolicyAction, PolicyCommand, RedTeamCommand,
+    RedactCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
 };
 
 #[derive(Parser)]
@@ -304,6 +304,16 @@ enum Commands {
         #[arg(long, global = true)]
         base_url: Option<String>,
     },
+
+    /// Start MCP (Model Context Protocol) server for IDE integration
+    ///
+    /// Exposes `PromptGuard` tools over the MCP protocol so AI-powered
+    /// editors (Cursor, Claude Code, Windsurf, etc.) can call them.
+    Mcp {
+        /// Transport type (currently only 'stdio' is supported)
+        #[arg(short, long, default_value = "stdio")]
+        transport: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -457,6 +467,8 @@ fn main() {
             }
             .execute()
         },
+
+        Commands::Mcp { transport } => McpCommand { transport }.execute(),
     };
 
     if let Err(e) = result {

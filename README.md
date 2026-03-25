@@ -208,6 +208,40 @@ const openai = new OpenAI({
 | `redteam` | Red team testing tools |
 | `redteam --autonomous` | Run autonomous red team agent (LLM-powered) |
 | `policy` | Manage guardrails as YAML (apply/diff/export) |
+| `mcp` | Start MCP server for AI editor integration |
+
+---
+
+## MCP Server (AI Editor Integration)
+
+The CLI includes a native [Model Context Protocol](https://modelcontextprotocol.io) server for AI-powered editors:
+
+```bash
+promptguard mcp -t stdio
+```
+
+This exposes 4 tools to the editor's AI agent: `promptguard_scan_text`, `promptguard_scan_project`, `promptguard_redact`, and `promptguard_status`.
+
+**Cursor** -- add to `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "promptguard": {
+      "command": "promptguard",
+      "args": ["mcp", "-t", "stdio"]
+    }
+  }
+}
+```
+
+**Claude Code:**
+
+```bash
+claude mcp add promptguard -- promptguard mcp -t stdio
+```
+
+Works with Cursor, Claude Code, Windsurf, Zed, and any MCP-compatible client. See the [MCP docs](https://docs.promptguard.co/tools/mcp) for details.
 
 ---
 
