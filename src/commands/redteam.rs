@@ -277,7 +277,7 @@ impl RedTeamCommand {
             "Running autonomous red team agent (budget: {}, preset: '{}')...\n",
             self.budget, self.preset
         );
-        println!("This may take a while — the agent uses LLM-powered mutation\n");
+        println!("This may take a while - the agent uses LLM-powered mutation\n");
 
         let report: AutonomousReport = client
             .post(

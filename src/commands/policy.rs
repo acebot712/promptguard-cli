@@ -1,7 +1,7 @@
 //! Policy-as-Code Command
 //!
 //! Define guardrails in YAML, version in git, apply via CLI.
-//! Maps to the existing guardrail config API — a YAML front-end,
+//! Maps to the existing guardrail config API - a YAML front-end,
 //! not a new config system.
 
 use crate::api::PromptGuardClient;
@@ -217,7 +217,7 @@ impl PolicyCommand {
         let diffs = Self::compute_diff(&current, &desired);
 
         if diffs.is_empty() {
-            println!("No changes — policy already matches.");
+            println!("No changes - policy already matches.");
             return Ok(());
         }
 
@@ -252,7 +252,7 @@ impl PolicyCommand {
         let diffs = Self::compute_diff(&current, &desired);
 
         if diffs.is_empty() {
-            println!("No differences — policy matches live config.");
+            println!("No differences - policy matches live config.");
         } else {
             println!("Differences:\n");
             for (field, old, new) in &diffs {

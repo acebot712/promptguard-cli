@@ -161,7 +161,7 @@ promptguard doctor
 
 ## Integration Options
 
-The CLI provides **proxy-mode integration** — it rewrites SDK constructors to route traffic through PromptGuard. This is one of several ways to integrate:
+The CLI provides **proxy-mode integration** - it rewrites SDK constructors to route traffic through PromptGuard. This is one of several ways to integrate:
 
 | Method | Best For | How |
 |--------|----------|-----|
@@ -170,7 +170,7 @@ The CLI provides **proxy-mode integration** — it rewrites SDK constructors to 
 | **HTTP Proxy** | Any language, OpenAI-compatible APIs | Change `baseURL` manually |
 | **Guard API** | Custom pipelines, any framework | `POST /api/v1/guard` |
 
-For new projects, the [PromptGuard SDK](https://docs.promptguard.co/sdks/python) with auto-instrumentation is the recommended approach — one line of code secures all LLM calls with no code rewrites.
+For new projects, the [PromptGuard SDK](https://docs.promptguard.co/sdks/python) with auto-instrumentation is the recommended approach - one line of code secures all LLM calls with no code rewrites.
 
 ## How the CLI Works
 
@@ -274,7 +274,7 @@ Works with Cursor, Claude Code, Windsurf, Zed, and any MCP-compatible client. Se
 | HuggingFace | ✅ | ✅ | ✅ | ✅ |
 | Gemini | ✅ | ✅ | ✅ | ✅ |
 | Groq | ✅ | ✅ | ✅ | ✅ |
-| AWS Bedrock | ✅ | ✅ | ✅ | — (use SDK) |
+| AWS Bedrock | ✅ | ✅ | ✅ | - (use SDK) |
 
 > **Note:** AWS Bedrock uses the AWS SDK command pattern and cannot be transformed via proxy URL injection. For Bedrock, use the [PromptGuard SDK auto-instrumentation](https://docs.promptguard.co/sdks/python) instead.
 
