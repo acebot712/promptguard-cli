@@ -117,6 +117,27 @@ fn tool_definitions() -> serde_json::Value {
                     "type": "object",
                     "properties": {}
                 }
+            },
+            {
+                "name": "promptguard_auth",
+                "description": "Authenticate with PromptGuard. When called without an api_key, opens the PromptGuard dashboard in the browser so the user can copy their API key, then ask the user to provide it. When called with an api_key, validates and saves it. Use this when any other tool reports the user is not authenticated.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "api_key": {
+                            "type": "string",
+                            "description": "PromptGuard API key (starts with pg_sk_test_ or pg_sk_prod_). If omitted, opens the dashboard in the browser for the user to copy their key."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "promptguard_logout",
+                "description": "Log out of PromptGuard by removing the locally stored API key and configuration. Use when the user wants to switch accounts or clear credentials.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
             }
         ]
     })
@@ -325,6 +346,86 @@ fn handle_status(_params: &serde_json::Value) -> serde_json::Value {
     }
 }
 
+fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
+    let api_key = params.get("api_key").and_then(serde_json::Value::as_str);
+
+    match api_key {
+        None => {
+            // No key provided -- open dashboard so user can grab one
+            let url = "https://app.promptguard.co/settings/api-keys";
+            let _ = open::that(url);
+
+            serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": "Opened the PromptGuard dashboard in your browser. Please copy your API key (starts with pg_sk_test_ or pg_sk_prod_) and provide it here so I can save it."
+                }]
+            })
+        },
+        Some(key) => {
+            if !key.starts_with("pg_sk_test_") && !key.starts_with("pg_sk_prod_") {
+                return serde_json::json!({
+                    "content": [{"type": "text", "text": "Invalid API key format. Keys must start with 'pg_sk_test_' or 'pg_sk_prod_'."}],
+                    "isError": true
+                });
+            }
+
+            let result = (|| -> Result<()> {
+                let config_manager = ConfigManager::new(None)?;
+
+                if config_manager.exists() {
+                    let mut config = config_manager.load()?;
+                    config.api_key = key.to_string();
+                    config_manager.save(&config)?;
+                } else {
+                    let config = crate::config::PromptGuardConfig::new(
+                        key.to_string(),
+                        "https://api.promptguard.co/api/v1".to_string(),
+                        Vec::new(),
+                    )?;
+                    config_manager.save(&config)?;
+                }
+                Ok(())
+            })();
+
+            match result {
+                Ok(()) => {
+                    let key_type = if key.starts_with("pg_sk_test_") {
+                        "test"
+                    } else {
+                        "production"
+                    };
+                    serde_json::json!({
+                        "content": [{"type": "text", "text": format!("Authenticated successfully with a {key_type} API key. PromptGuard is ready to use.")}]
+                    })
+                },
+                Err(e) => serde_json::json!({
+                    "content": [{"type": "text", "text": format!("Failed to save API key: {e}")}],
+                    "isError": true
+                }),
+            }
+        },
+    }
+}
+
+fn handle_logout(_params: &serde_json::Value) -> serde_json::Value {
+    let result = (|| -> Result<()> {
+        let config_manager = ConfigManager::new(None)?;
+        config_manager.delete()?;
+        Ok(())
+    })();
+
+    match result {
+        Ok(()) => serde_json::json!({
+            "content": [{"type": "text", "text": "Logged out. Local PromptGuard configuration and API key have been removed."}]
+        }),
+        Err(e) => serde_json::json!({
+            "content": [{"type": "text", "text": format!("Logout failed: {e}")}],
+            "isError": true
+        }),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Request dispatch
 // ---------------------------------------------------------------------------
@@ -368,6 +469,8 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
                 "promptguard_scan_project" => handle_scan_project(&arguments),
                 "promptguard_redact" => handle_redact(&arguments),
                 "promptguard_status" => handle_status(&arguments),
+                "promptguard_auth" => handle_auth(&arguments),
+                "promptguard_logout" => handle_logout(&arguments),
                 _ => serde_json::json!({
                     "content": [{"type": "text", "text": format!("Unknown tool: {tool_name}")}],
                     "isError": true
