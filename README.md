@@ -220,7 +220,7 @@ The CLI includes a native [Model Context Protocol](https://modelcontextprotocol.
 promptguard mcp -t stdio
 ```
 
-This exposes 4 tools to the editor's AI agent: `promptguard_scan_text`, `promptguard_scan_project`, `promptguard_redact`, and `promptguard_status`.
+This exposes 6 tools to the editor's AI agent: `promptguard_auth`, `promptguard_logout`, `promptguard_scan_text`, `promptguard_scan_project`, `promptguard_redact`, and `promptguard_status`.
 
 **Cursor** -- add to `.cursor/mcp.json`:
 

@@ -66,8 +66,29 @@ fn tool_definitions() -> serde_json::Value {
     serde_json::json!({
         "tools": [
             {
+                "name": "promptguard_auth",
+                "description": "Authenticate with PromptGuard. When called without an api_key, opens the PromptGuard dashboard in the browser so the user can copy their API key -- then ask the user to provide it. When called with an api_key, validates and saves it.\nWhen to use: When any other promptguard tool reports that the user is not authenticated or not initialized, or when the user asks to log in to PromptGuard.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "api_key": {
+                            "type": "string",
+                            "description": "PromptGuard API key (starts with pg_sk_test_ or pg_sk_prod_). If omitted, opens the dashboard in the browser for the user to copy their key."
+                        }
+                    }
+                }
+            },
+            {
+                "name": "promptguard_logout",
+                "description": "Log out of PromptGuard by removing the locally stored API key and configuration.\nWhen to use: When the user wants to switch PromptGuard accounts, clear credentials, or ensure a clean state by removing existing authentication.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
                 "name": "promptguard_scan_text",
-                "description": "Scan text for security threats (prompt injection, jailbreaks, PII leakage, toxic content) via the PromptGuard API. Returns a decision (allow/block), confidence score, threat type, and reason.",
+                "description": "Scan text for security threats (prompt injection, jailbreaks, PII leakage, toxic content) via the PromptGuard API. Returns a decision (allow/block), confidence score, threat type, and reason.\nWhen to use: When reviewing user-facing prompts, testing LLM inputs for safety, or verifying that content is free of injection attacks before sending to an LLM.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -81,13 +102,13 @@ fn tool_definitions() -> serde_json::Value {
             },
             {
                 "name": "promptguard_scan_project",
-                "description": "Scan a project directory for unprotected LLM SDK usage (OpenAI, Anthropic, Cohere, Gemini, Bedrock, etc.). Returns detected providers, file locations, and whether PromptGuard is configured.",
+                "description": "Performs static analysis on a project directory to detect unprotected LLM SDK usage (OpenAI, Anthropic, Cohere, Gemini, Bedrock, etc.). Returns detected providers, file locations (line/column), and instance count.\nWhen to use: During local development to find LLM calls that are not routed through PromptGuard, after generating new code that uses LLM SDKs, or when auditing an existing project for security coverage.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
                         "directory": {
                             "type": "string",
-                            "description": "Path to the project directory to scan (defaults to current directory)"
+                            "description": "Absolute path to the project directory to scan (defaults to current directory)"
                         },
                         "provider": {
                             "type": "string",
@@ -98,7 +119,7 @@ fn tool_definitions() -> serde_json::Value {
             },
             {
                 "name": "promptguard_redact",
-                "description": "Redact PII (emails, phone numbers, SSNs, credit cards, API keys, etc.) from text via the PromptGuard API. Returns sanitized text with entities replaced by placeholders.",
+                "description": "Redact PII (emails, phone numbers, SSNs, credit cards, API keys, etc.) from text via the PromptGuard API. Returns sanitized text with entities replaced by placeholders.\nWhen to use: Before including user data in LLM prompts, when processing customer messages, or when building RAG pipelines that ingest documents containing personal information.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -112,28 +133,7 @@ fn tool_definitions() -> serde_json::Value {
             },
             {
                 "name": "promptguard_status",
-                "description": "Show current PromptGuard configuration and status for the project. Returns whether PromptGuard is initialized, active, and which providers are configured.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
-            {
-                "name": "promptguard_auth",
-                "description": "Authenticate with PromptGuard. When called without an api_key, opens the PromptGuard dashboard in the browser so the user can copy their API key, then ask the user to provide it. When called with an api_key, validates and saves it. Use this when any other tool reports the user is not authenticated.",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "api_key": {
-                            "type": "string",
-                            "description": "PromptGuard API key (starts with pg_sk_test_ or pg_sk_prod_). If omitted, opens the dashboard in the browser for the user to copy their key."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "promptguard_logout",
-                "description": "Log out of PromptGuard by removing the locally stored API key and configuration. Use when the user wants to switch accounts or clear credentials.",
+                "description": "Show current PromptGuard configuration and status for the project. Returns whether PromptGuard is initialized, API key type, proxy URL, configured providers, and CLI version.\nWhen to use: To verify PromptGuard is properly configured, check which providers are active, or confirm the installed CLI version.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
