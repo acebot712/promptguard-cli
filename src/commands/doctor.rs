@@ -6,10 +6,12 @@ use crate::output::Output;
 use std::fs;
 use std::path::Path;
 
-pub struct DoctorCommand;
+pub struct DoctorCommand {
+    pub json: bool,
+}
 
 impl DoctorCommand {
-    pub fn execute() -> Result<()> {
+    pub fn execute(&self) -> Result<()> {
         Output::header("Running diagnostics...");
 
         println!("\n🩺 Running diagnostics...\n");
@@ -106,6 +108,27 @@ impl DoctorCommand {
             println!("    1. Review and commit or remove *.bak backup files");
             println!("    2. Or add '*.bak' to .gitignore");
             warnings_count += 1;
+        }
+
+        if self.json {
+            let health = if errors_count > 0 {
+                "error"
+            } else if warnings_count > 0 {
+                "warning"
+            } else {
+                "healthy"
+            };
+            let result = serde_json::json!({
+                "health": health,
+                "errors": errors_count,
+                "warnings": warnings_count,
+                "cli_version": env!("CARGO_PKG_VERSION"),
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).unwrap_or_default()
+            );
+            return Ok(());
         }
 
         // Report overall health based on actual findings

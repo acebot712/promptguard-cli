@@ -11,6 +11,7 @@
 
 mod analyzer;
 mod api;
+mod auth;
 mod backup;
 mod commands;
 mod config;
@@ -25,9 +26,10 @@ mod types;
 
 use clap::{Parser, Subcommand};
 use commands::{
-    ApplyCommand, ConfigCommand, DisableCommand, DoctorCommand, EnableCommand, InitCommand,
-    KeyCommand, LogsCommand, McpCommand, PolicyAction, PolicyCommand, RedTeamCommand,
-    RedactCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
+    ApplyCommand, ConfigCommand, DashboardCommand, DisableCommand, DoctorCommand, EnableCommand,
+    EventsCommand, InitCommand, KeyCommand, LoginCommand, LogoutCommand, LogsCommand, McpCommand,
+    PolicyAction, PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand, RedactCommand,
+    RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand, WhoamiCommand,
 };
 
 #[derive(Parser)]
@@ -134,7 +136,11 @@ enum Commands {
     ///
     /// Checks API key validity, file permissions, security settings,
     /// and other common problems. Run this if something isn't working.
-    Doctor,
+    Doctor {
+        /// Output as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Re-apply `PromptGuard` transformations to source files
     ///
@@ -173,7 +179,11 @@ enum Commands {
     ///
     /// Shows current settings including providers, proxy URL,
     /// exclude patterns, and metadata.
-    Config,
+    Config {
+        /// Output as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Manage API keys
     ///
@@ -314,6 +324,92 @@ enum Commands {
         #[arg(short, long, default_value = "stdio")]
         transport: String,
     },
+
+    /// Authenticate with `PromptGuard` and store credentials globally
+    ///
+    /// Saves your API key to `~/.promptguard/credentials.json` so all
+    /// commands and projects can use it without per-project setup.
+    Login {
+        /// API key to authenticate with (or enter interactively)
+        #[arg(long)]
+        api_key: Option<String>,
+
+        /// Custom API base URL
+        #[arg(long)]
+        base_url: Option<String>,
+
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Remove stored `PromptGuard` credentials
+    ///
+    /// Deletes `~/.promptguard/credentials.json`.
+    Logout {
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Show current authentication status
+    ///
+    /// Displays which API key is active, its source (env, project, global),
+    /// and whether the API is reachable.
+    Whoami {
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Manage `PromptGuard` projects
+    ///
+    /// List, select, and view projects associated with your account.
+    Projects {
+        #[command(subcommand)]
+        action: ProjectsSubcommand,
+
+        /// Output results as JSON
+        #[arg(long, global = true)]
+        json: bool,
+    },
+
+    /// View recent security events
+    ///
+    /// Lists security events (blocks, alerts, redactions) from the
+    /// `PromptGuard` API. Useful for monitoring and auditing.
+    Events {
+        /// Number of events to fetch
+        #[arg(short, long, default_value = "20")]
+        limit: usize,
+
+        /// Filter by event type
+        #[arg(short = 't', long = "type")]
+        event_type: Option<String>,
+
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Open the `PromptGuard` dashboard in your browser
+    Dashboard {
+        /// Output the URL as JSON instead of opening browser
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ProjectsSubcommand {
+    /// List all projects
+    List,
+
+    /// Set the active project
+    Select {
+        /// Project ID to select
+        project_id: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -387,7 +483,7 @@ fn main() {
 
         Commands::Status { json } => StatusCommand { json }.execute(),
 
-        Commands::Doctor => DoctorCommand::execute(),
+        Commands::Doctor { json } => DoctorCommand { json }.execute(),
 
         Commands::Apply { yes } => ApplyCommand { yes }.execute(),
 
@@ -395,7 +491,7 @@ fn main() {
 
         Commands::Disable => DisableCommand::execute(),
         Commands::Enable { runtime } => EnableCommand { runtime }.execute(),
-        Commands::Config => ConfigCommand::execute(),
+        Commands::Config { json } => ConfigCommand { json }.execute(),
         Commands::Key => KeyCommand::execute(),
         Commands::Logs {
             limit,
@@ -469,6 +565,46 @@ fn main() {
         },
 
         Commands::Mcp { transport } => McpCommand { transport }.execute(),
+
+        Commands::Login {
+            api_key,
+            base_url,
+            json,
+        } => LoginCommand {
+            api_key,
+            base_url,
+            json,
+        }
+        .execute(),
+
+        Commands::Logout { json } => LogoutCommand { json }.execute(),
+
+        Commands::Whoami { json } => WhoamiCommand { json }.execute(),
+
+        Commands::Projects { action, json } => {
+            let projects_action = match action {
+                ProjectsSubcommand::List => ProjectsAction::List,
+                ProjectsSubcommand::Select { project_id } => ProjectsAction::Select { project_id },
+            };
+            ProjectsCommand {
+                action: projects_action,
+                json,
+            }
+            .execute()
+        },
+
+        Commands::Events {
+            limit,
+            event_type,
+            json,
+        } => EventsCommand {
+            limit,
+            event_type,
+            json,
+        }
+        .execute(),
+
+        Commands::Dashboard { json } => DashboardCommand { json }.execute(),
     };
 
     if let Err(e) = result {
