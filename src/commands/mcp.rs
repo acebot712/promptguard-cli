@@ -437,8 +437,11 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
         "initialize" => JsonRpcResponse::success(
             id,
             serde_json::json!({
-                "protocolVersion": "2024-11-05",
-                "capabilities": { "tools": {} },
+                "protocolVersion": "2025-03-26",
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "logging": {}
+                },
                 "serverInfo": {
                     "name": "promptguard",
                     "version": env!("CARGO_PKG_VERSION"),
@@ -446,9 +449,16 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
             }),
         ),
 
-        "notifications/initialized" | "notifications/cancelled" => {
+        "notifications/initialized"
+        | "notifications/cancelled"
+        | "notifications/roots/list_changed" => {
+            if request.id.is_none() {
+                return JsonRpcResponse::success(serde_json::Value::Null, serde_json::json!(null));
+            }
             JsonRpcResponse::success(id, serde_json::json!(null))
         },
+
+        "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
 
         "tools/list" => JsonRpcResponse::success(id, tool_definitions()),
 
