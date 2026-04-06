@@ -3,6 +3,7 @@
 /// Detects application entry points and injects shim imports to enable
 /// runtime interception of LLM SDK calls.
 use crate::error::Result;
+use crate::scanner::is_skip_dir;
 use crate::types::Language;
 use std::collections::HashSet;
 use std::fs;
@@ -55,21 +56,10 @@ impl ShimInjector {
             let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
-            // Skip common non-source directories
-            if path.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some(
-                        "venv"
-                            | ".venv"
-                            | "node_modules"
-                            | ".git"
-                            | "dist"
-                            | "build"
-                            | "__pycache__"
-                    )
-                )
-            }) {
+            if path
+                .components()
+                .any(|c| c.as_os_str().to_str().is_some_and(is_skip_dir))
+            {
                 continue;
             }
 
@@ -169,13 +159,10 @@ impl ShimInjector {
                 let entry = entry.map_err(std::io::Error::other)?;
                 let path = entry.path();
 
-                // Skip node_modules and other build directories
-                if path.components().any(|c| {
-                    matches!(
-                        c.as_os_str().to_str(),
-                        Some("node_modules" | ".git" | "dist" | "build")
-                    )
-                }) {
+                if path
+                    .components()
+                    .any(|c| c.as_os_str().to_str().is_some_and(is_skip_dir))
+                {
                     continue;
                 }
 

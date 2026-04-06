@@ -39,7 +39,7 @@ impl PythonDetector {
 impl Detector for PythonDetector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult> {
         let config = DetectorConfig {
-            ts_language: tree_sitter_python::LANGUAGE.into(),
+            parser_language: tree_sitter_python::LANGUAGE.into(),
             language: Language::Python,
             capture_name: "call_expr",
         };
@@ -50,12 +50,8 @@ impl Detector for PythonDetector {
             file_path,
             provider,
             &config,
-            query_str,
+            &query_str,
             Self::check_has_base_url,
         )
-    }
-
-    fn language(&self) -> Language {
-        Language::Python
     }
 }

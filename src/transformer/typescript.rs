@@ -1,12 +1,9 @@
-use crate::detector::get_typescript_query;
-use crate::error::{PromptGuardError, Result};
+use super::core::{transform_file_generic, TransformConfig};
+use crate::detector::{get_typescript_query, ProviderInfo};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
 use std::fmt::Write;
-use std::fs;
 use std::path::Path;
-use streaming_iterator::StreamingIterator;
-use tree_sitter::{Node, Parser, Query, QueryCursor};
 
 pub struct TypeScriptTransformer;
 
@@ -16,67 +13,61 @@ impl Default for TypeScriptTransformer {
     }
 }
 
-#[allow(clippy::unused_self)]
 impl TypeScriptTransformer {
     pub fn new() -> Self {
         Self
     }
+}
 
-    fn has_base_url(&self, source: &str, object_node: Node, provider: Provider) -> bool {
-        let base_url_param = provider.base_url_param();
-        let object_text = &source[object_node.start_byte()..object_node.end_byte()];
+fn ts_has_base_url(source: &str, object_node: tree_sitter::Node, provider: Provider) -> bool {
+    let info = ProviderInfo::get(provider);
+    let object_text = &source[object_node.start_byte()..object_node.end_byte()];
 
-        object_text.contains(&format!("{base_url_param}:"))
-            || object_text.contains(&format!("\"{base_url_param}\": "))
-            || object_text.contains("base_url:")
+    object_text.contains(&format!("{}:", info.ts_base_url_param))
+        || object_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
+        || object_text.contains("base_url:")
+}
+
+fn transform_ts_object(
+    source: &str,
+    object_node: tree_sitter::Node,
+    provider: Provider,
+    proxy_url: &str,
+    api_key_env_var: &str,
+) -> Option<String> {
+    if ts_has_base_url(source, object_node, provider) {
+        return None;
     }
 
-    fn transform_object(
-        &self,
-        source: &str,
-        object_node: Node,
-        provider: Provider,
-        proxy_url: &str,
-        api_key_env_var: &str,
-    ) -> Option<String> {
-        if self.has_base_url(source, object_node, provider) {
-            return None;
+    let info = ProviderInfo::get(provider);
+    let object_text = &source[object_node.start_byte()..object_node.end_byte()];
+    let inner = object_text
+        .trim_start_matches('{')
+        .trim_end_matches('}')
+        .trim();
+
+    let mut new_object = String::from("{\n");
+
+    if inner.is_empty() {
+        let _ = writeln!(
+            new_object,
+            "  {}: process.env.{api_key_env_var},",
+            info.ts_api_key_param
+        );
+        let _ = writeln!(new_object, "  {}: \"{proxy_url}\"", info.ts_base_url_param);
+    } else {
+        let trimmed = inner.trim();
+        new_object.push_str("  ");
+        new_object.push_str(trimmed);
+        if !trimmed.ends_with(',') {
+            new_object.push(',');
         }
-
-        let base_url_param = provider.base_url_param();
-        let api_key_param = provider.api_key_param();
-
-        let object_start = object_node.start_byte();
-        let object_end = object_node.end_byte();
-        let object_text = &source[object_start..object_end];
-
-        let inner = object_text
-            .trim_start_matches('{')
-            .trim_end_matches('}')
-            .trim();
-
-        let mut new_object = String::from("{\n");
-
-        if inner.is_empty() {
-            let _ = writeln!(
-                new_object,
-                "  {api_key_param}: process.env.{api_key_env_var},"
-            );
-            let _ = writeln!(new_object, "  {base_url_param}: \"{proxy_url}\"");
-        } else {
-            let trimmed = inner.trim();
-            new_object.push_str("  ");
-            new_object.push_str(trimmed);
-            if !trimmed.ends_with(',') {
-                new_object.push(',');
-            }
-            new_object.push('\n');
-            let _ = writeln!(new_object, "  {base_url_param}: \"{proxy_url}\"");
-        }
-
-        new_object.push('}');
-        Some(new_object)
+        new_object.push('\n');
+        let _ = writeln!(new_object, "  {}: \"{proxy_url}\"", info.ts_base_url_param);
     }
+
+    new_object.push('}');
+    Some(new_object)
 }
 
 impl Transformer for TypeScriptTransformer {
@@ -86,83 +77,34 @@ impl Transformer for TypeScriptTransformer {
         provider: Provider,
         proxy_url: &str,
         api_key_env_var: &str,
-    ) -> Result<TransformResult> {
-        let source = fs::read_to_string(file_path)?;
-
-        let mut parser = Parser::new();
-        parser
-            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
-            .map_err(|_| {
-                PromptGuardError::Parse("Failed to set TypeScript language".to_string())
-            })?;
-
-        let tree = parser.parse(&source, None).ok_or_else(|| {
-            PromptGuardError::Parse("Failed to parse TypeScript file".to_string())
-        })?;
-
+    ) -> crate::error::Result<TransformResult> {
+        let config = TransformConfig {
+            parser_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            language_name: "TypeScript",
+        };
         let query_str = get_typescript_query(provider);
-        let query = Query::new(
-            &tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-            query_str,
+
+        transform_file_generic(
+            file_path,
+            &config,
+            &query_str,
+            |source, args_node| {
+                let mut cursor = args_node.walk();
+                for child in args_node.children(&mut cursor) {
+                    if child.kind() == "object" {
+                        return transform_ts_object(
+                            source,
+                            child,
+                            provider,
+                            proxy_url,
+                            api_key_env_var,
+                        )
+                        .map(|new_obj| (child.start_byte(), child.end_byte(), new_obj));
+                    }
+                }
+                None
+            },
+            |s| s,
         )
-        .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
-
-        let mut cursor = QueryCursor::new();
-        let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
-
-        let mut modifications: Vec<(usize, usize, String)> = Vec::new();
-
-        while let Some(match_) = matches.next() {
-            let args_node = match match_
-                .captures
-                .iter()
-                .find(|c| query.capture_names()[c.index as usize] == "args")
-            {
-                Some(capture) => capture.node,
-                None => continue,
-            };
-
-            let mut object_node = None;
-            let mut cursor = args_node.walk();
-            for child in args_node.children(&mut cursor) {
-                if child.kind() == "object" {
-                    object_node = Some(child);
-                    break;
-                }
-            }
-
-            if let Some(obj_node) = object_node {
-                if let Some(new_object) =
-                    self.transform_object(&source, obj_node, provider, proxy_url, api_key_env_var)
-                {
-                    modifications.push((obj_node.start_byte(), obj_node.end_byte(), new_object));
-                }
-            }
-        }
-
-        if modifications.is_empty() {
-            return Ok(TransformResult {
-                file_path: file_path.to_path_buf(),
-                success: true,
-                modified: false,
-                error: None,
-            });
-        }
-
-        modifications.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
-
-        let mut new_source = source;
-        for (start, end, replacement) in modifications {
-            new_source.replace_range(start..end, &replacement);
-        }
-
-        fs::write(file_path, &new_source)?;
-
-        Ok(TransformResult {
-            file_path: file_path.to_path_buf(),
-            success: true,
-            modified: true,
-            error: None,
-        })
     }
 }

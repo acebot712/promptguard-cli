@@ -1,3 +1,4 @@
+mod core;
 mod python;
 mod typescript;
 
@@ -28,12 +29,7 @@ pub fn transform_file(
 
     let language = Language::from_extension(ext);
     let Some(language) = language else {
-        return Ok(TransformResult {
-            file_path: file_path.to_path_buf(),
-            success: false,
-            modified: false,
-            error: Some("Unsupported file type".to_string()),
-        });
+        return Ok(TransformResult { modified: false });
     };
 
     let transformer: Box<dyn Transformer> = match language {

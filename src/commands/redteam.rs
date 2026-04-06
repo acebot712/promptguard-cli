@@ -30,23 +30,6 @@ struct RedTeamSummary {
     results: Vec<RedTeamTestResult>,
 }
 
-// Reserved for future "list tests" functionality
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct TestList {
-    total: usize,
-    tests: Vec<TestInfo>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Deserialize)]
-struct TestInfo {
-    name: String,
-    category: String,
-    description: String,
-    expected_result: String,
-}
-
 #[derive(Debug, Serialize)]
 struct TestRequest {
     target_preset: String,
@@ -75,9 +58,6 @@ struct AutonomousReport {
 pub struct RedTeamCommand {
     pub target_url: Option<String>,
     pub api_key: Option<String>,
-    /// Reserved for category filtering functionality
-    #[allow(dead_code)]
-    pub categories: Vec<String>,
     pub output_format: String,
     pub verbose: bool,
     pub test_name: Option<String>,
@@ -92,7 +72,6 @@ impl Default for RedTeamCommand {
         Self {
             target_url: None,
             api_key: None,
-            categories: Vec::new(),
             output_format: "human".to_string(),
             verbose: false,
             test_name: None,

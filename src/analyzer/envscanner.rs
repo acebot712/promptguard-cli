@@ -3,6 +3,7 @@
 /// Scans .env files and code for environment variable usage related to LLM SDKs.
 /// Helps users understand what environment variables need to be configured.
 use crate::error::Result;
+use crate::scanner::is_skip_dir;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::fs;
@@ -13,6 +14,7 @@ use walkdir::WalkDir;
 #[derive(Debug, Clone)]
 pub struct EnvVariable {
     pub name: String,
+    #[allow(dead_code)]
     pub value: Option<String>,
     pub file: PathBuf,
     pub line: usize,
@@ -24,6 +26,7 @@ pub struct EnvUsage {
     pub var_name: String,
     pub file: PathBuf,
     pub line: usize,
+    #[allow(dead_code)]
     pub context: String,
 }
 
@@ -61,13 +64,10 @@ impl EnvScanner {
             let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
 
-            // Skip node_modules and other build directories
-            if path.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some("node_modules" | ".git" | "dist" | "build" | "venv" | ".venv")
-                )
-            }) {
+            if path
+                .components()
+                .any(|c| c.as_os_str().to_str().is_some_and(is_skip_dir))
+            {
                 continue;
             }
 
@@ -183,12 +183,10 @@ impl EnvScanner {
                 continue;
             }
 
-            if path.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some("venv" | ".venv" | "build" | "dist" | "__pycache__")
-                )
-            }) {
+            if path
+                .components()
+                .any(|c| c.as_os_str().to_str().is_some_and(is_skip_dir))
+            {
                 continue;
             }
 
@@ -234,12 +232,10 @@ impl EnvScanner {
                 continue;
             }
 
-            if path.components().any(|c| {
-                matches!(
-                    c.as_os_str().to_str(),
-                    Some("node_modules" | "dist" | "build" | ".next")
-                )
-            }) {
+            if path
+                .components()
+                .any(|c| c.as_os_str().to_str().is_some_and(is_skip_dir))
+            {
                 continue;
             }
 

@@ -203,9 +203,19 @@ impl ScanCommand {
             }));
         }
 
+        let unique_file_count = {
+            let mut all_files: Vec<&PathBuf> = results
+                .values()
+                .flat_map(|v| v.iter().map(|i| &i.file_path))
+                .collect();
+            all_files.sort();
+            all_files.dedup();
+            all_files.len()
+        };
+
         let output = serde_json::json!({
             "total_files_scanned": total_files,
-            "files_with_sdks": results.values().flat_map(|v| v.iter()).count(),
+            "files_with_sdks": unique_file_count,
             "total_instances": results.values().map(std::vec::Vec::len).sum::<usize>(),
             "providers": providers_data,
         });
@@ -230,7 +240,7 @@ impl ScanCommand {
 
             println!(
                 "\n{} SDK ({} files, {} instances)",
-                provider.class_name(),
+                provider.display_name(),
                 unique_files.len(),
                 instances.len()
             );

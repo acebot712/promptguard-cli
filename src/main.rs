@@ -1,13 +1,12 @@
 // Clippy configuration for CLI binary
-#![allow(clippy::exit)] // process::exit is appropriate in main.rs
-#![allow(clippy::trivially_copy_pass_by_ref)] // &self for Copy types maintains API consistency
-#![allow(clippy::if_not_else)] // Negative conditions often clearer in CLI code
-#![allow(clippy::assigning_clones)] // Micro-optimization, not worth the noise
-#![allow(clippy::too_many_lines)] // Some CLI commands are legitimately complex
-#![allow(clippy::manual_let_else)] // Match syntax can be clearer
-#![allow(clippy::unused_self)] // Instance methods for API consistency
-#![allow(clippy::unnecessary_wraps)] // Result wrapping for API consistency
-#![allow(dead_code)] // Struct fields used via Debug/Clone derives or future use
+#![allow(clippy::exit)]
+#![allow(clippy::trivially_copy_pass_by_ref)]
+#![allow(clippy::if_not_else)]
+#![allow(clippy::assigning_clones)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::manual_let_else)]
+#![allow(clippy::unused_self)]
+#![allow(clippy::unnecessary_wraps)]
 
 mod analyzer;
 mod api;
@@ -219,11 +218,7 @@ enum Commands {
     ///
     /// Checks GitHub releases for a newer version and provides
     /// instructions for updating.
-    Update {
-        /// Only check for updates, don't install
-        #[arg(long, default_value = "true")]
-        check_only: bool,
-    },
+    Update,
 
     /// Redact PII and sensitive data from text
     ///
@@ -259,10 +254,6 @@ enum Commands {
         /// `PromptGuard` API key (or uses configured key)
         #[arg(long)]
         api_key: Option<String>,
-
-        /// Categories of attacks to test (e.g., jailbreak, injection)
-        #[arg(long)]
-        category: Vec<String>,
 
         /// Output format: human or json
         #[arg(long, default_value = "human")]
@@ -504,7 +495,7 @@ fn main() {
         }
         .execute(),
         Commands::Test => TestCommand::execute(),
-        Commands::Update { check_only } => UpdateCommand { check_only }.execute(),
+        Commands::Update => UpdateCommand.execute(),
 
         Commands::Redact {
             text,
@@ -522,7 +513,6 @@ fn main() {
         Commands::Redteam {
             target_url,
             api_key,
-            category,
             format,
             verbose,
             test,
@@ -533,7 +523,6 @@ fn main() {
         } => RedTeamCommand {
             target_url,
             api_key,
-            categories: category,
             output_format: format,
             verbose,
             test_name: test,

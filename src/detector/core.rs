@@ -9,9 +9,8 @@ use std::path::Path;
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Language as TSLanguage, Parser, Query, QueryCursor};
 
-/// Configuration for a language-specific detector
 pub struct DetectorConfig {
-    pub ts_language: TSLanguage,
+    pub parser_language: TSLanguage,
     pub language: Language,
     pub capture_name: &'static str,
 }
@@ -34,14 +33,14 @@ pub fn detect_in_file_generic(
 
     let mut parser = Parser::new();
     parser
-        .set_language(&config.ts_language)
+        .set_language(&config.parser_language)
         .map_err(|_| PromptGuardError::Parse("Failed to set language".to_string()))?;
 
     let tree = parser.parse(&source, None).ok_or_else(|| {
         PromptGuardError::Parse(format!("Failed to parse {} file", config.language.as_str()))
     })?;
 
-    let query = Query::new(&config.ts_language, query_str)
+    let query = Query::new(&config.parser_language, query_str)
         .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
 
     let mut cursor = QueryCursor::new();
@@ -65,8 +64,6 @@ pub fn detect_in_file_generic(
                     file_path: file_path.to_path_buf(),
                     line: start_position.row + 1,
                     column: start_position.column + 1,
-                    provider,
-                    language: config.language,
                     has_base_url: has_base_url.0,
                     current_base_url: has_base_url.1,
                 });

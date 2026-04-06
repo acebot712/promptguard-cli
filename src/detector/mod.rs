@@ -1,12 +1,12 @@
 mod core;
 mod python;
 pub mod queries;
-mod registry;
+pub mod registry;
 mod typescript;
 
 pub use python::PythonDetector;
 pub use queries::{get_python_transform_query, get_typescript_query};
-pub use registry::PROVIDERS;
+pub use registry::{ProviderInfo, PROVIDERS};
 pub use typescript::TypeScriptDetector;
 
 use crate::error::Result;
@@ -15,10 +15,6 @@ use std::path::Path;
 
 pub trait Detector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult>;
-
-    /// Returns the language this detector handles (for trait completeness)
-    #[allow(dead_code)]
-    fn language(&self) -> Language;
 }
 
 pub fn detect_all_providers(file_path: &Path) -> Result<Vec<(Provider, DetectionResult)>> {
@@ -29,7 +25,6 @@ pub fn detect_all_providers(file_path: &Path) -> Result<Vec<(Provider, Detection
         return Ok(Vec::new());
     };
 
-    // Use registry instead of hardcoded list
     let mut results = Vec::new();
 
     for provider_info in PROVIDERS {

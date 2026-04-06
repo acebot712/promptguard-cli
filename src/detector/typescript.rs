@@ -1,5 +1,6 @@
 use super::core::{detect_in_file_generic, DetectorConfig};
 use super::queries::get_typescript_query;
+use super::registry::ProviderInfo;
 use super::Detector;
 use crate::error::Result;
 use crate::types::{DetectionResult, Language, Provider};
@@ -23,12 +24,12 @@ impl TypeScriptDetector {
         args_node: tree_sitter::Node,
         provider: Provider,
     ) -> (bool, Option<String>) {
-        let base_url_param = provider.base_url_param();
+        let info = ProviderInfo::get(provider);
         let args_text = &source[args_node.start_byte()..args_node.end_byte()];
 
-        let has_base_url = args_text.contains(&format!("{base_url_param}:"))
-            || args_text.contains(&format!("\"{base_url_param}\": "))
-            || args_text.contains(&format!("'{base_url_param}': "))
+        let has_base_url = args_text.contains(&format!("{}:", info.ts_base_url_param))
+            || args_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
+            || args_text.contains(&format!("'{}': ", info.ts_base_url_param))
             || args_text.contains("base_url:");
 
         let current_base_url = if has_base_url {
@@ -44,7 +45,7 @@ impl TypeScriptDetector {
 impl Detector for TypeScriptDetector {
     fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult> {
         let config = DetectorConfig {
-            ts_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            parser_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             language: Language::TypeScript,
             capture_name: "new_expr",
         };
@@ -55,12 +56,8 @@ impl Detector for TypeScriptDetector {
             file_path,
             provider,
             &config,
-            query_str,
+            &query_str,
             Self::check_has_base_url,
         )
-    }
-
-    fn language(&self) -> Language {
-        Language::TypeScript
     }
 }

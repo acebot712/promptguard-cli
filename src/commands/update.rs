@@ -15,15 +15,11 @@ struct GitHubRelease {
     body: Option<String>,
 }
 
-pub struct UpdateCommand {
-    /// Reserved for future auto-update functionality
-    #[allow(dead_code)]
-    pub check_only: bool,
-}
+pub struct UpdateCommand;
 
 impl Default for UpdateCommand {
     fn default() -> Self {
-        Self { check_only: true }
+        Self
     }
 }
 

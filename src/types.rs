@@ -39,29 +39,15 @@ impl Provider {
         }
     }
 
-    pub fn class_name(&self) -> &'static str {
+    pub fn display_name(&self) -> &'static str {
         match self {
             Provider::OpenAI => "OpenAI",
             Provider::Anthropic => "Anthropic",
-            Provider::Cohere => "CohereClient",
-            Provider::HuggingFace => "HfInference",
-            Provider::Gemini => "Client",
+            Provider::Cohere => "Cohere",
+            Provider::HuggingFace => "HuggingFace",
+            Provider::Gemini => "Gemini",
             Provider::Groq => "Groq",
-            Provider::Bedrock => "BedrockRuntimeClient",
-        }
-    }
-
-    pub fn base_url_param(&self) -> &'static str {
-        match self {
-            Provider::HuggingFace => "baseUrl",
-            _ => "baseURL",
-        }
-    }
-
-    pub fn api_key_param(&self) -> &'static str {
-        match self {
-            Provider::HuggingFace => "accessToken",
-            _ => "apiKey",
+            Provider::Bedrock => "AWS Bedrock",
         }
     }
 }
@@ -72,8 +58,6 @@ pub struct DetectionInstance {
     pub file_path: PathBuf,
     pub line: usize,
     pub column: usize,
-    pub provider: Provider,
-    pub language: Language,
     pub has_base_url: bool,
     pub current_base_url: Option<String>,
 }
@@ -126,8 +110,5 @@ impl DetectionResult {
 /// Result of a file transformation operation.
 #[derive(Debug, Clone)]
 pub struct TransformResult {
-    pub file_path: PathBuf,
-    pub success: bool,
     pub modified: bool,
-    pub error: Option<String>,
 }

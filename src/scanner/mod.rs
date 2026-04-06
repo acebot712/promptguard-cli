@@ -1,8 +1,28 @@
+use crate::config::default_exclude_patterns;
 use crate::error::Result;
 use glob::Pattern;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
+
+/// Directories always skipped during filesystem traversal.
+/// Canonical list - used by scanner, envscanner, and injector.
+pub const SKIP_DIRS: &[&str] = &[
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    "__pycache__",
+    "__tests__",
+    "venv",
+    ".venv",
+    ".next",
+    ".mypy_cache",
+];
+
+pub fn is_skip_dir(name: &str) -> bool {
+    SKIP_DIRS.contains(&name)
+}
 
 pub struct FileScanner {
     root_path: PathBuf,
@@ -14,7 +34,15 @@ impl FileScanner {
         root_path: P,
         exclude_patterns: Option<Vec<String>>,
     ) -> Result<Self> {
-        let patterns = exclude_patterns.unwrap_or_else(Self::default_exclude_patterns);
+        let patterns = exclude_patterns.unwrap_or_else(|| {
+            let mut p = default_exclude_patterns();
+            p.extend([
+                "**/.git/**".to_string(),
+                "**/__pycache__/**".to_string(),
+                "**/*.pyc".to_string(),
+            ]);
+            p
+        });
         let exclude_patterns: Result<Vec<Pattern>> = patterns
             .iter()
             .map(|p| {
@@ -26,23 +54,6 @@ impl FileScanner {
             root_path: root_path.as_ref().to_path_buf(),
             exclude_patterns: exclude_patterns?,
         })
-    }
-
-    pub fn default_exclude_patterns() -> Vec<String> {
-        vec![
-            "**/*.test.js".to_string(),
-            "**/*.test.ts".to_string(),
-            "**/*.spec.js".to_string(),
-            "**/*.spec.ts".to_string(),
-            "**/node_modules/**".to_string(),
-            "**/dist/**".to_string(),
-            "**/__tests__/**".to_string(),
-            "**/.venv/**".to_string(),
-            "**/venv/**".to_string(),
-            "**/.git/**".to_string(),
-            "**/__pycache__/**".to_string(),
-            "**/*.pyc".to_string(),
-        ]
     }
 
     pub fn find_git_root(&self) -> Option<PathBuf> {
@@ -90,32 +101,23 @@ impl FileScanner {
         }
 
         // Check Python frameworks
-        if let Ok(content) = fs::read_to_string(self.root_path.join("requirements.txt")) {
-            let lower = content.to_lowercase();
-            if lower.contains("django") {
-                return Some("django".to_string());
-            }
-            if lower.contains("fastapi") {
-                return Some("fastapi".to_string());
-            }
-            if lower.contains("flask") {
-                return Some("flask".to_string());
+        for filename in ["requirements.txt", "pyproject.toml"] {
+            if let Some(fw) = self.detect_python_framework(filename) {
+                return Some(fw);
             }
         }
 
-        if let Ok(content) = fs::read_to_string(self.root_path.join("pyproject.toml")) {
-            let lower = content.to_lowercase();
-            if lower.contains("django") {
-                return Some("django".to_string());
-            }
-            if lower.contains("fastapi") {
-                return Some("fastapi".to_string());
-            }
-            if lower.contains("flask") {
-                return Some("flask".to_string());
+        None
+    }
+
+    fn detect_python_framework(&self, filename: &str) -> Option<String> {
+        let content = fs::read_to_string(self.root_path.join(filename)).ok()?;
+        let lower = content.to_lowercase();
+        for fw in ["django", "fastapi", "flask"] {
+            if lower.contains(fw) {
+                return Some(fw.to_string());
             }
         }
-
         None
     }
 

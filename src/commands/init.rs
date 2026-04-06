@@ -1,6 +1,7 @@
 use crate::api::PromptGuardClient;
 use crate::config::{ConfigManager, PromptGuardConfig};
 use crate::detector::detect_all_providers;
+use crate::detector::ProviderInfo;
 use crate::env::EnvManager;
 use crate::error::Result;
 use crate::output::Output;
@@ -131,7 +132,7 @@ impl InitCommand {
 
             println!(
                 "   • {} SDK ({} files)",
-                provider.class_name(),
+                provider.display_name(),
                 unique_files.len()
             );
             for file in unique_files.iter().take(5) {
@@ -196,11 +197,12 @@ impl InitCommand {
                         let rel_path = file_path.strip_prefix(&root_path).unwrap_or(&file_path);
 
                         if result.modified {
+                            let info = ProviderInfo::get(*provider);
                             Output::step(&format!(
                                 "{} (added {} for {})",
                                 rel_path.display(),
-                                provider.base_url_param(),
-                                provider.as_str()
+                                info.ts_base_url_param,
+                                provider.display_name()
                             ));
                         } else {
                             Output::excluded(&format!(
