@@ -10,17 +10,22 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-/// Response from the /security/scan endpoint
+/// Response from the /security/scan endpoint.
+///
+/// The backend returns camelCase fields (`threatType`, `eventId`,
+/// `processingTimeMs`).
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SecurityScanResponse {
+    pub blocked: bool,
     pub decision: String,
     pub confidence: f64,
-    #[serde(default)]
+    pub reason: String,
+    #[serde(default, rename = "threatType")]
     pub threat_type: Option<String>,
-    #[serde(default)]
-    pub reason: Option<String>,
-    #[serde(default)]
-    pub details: serde_json::Value,
+    #[serde(default, rename = "eventId")]
+    pub event_id: Option<String>,
+    #[serde(default, rename = "processingTimeMs")]
+    pub processing_time_ms: Option<f64>,
 }
 
 pub struct ScanCommand {
@@ -75,11 +80,11 @@ impl ScanCommand {
             Output::info(&format!("Scanning {} characters...", content.len()));
         }
 
-        // Call the security scan endpoint
         let response: SecurityScanResponse = client.post(
             "/security/scan",
             &serde_json::json!({
-                "text": content,
+                "content": content,
+                "type": "prompt",
             }),
         )?;
 
@@ -102,8 +107,8 @@ impl ScanCommand {
                 println!("Threat Type: {threat_type}");
             }
 
-            if let Some(ref reason) = response.reason {
-                println!("Reason: {reason}");
+            if !response.reason.is_empty() {
+                println!("Reason: {}", response.reason);
             }
 
             if response.decision == "block" {

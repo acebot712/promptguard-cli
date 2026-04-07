@@ -1,5 +1,16 @@
 use thiserror::Error;
 
+#[derive(Debug)]
+#[allow(dead_code)]
+pub struct QuotaExceededInfo {
+    pub message: String,
+    pub code: String,
+    pub current_plan: Option<String>,
+    pub requests_used: Option<u64>,
+    pub requests_limit: Option<u64>,
+    pub upgrade_url: Option<String>,
+}
+
 #[derive(Error, Debug)]
 pub enum PromptGuardError {
     #[error("IO error: {0}")]
@@ -16,6 +27,9 @@ pub enum PromptGuardError {
 
     #[error("API error: {0}")]
     Api(String),
+
+    #[error("{}", .0.message)]
+    QuotaExceeded(Box<QuotaExceededInfo>),
 
     #[error("Not initialized. Run 'promptguard init' first")]
     NotInitialized,

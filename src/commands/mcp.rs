@@ -148,6 +148,18 @@ fn tool_definitions() -> serde_json::Value {
 // Tool handlers
 // ---------------------------------------------------------------------------
 
+fn resolve_project_id(config: &crate::config::PromptGuardConfig) -> Option<String> {
+    if let Some(ref pid) = config.project_id {
+        if !pid.is_empty() {
+            return Some(pid.clone());
+        }
+    }
+    if let Ok(Some(creds)) = crate::auth::load_credentials() {
+        return creds.active_project;
+    }
+    None
+}
+
 fn handle_scan_text(params: &serde_json::Value) -> serde_json::Value {
     let text = match params.get("text").and_then(serde_json::Value::as_str) {
         Some(t) => t.to_string(),
@@ -162,10 +174,15 @@ fn handle_scan_text(params: &serde_json::Value) -> serde_json::Value {
     let result = (|| -> Result<serde_json::Value> {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
-        let client = PromptGuardClient::new(config.api_key, Some(config.proxy_url))?;
+        let client =
+            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
 
-        let response: serde_json::Value =
-            client.post("/security/scan", &serde_json::json!({ "text": text }))?;
+        let mut body = serde_json::json!({ "content": text, "type": "prompt" });
+        if let Some(pid) = resolve_project_id(&config) {
+            body["project_id"] = serde_json::Value::String(pid);
+        }
+
+        let response: serde_json::Value = client.post("/security/scan", &body)?;
 
         Ok(response)
     })();
@@ -292,10 +309,15 @@ fn handle_redact(params: &serde_json::Value) -> serde_json::Value {
     let result = (|| -> Result<serde_json::Value> {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
-        let client = PromptGuardClient::new(config.api_key, Some(config.proxy_url))?;
+        let client =
+            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
 
-        let response: serde_json::Value =
-            client.post("/security/redact", &serde_json::json!({ "text": text }))?;
+        let mut body = serde_json::json!({ "content": text });
+        if let Some(pid) = resolve_project_id(&config) {
+            body["project_id"] = serde_json::Value::String(pid);
+        }
+
+        let response: serde_json::Value = client.post("/security/redact", &body)?;
 
         Ok(response)
     })();
@@ -397,7 +419,7 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
                         "production"
                     };
                     serde_json::json!({
-                        "content": [{"type": "text", "text": format!("Authenticated successfully with a {key_type} API key. PromptGuard is ready to use.")}]
+                        "content": [{"type": "text", "text": format!("Authenticated successfully with a {key_type} API key. PromptGuard is ready to use.\n\nTo associate requests with a specific project, set \"project_id\" in .promptguard.json or run 'promptguard projects select <id>'.")}]
                     })
                 },
                 Err(e) => serde_json::json!({

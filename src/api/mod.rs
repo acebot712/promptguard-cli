@@ -1,4 +1,4 @@
-use crate::error::{PromptGuardError, Result};
+use crate::error::{PromptGuardError, QuotaExceededInfo, Result};
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use std::thread;
@@ -25,6 +25,12 @@ struct ErrorResponse {
 struct ErrorDetail {
     code: String,
     message: String,
+    #[serde(rename = "type")]
+    error_type: Option<String>,
+    upgrade_url: Option<String>,
+    current_plan: Option<String>,
+    requests_used: Option<u64>,
+    requests_limit: Option<u64>,
 }
 
 pub struct PromptGuardClient {
@@ -55,11 +61,11 @@ impl PromptGuardClient {
         error.is_timeout() || error.is_connect() || error.is_request()
     }
 
-    /// Check if an HTTP status code is retryable
+    /// Check if an HTTP status code is retryable.
+    /// 429 is NOT retried here; quota-exceeded responses are handled
+    /// separately to avoid wasting attempts on a hard limit.
     fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-        // Retry on 429 (rate limit), 502, 503, 504 (server issues)
-        status == reqwest::StatusCode::TOO_MANY_REQUESTS
-            || status == reqwest::StatusCode::BAD_GATEWAY
+        status == reqwest::StatusCode::BAD_GATEWAY
             || status == reqwest::StatusCode::SERVICE_UNAVAILABLE
             || status == reqwest::StatusCode::GATEWAY_TIMEOUT
     }
@@ -118,9 +124,28 @@ impl PromptGuardClient {
                         .unwrap_or_else(|_| "Unknown error".to_string());
 
                     if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&error_text) {
+                        let detail = error_response.error;
+
+                        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+                            let mut msg = detail.message.clone();
+                            if let Some(ref url) = detail.upgrade_url {
+                                msg = format!("{msg}\n\nUpgrade your plan: {url}");
+                            }
+                            return Err(PromptGuardError::QuotaExceeded(Box::new(
+                                QuotaExceededInfo {
+                                    message: msg,
+                                    code: detail.code,
+                                    current_plan: detail.current_plan,
+                                    requests_used: detail.requests_used,
+                                    requests_limit: detail.requests_limit,
+                                    upgrade_url: detail.upgrade_url,
+                                },
+                            )));
+                        }
+
                         return Err(PromptGuardError::Api(format!(
                             "API error ({}): {}",
-                            status, error_response.error.message
+                            status, detail.message
                         )));
                     }
 

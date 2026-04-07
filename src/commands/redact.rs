@@ -10,26 +10,15 @@ use crate::output::Output;
 use serde::{Deserialize, Serialize};
 use std::fs;
 
-/// Response from the /security/redact endpoint
+/// Response from the /security/redact endpoint.
+///
+/// The backend returns `{ original, redacted, piiFound }`.
 #[derive(Debug, Deserialize, Serialize)]
 pub struct RedactResponse {
-    pub redacted_text: String,
-    #[serde(default)]
-    pub entities_found: Vec<RedactedEntity>,
-    #[serde(default)]
-    pub entity_count: usize,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct RedactedEntity {
-    #[serde(rename = "type")]
-    pub entity_type: String,
     pub original: String,
-    pub replacement: String,
-    #[serde(default)]
-    pub start: usize,
-    #[serde(default)]
-    pub end: usize,
+    pub redacted: String,
+    #[serde(default, rename = "piiFound")]
+    pub pii_found: Vec<String>,
 }
 
 pub struct RedactCommand {
@@ -76,17 +65,15 @@ impl RedactCommand {
             Output::info(&format!("Processing {} characters...", content.len()));
         }
 
-        // Call the redact endpoint
         let response: RedactResponse = client.post(
             "/security/redact",
             &serde_json::json!({
-                "text": content,
+                "content": content,
             }),
         )?;
 
-        // Handle output
         if let Some(ref output_path) = self.output {
-            fs::write(output_path, &response.redacted_text).map_err(|e| {
+            fs::write(output_path, &response.redacted).map_err(|e| {
                 PromptGuardError::Io(std::io::Error::new(
                     e.kind(),
                     format!("Failed to write output file '{output_path}': {e}"),
@@ -96,9 +83,9 @@ impl RedactCommand {
             if !self.json {
                 Output::success(&format!("Redacted content written to {output_path}"));
                 println!();
-                println!("Entities redacted: {}", response.entity_count);
-                for entity in &response.entities_found {
-                    println!("  • {} → {}", entity.entity_type, entity.replacement);
+                println!("PII types redacted: {}", response.pii_found.len());
+                for pii_type in &response.pii_found {
+                    println!("  • {pii_type}");
                 }
             }
         } else if self.json {
@@ -110,25 +97,22 @@ impl RedactCommand {
             println!();
             println!("Redacted Text:");
             println!("─────────────────────────────────────────────────");
-            println!("{}", response.redacted_text);
+            println!("{}", response.redacted);
             println!("─────────────────────────────────────────────────");
             println!();
 
-            if response.entity_count > 0 {
+            if response.pii_found.is_empty() {
+                Output::info("No sensitive entities detected.");
+            } else {
                 Output::success(&format!(
-                    "{} sensitive entities redacted",
-                    response.entity_count
+                    "{} PII type(s) redacted",
+                    response.pii_found.len()
                 ));
                 println!();
-                println!("Entities found:");
-                for entity in &response.entities_found {
-                    println!(
-                        "  • {} '{}' → '{}'",
-                        entity.entity_type, entity.original, entity.replacement
-                    );
+                println!("PII types found:");
+                for pii_type in &response.pii_found {
+                    println!("  • {pii_type}");
                 }
-            } else {
-                Output::info("No sensitive entities detected.");
             }
         }
 

@@ -85,6 +85,9 @@ jobs:
           cargo test --test runtime_shim_tests
           cargo test --test environment_scanner_tests
 
+      - name: Run API contract tests
+        run: cargo test --test contract_tests
+
       - name: Build
         run: cargo build --release
 
