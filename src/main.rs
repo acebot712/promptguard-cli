@@ -28,7 +28,8 @@ use commands::{
     ApplyCommand, ConfigCommand, DashboardCommand, DisableCommand, DoctorCommand, EnableCommand,
     EventsCommand, InitCommand, KeyCommand, LoginCommand, LogoutCommand, LogsCommand, McpCommand,
     PolicyAction, PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand, RedactCommand,
-    RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand, WhoamiCommand,
+    RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand, VerifyCommand,
+    WhoamiCommand,
 };
 
 #[derive(Parser)]
@@ -213,6 +214,17 @@ enum Commands {
     /// Validates API key, tests proxy connectivity, and verifies
     /// that your setup is working correctly.
     Test,
+
+    /// Verify end-to-end `PromptGuard` integration
+    ///
+    /// Runs connectivity, authentication, threat detection, and PII
+    /// redaction checks against the live API. Use after setup to
+    /// confirm everything works, or in CI to validate the integration.
+    Verify {
+        /// Output results as JSON (for CI/scripting)
+        #[arg(long)]
+        json: bool,
+    },
 
     /// Check for CLI updates
     ///
@@ -495,6 +507,7 @@ fn main() {
         }
         .execute(),
         Commands::Test => TestCommand::execute(),
+        Commands::Verify { json } => VerifyCommand { json }.execute(),
         Commands::Update => UpdateCommand.execute(),
 
         Commands::Redact {

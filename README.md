@@ -6,11 +6,11 @@
 
 > Drop-in LLM security for your applications — built with Rust + Tree-sitter
 
-![Version](https://img.shields.io/badge/version-1.3.0-blue)
+![Version](https://img.shields.io/badge/version-1.5.1-blue)
 ![Rust](https://img.shields.io/badge/rust-1.70+-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 
-Single 5.3MB binary. Zero dependencies. Real AST transformations. Under 10ms startup.
+Single 5.3MB binary. No runtime interpreter required. Real AST transformations. Under 10ms startup.
 
 ## Installation
 
@@ -18,7 +18,7 @@ Single 5.3MB binary. Zero dependencies. Real AST transformations. Under 10ms sta
 |--------|---------|
 | **Homebrew** | `brew tap promptguard/tap && brew install promptguard` |
 | **Shell script** | `curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh \| sh` |
-| **Cargo** | `cargo install promptguard-cli` |
+| **Cargo** | `cargo install promptguard` |
 | **Binary** | Download from [GitHub Releases](https://github.com/acebot712/promptguard-cli/releases/latest) |
 
 Supported platforms: macOS ARM64 (M1/M2/M3), macOS x86_64, Linux x86_64, Linux ARM64.
@@ -29,6 +29,7 @@ Supported platforms: macOS ARM64 (M1/M2/M3), macOS x86_64, Linux x86_64, Linux A
 
 ```bash
 promptguard init --api-key pg_sk_prod_YOUR_KEY    # Configure
+promptguard verify                                 # Test connectivity + scan + redact
 promptguard scan                                   # Find LLM SDK usage
 promptguard status                                 # Check configuration
 promptguard mcp -t stdio                           # Start MCP server
@@ -39,7 +40,7 @@ promptguard mcp -t stdio                           # Start MCP server
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize PromptGuard and rewrite SDK constructors to route through proxy |
-| `scan` | Scan project for LLM SDK usage (dry-run) |
+| `scan` | Scan project for LLM SDK usage, or scan text/files for security threats |
 | `status` | Show current configuration and managed files |
 | `doctor` | Diagnose common issues |
 | `apply` | Apply pending code transformations |
@@ -47,7 +48,19 @@ promptguard mcp -t stdio                           # Start MCP server
 | `revert` | Revert all changes (restores backups) |
 | `mcp` | Start MCP server for AI editor integration |
 | `redteam` | Red team testing (manual or `--autonomous` with LLM agent) |
+| `verify` | End-to-end integration check: connectivity, auth, scan, and redact |
 | `policy` | Policy-as-code: `apply`, `diff`, `export` YAML guardrail configs |
+| `login` / `logout` | Authenticate with PromptGuard cloud |
+| `whoami` | Show current authenticated user |
+| `projects` | `list` / `select` active project |
+| `config` | View or update local configuration |
+| `key` | Manage API keys |
+| `logs` | View recent security event logs |
+| `events` | View security events |
+| `dashboard` | Open the PromptGuard dashboard in browser |
+| `redact` | Redact PII from text |
+| `test` | Run a quick connectivity and detection test |
+| `update` | Update the CLI to latest version |
 
 ## MCP Server
 
@@ -143,9 +156,9 @@ All LLM requests now flow through PromptGuard's six-layer security pipeline.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROMPTGUARD_API_KEY` | — | API key (read by `init` and MCP tools) |
-| `PROMPTGUARD_API_URL` | `https://api.promptguard.co` | API base URL |
+| `PROMPTGUARD_BASE_URL` | `https://api.promptguard.co/api/v1` | API base URL |
 
-Configuration is stored in `~/.promptguard/config.json`.
+Global credentials are stored in `~/.promptguard/credentials.json`. Project-level configuration is stored in `.promptguard.json` in the project root.
 
 ## Development
 

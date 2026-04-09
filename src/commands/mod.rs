@@ -20,6 +20,7 @@ pub mod scan;
 pub mod status;
 pub mod test;
 pub mod update;
+pub mod verify;
 pub mod whoami;
 
 pub use apply::ApplyCommand;
@@ -44,4 +45,5 @@ pub use scan::ScanCommand;
 pub use status::StatusCommand;
 pub use test::TestCommand;
 pub use update::UpdateCommand;
+pub use verify::VerifyCommand;
 pub use whoami::WhoamiCommand;

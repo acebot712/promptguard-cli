@@ -52,7 +52,7 @@ from openai import OpenAI
 
 client = OpenAI()
 response = client.chat.completions.create(
-    model="gpt-4",
+    model="gpt-5-nano",
     messages=[{"role": "user", "content": "Hello"}]
 )
 "#,
@@ -112,7 +112,7 @@ const openai = new OpenAI();
 
 async function main() {
     const response = await openai.chat.completions.create({
-        model: 'gpt-4',
+        model: 'gpt-5-nano',
         messages: [{ role: 'user', content: 'Hello' }]
     });
 }
