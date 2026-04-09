@@ -1,3 +1,7 @@
+[![CI](https://github.com/acebot712/promptguard-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/acebot712/promptguard-cli/actions/workflows/ci.yml)
+[![License](https://img.shields.io/github/license/acebot712/promptguard-cli)](https://github.com/acebot712/promptguard-cli/blob/main/LICENSE)
+[![Rust](https://img.shields.io/badge/Built_with-Rust-orange)](https://www.rust-lang.org/)
+
 # PromptGuard CLI
 
 > Drop-in LLM security for your applications — built with Rust + Tree-sitter
