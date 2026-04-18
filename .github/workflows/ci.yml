@@ -3,27 +3,46 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.gitignore'
+      - '.editorconfig'
   pull_request:
     branches: [main]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE*'
+      - '.gitignore'
+      - '.editorconfig'
   # Re-run the security job on a schedule so CVEs published after the
   # last commit (e.g. RUSTSEC-2026-0098 hit us a few days after our
   # last green build) are caught proactively rather than at next push.
   schedule:
     - cron: "0 6 * * *"
 
+# Cancel in-flight runs for the same ref when a new commit lands.
+# A new commit obsoletes the old test results, no point in burning
+# minutes finishing them.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+# Default to read-only token. Each job that needs more escalates explicitly.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
 jobs:
-  # Quality checks - fast feedback
   quality:
     name: Code Quality
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
@@ -32,23 +51,13 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      - name: Cache cargo registry
-        uses: actions/cache@v5
+      # Swatinem/rust-cache is the SOTA Rust cache action: it keys on
+      # rustc version + Cargo.lock, prunes target/ to keep the cache
+      # small, and is ~2x faster than hand-rolled actions/cache for
+      # the three cargo dirs.
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: ~/.cargo/registry
-          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo index
-        uses: actions/cache@v5
-        with:
-          path: ~/.cargo/git
-          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
-
-      - name: Cache cargo build
-        uses: actions/cache@v5
-        with:
-          path: target
-          key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: quality
 
       - name: Check formatting
         run: cargo fmt -- --check
@@ -56,31 +65,38 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
-  # Test matrix - thorough coverage
   test:
     name: Test Suite
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        rust: [stable, beta]
+        # Trimmed: ubuntu*{stable,beta} + macos*stable.
+        # Dropped macos*beta -- 10x runner cost for signal already
+        # covered by ubuntu-beta (compiler) and macos-stable (platform).
+        include:
+          - os: ubuntu-latest
+            rust: stable
+          - os: ubuntu-latest
+            rust: beta
+          - os: macos-latest
+            rust: stable
     steps:
       - uses: actions/checkout@v6
 
+      # Pinned to a tag, not @master. @master is whatever the
+      # maintainer pushed last and is non-deterministic.
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ matrix.rust }}
+        uses: dtolnay/rust-toolchain@stable
+        if: matrix.rust == 'stable'
+      - name: Install Rust toolchain (beta)
+        uses: dtolnay/rust-toolchain@beta
+        if: matrix.rust == 'beta'
 
-      - name: Cache dependencies
-        uses: actions/cache@v5
+      - uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: test-${{ matrix.os }}-${{ matrix.rust }}
 
       - name: Run tests
         run: cargo test --all-features --verbose
@@ -98,14 +114,22 @@ jobs:
 
       - name: Verify runtime shim functionality
         run: |
-          # Test that binary works
           ./target/release/promptguard --version
           ./target/release/promptguard --help
 
-  # Security audit - catch known vulnerabilities
   security:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # rustsec/audit-check posts findings as PR review comments / commit
+    # statuses, so it needs write on those endpoints. checks: write is
+    # for the commit status; pull-requests/issues: write covers the
+    # rare case of opening a tracking issue for a new advisory.
+    permissions:
+      contents: read
+      checks: write
+      issues: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v6
 
