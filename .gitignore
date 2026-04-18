@@ -1,7 +1,10 @@
 # Rust
 /target/
 **/*.rs.bk
-Cargo.lock
+
+# Cargo.lock IS tracked: this crate ships a binary (`cargo install promptguard`
+# --locked` reads it) and a library, and a tracked lockfile gives `cargo audit`
+# deterministic input across local + CI runs.
 
 # Distribution
 /dist/

@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Re-run the security job on a schedule so CVEs published after the
+  # last commit (e.g. RUSTSEC-2026-0098 hit us a few days after our
+  # last green build) are caught proactively rather than at next push.
+  schedule:
+    - cron: "0 6 * * *"
 
 concurrency:
   group: ci-${{ github.ref }}
