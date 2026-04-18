@@ -5,13 +5,16 @@ on:
     tags:
       - 'cli-v*'  # Trigger on tags like cli-v2.0.0
 
+# Release workflow: read by default, build job does not need write,
+# only the final `release` job that publishes assets needs contents:write.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -44,6 +47,10 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
 
       - name: Build CLI
         run: cargo build --release --target ${{ matrix.target }}
@@ -88,6 +95,10 @@ jobs:
     name: Create Release
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only the publish job needs write to push the GitHub Release.
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
