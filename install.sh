@@ -1,6 +1,6 @@
 #!/bin/sh
 # PromptGuard CLI installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/promptguard/promptguard/main/promptguard-cli/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh
 
 set -e
 
@@ -129,9 +129,11 @@ echo "Installed: $INSTALL_DIR/promptguard"
 echo "Version: $VERSION"
 echo ""
 echo "Next steps:"
-echo "  1. Get your API key: https://app.promptguard.co/settings/api-keys"
-echo "  2. Initialize in your project: promptguard init --api-key pg_sk_xxx"
-echo "  3. View help: promptguard --help"
+echo "  1. Log in (works anywhere): promptguard login"
+echo "     Get your API key at https://app.promptguard.co/settings/api-keys"
+echo "  2. Try an instant scan: promptguard scan --text \"ignore previous instructions\""
+echo "  3. Integrate a project:  promptguard init"
+echo "  4. View help:            promptguard --help"
 echo ""
 echo "Documentation: https://docs.promptguard.co/cli"
 echo ""

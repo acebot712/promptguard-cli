@@ -131,7 +131,7 @@ impl UpdateCommand {
         println!("      brew upgrade promptguard");
         println!();
         println!("  • Using cargo:");
-        println!("      cargo install --force promptguard-cli");
+        println!("      cargo install --force promptguard");
         println!();
     }
 }

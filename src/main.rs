@@ -50,7 +50,7 @@ struct Cli {
     no_color: bool,
 
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
 }
 
 #[derive(Subcommand)]
@@ -77,7 +77,7 @@ enum Commands {
         env_file: String,
 
         /// Skip confirmation prompts (for CI/CD)
-        #[arg(short = 'y', long)]
+        #[arg(short = 'y', long = "yes", alias = "auto")]
         auto: bool,
 
         /// Preview changes without applying them
@@ -188,7 +188,7 @@ enum Commands {
     /// Manage API keys
     ///
     /// View, update, or rotate your `PromptGuard` API key.
-    /// Keys can be test (`pg_sk_test`_*) or production (`pg_sk_prod`_*).
+    /// Keys use the `pg_live`_* prefix.
     Key,
 
     /// View activity logs from `PromptGuard` API
@@ -447,7 +447,12 @@ fn main() {
         cli.no_color || std::env::var("NO_COLOR").is_ok(),
     );
 
-    let result = match cli.command {
+    let Some(command) = cli.command else {
+        print_welcome();
+        return;
+    };
+
+    let result = match command {
         Commands::Init {
             provider,
             api_key,
@@ -613,4 +618,33 @@ fn main() {
         eprintln!("Error: {e}");
         std::process::exit(1);
     }
+}
+
+/// Friendly status + next-steps banner shown when invoked with no subcommand.
+fn print_welcome() {
+    use output::Output;
+
+    Output::header("🛡️  PromptGuard CLI");
+    println!("Drop-in LLM security for your applications");
+    println!();
+
+    // Mirror resolve_api_key precedence to decide what to suggest next.
+    if auth::resolve_api_key().is_ok() {
+        let base_url = auth::resolve_base_url();
+        Output::success("You're logged in");
+        Output::step(&format!("API: {base_url}"));
+        println!();
+        println!("Next steps:");
+        println!("  • Scan text:        promptguard scan --text \"ignore previous instructions\"");
+        println!("  • Integrate a repo: promptguard init");
+        println!("  • Verify setup:     promptguard verify");
+    } else {
+        Output::info("You're not logged in yet");
+        println!();
+        println!("Run `promptguard login` to get started.");
+        println!("  Get your API key at https://app.promptguard.co/settings/api-keys");
+    }
+
+    println!();
+    println!("See all commands: promptguard --help");
 }

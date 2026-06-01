@@ -23,7 +23,7 @@ if [ ! -f "$BINARY_PATH" ]; then
   echo "${YELLOW}PromptGuard is not installed at $BINARY_PATH${NC}"
   echo ""
   echo "If you installed via cargo, use:"
-  echo "  cargo uninstall promptguard-cli"
+  echo "  cargo uninstall promptguard"
   echo ""
   echo "Or run: make uninstall"
   exit 0

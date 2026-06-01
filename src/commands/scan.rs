@@ -1,5 +1,5 @@
 use crate::api::PromptGuardClient;
-use crate::config::ConfigManager;
+use crate::auth::{resolve_api_key, resolve_base_url};
 use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
@@ -65,11 +65,12 @@ impl ScanCommand {
             ));
         };
 
-        // Get API key from config
-        let config_manager = ConfigManager::new(None)?;
-        let config = config_manager.load()?;
+        // Resolve credentials from env var, project config, or global login —
+        // this command works without a project being initialized.
+        let api_key = resolve_api_key()?;
+        let base_url = resolve_base_url();
 
-        let client = PromptGuardClient::new(config.api_key, Some(config.proxy_url))?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         if !self.json {
             Output::header(&format!(

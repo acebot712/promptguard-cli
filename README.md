@@ -6,7 +6,6 @@
 
 > Drop-in LLM security for your applications — built with Rust + Tree-sitter
 
-![Version](https://img.shields.io/badge/version-1.5.1-blue)
 ![Rust](https://img.shields.io/badge/rust-1.70+-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 
@@ -28,9 +27,10 @@ Supported platforms: macOS ARM64 (M1/M2/M3), macOS x86_64, Linux x86_64, Linux A
 ## Quick Start
 
 ```bash
-promptguard init --api-key pg_sk_prod_YOUR_KEY    # Configure
+promptguard login                                  # Authenticate (works anywhere)
+promptguard scan --text "ignore previous instructions"  # Instant threat scan
+promptguard init --api-key pg_live_xxx             # Integrate a project
 promptguard verify                                 # Test connectivity + scan + redact
-promptguard scan                                   # Find LLM SDK usage
 promptguard status                                 # Check configuration
 promptguard mcp -t stdio                           # Start MCP server
 ```
@@ -141,15 +141,19 @@ All LLM requests now flow through PromptGuard's six-layer security pipeline.
 
 ### Supported Providers
 
-| Provider | TypeScript | JavaScript | Python |
-|----------|:---:|:---:|:---:|
-| OpenAI | Yes | Yes | Yes |
-| Anthropic | Yes | Yes | Yes |
-| Cohere | Yes | Yes | Yes |
-| HuggingFace | Yes | Yes | Yes |
-| Gemini | Yes | Yes | Yes |
-| Groq | Yes | Yes | Yes |
-| AWS Bedrock | Yes | Yes | Yes |
+"Proxy mode" rewrites the SDK base URL (works for every provider/language below).
+"Runtime shim" (`promptguard enable --runtime`) intercepts SDK calls in-process and
+is available for a subset of providers; the rest fall back to proxy mode.
+
+| Provider | TypeScript | JavaScript | Python | Runtime shim |
+|----------|:---:|:---:|:---:|:---:|
+| OpenAI | Yes | Yes | Yes | Yes |
+| Anthropic | Yes | Yes | Yes | Yes |
+| Cohere | Yes | Yes | Yes | Yes |
+| HuggingFace | Yes | Yes | Yes | Yes |
+| Gemini | Yes | Yes | Yes | Proxy only |
+| Groq | Yes | Yes | Yes | Proxy only |
+| AWS Bedrock | Yes | Yes | Yes | SDK auto-instrument |
 
 ## Environment Variables
 

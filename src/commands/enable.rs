@@ -118,6 +118,15 @@ impl EnableCommand {
             .filter_map(|p| Provider::parse(p))
             .collect();
 
+        // Warn about providers that have no runtime shim yet (they still work
+        // via proxy mode, so this is informational, not a hard failure).
+        for provider in providers.iter().filter(|p| !p.has_runtime_shim()) {
+            Output::warning(&format!(
+                "Runtime shim not yet available for {} — use proxy mode instead (run 'promptguard enable' without --runtime)",
+                provider.display_name()
+            ));
+        }
+
         let generator = ShimGenerator::new(
             root_path,
             config.proxy_url.clone(),

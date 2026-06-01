@@ -25,7 +25,7 @@ Expected output: Should detect OpenAI SDK usage in all 3 files
 ### Test Initialization
 
 ```bash
-promptguard init --api-key pg_sk_test_xxx --dry-run
+promptguard init --api-key pg_live_xxx --dry-run
 ```
 
 Expected behavior: Should show transformations for TypeScript, JavaScript, and Python files
@@ -33,7 +33,7 @@ Expected behavior: Should show transformations for TypeScript, JavaScript, and P
 ### Test Apply
 
 ```bash
-promptguard init --api-key pg_sk_test_xxx
+promptguard init --api-key pg_live_xxx
 promptguard apply
 ```
 

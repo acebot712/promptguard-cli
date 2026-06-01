@@ -4,6 +4,17 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Validate a `PromptGuard` API key's format.
+///
+/// Production keys use the canonical `pg_live_` prefix. The check is kept
+/// permissive (any `pg_` prefix) to remain forward-compatible with future
+/// key classes the backend may introduce.
+pub fn is_valid_api_key(key: &str) -> bool {
+    // Permissive on prefix (forward-compatible), but reject obviously-malformed
+    // input: bare `pg_`, embedded whitespace, or a too-short truncated paste.
+    key.starts_with("pg_") && key.len() >= 16 && !key.chars().any(char::is_whitespace)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,7 +98,7 @@ fn default_env_var_name() -> String {
 impl PromptGuardConfig {
     pub fn new(api_key: String, proxy_url: String, providers: Vec<String>) -> Result<Self> {
         // Validate API key format
-        if !api_key.starts_with("pg_sk_test_") && !api_key.starts_with("pg_sk_prod_") {
+        if !is_valid_api_key(&api_key) {
             return Err(PromptGuardError::InvalidApiKey);
         }
 

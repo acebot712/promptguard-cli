@@ -281,7 +281,7 @@ impl InitCommand {
             Output::success("PromptGuard is now active!");
             println!("\nNext steps:");
             println!("  • Run your app normally - all LLM requests now go through PromptGuard");
-            println!("  • View logs: promptguard logs --follow");
+            println!("  • View logs: promptguard logs");
             println!("  • Check dashboard: https://app.promptguard.co/dashboard");
             println!("\n💡 To revert changes: git diff (review) | git checkout -- . (undo)");
         } else {
@@ -398,7 +398,7 @@ impl InitCommand {
                 },
             }
         } else if self.dry_run {
-            return Ok("pg_sk_test_demo123456789012345678901234".to_string());
+            return Ok("pg_live_demo123456789012345678901234".to_string());
         } else {
             return Err(crate::error::PromptGuardError::Custom(
                 "API key required in non-interactive mode. Use --api-key flag or set PROMPTGUARD_API_KEY".to_string(),
@@ -412,7 +412,7 @@ impl InitCommand {
         }
 
         // Validate API key format
-        if !api_key.starts_with("pg_sk_test_") && !api_key.starts_with("pg_sk_prod_") {
+        if !crate::config::is_valid_api_key(&api_key) {
             return Err(crate::error::PromptGuardError::InvalidApiKey);
         }
 

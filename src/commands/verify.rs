@@ -34,11 +34,11 @@ impl VerifyCommand {
         Output::section("Connectivity", "🌐");
         match client.health_check() {
             Ok(()) => {
-                Output::success("✓ API endpoint is reachable");
+                Output::success("API endpoint is reachable");
                 passed += 1;
             },
             Err(e) => {
-                Output::error(&format!("✗ API unreachable: {e}"));
+                Output::error(&format!("API unreachable: {e}"));
                 failed += 1;
                 return self.report(passed, failed);
             },
@@ -46,12 +46,10 @@ impl VerifyCommand {
 
         // 2. API key format
         Output::section("Authentication", "🔑");
-        if api_key.starts_with("pg_live_") || api_key.starts_with("pg_sk_prod_") {
-            Output::success("✓ Production API key detected");
-        } else if api_key.starts_with("pg_sk_test_") || api_key.starts_with("pg_test_") {
-            Output::success("✓ Test API key detected");
+        if api_key.starts_with("pg_live_") {
+            Output::success("API key format is valid");
         } else {
-            Output::warning("⚠ Non-standard API key prefix");
+            Output::warning("Non-standard API key prefix");
         }
         passed += 1;
 
@@ -66,14 +64,14 @@ impl VerifyCommand {
         match scan_result {
             Ok(r) => {
                 if r.blocked {
-                    Output::success("✓ Injection correctly blocked");
+                    Output::success("Injection correctly blocked");
                 } else {
-                    Output::warning("⚠ Injection was not blocked (check policy)");
+                    Output::warning("Injection was not blocked (check policy)");
                 }
                 passed += 1;
             },
             Err(e) => {
-                Output::error(&format!("✗ Scan failed: {e}"));
+                Output::error(&format!("Scan failed: {e}"));
                 failed += 1;
             },
         }
@@ -88,14 +86,14 @@ impl VerifyCommand {
         match redact_result {
             Ok(r) => {
                 if r.pii_found.is_empty() {
-                    Output::warning("⚠ No PII detected in test input");
+                    Output::warning("No PII detected in test input");
                 } else {
-                    Output::success(&format!("✓ PII detected ({})", r.pii_found.join(", ")));
+                    Output::success(&format!("PII detected ({})", r.pii_found.join(", ")));
                 }
                 passed += 1;
             },
             Err(e) => {
-                Output::error(&format!("✗ Redaction failed: {e}"));
+                Output::error(&format!("Redaction failed: {e}"));
                 failed += 1;
             },
         }

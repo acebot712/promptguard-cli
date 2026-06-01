@@ -34,8 +34,11 @@ pub enum PromptGuardError {
     #[error("Not initialized. Run 'promptguard init' first")]
     NotInitialized,
 
-    #[error("Invalid API key format. Must start with 'pg_sk_test_' or 'pg_sk_prod_'")]
+    #[error("Invalid API key format. Must start with 'pg_live_'")]
     InvalidApiKey,
+
+    #[error("Authentication failed: {0}")]
+    Auth(String),
 
     #[error("{0}")]
     Custom(String),
