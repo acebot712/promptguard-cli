@@ -30,14 +30,18 @@ impl WhoamiCommand {
         let base_url = resolve_base_url();
         let masked_key = Output::mask_api_key(&api_key);
 
-        // Determine the source of the key
-        let source = if std::env::var("PROMPTGUARD_API_KEY").is_ok() {
-            "environment variable (PROMPTGUARD_API_KEY)"
-        } else if crate::config::ConfigManager::new(None)
+        // Determine the source of the key, mirroring resolve_api_key's
+        // precedence: env var > project config (only if its key is non-empty)
+        // > global credentials.
+        let env_key_set = std::env::var("PROMPTGUARD_API_KEY").is_ok_and(|v| !v.is_empty());
+        let project_key_set = crate::config::ConfigManager::new(None)
             .ok()
             .and_then(|m| m.load().ok())
-            .is_some()
-        {
+            .is_some_and(|cfg| !cfg.api_key.is_empty());
+
+        let source = if env_key_set {
+            "environment variable (PROMPTGUARD_API_KEY)"
+        } else if project_key_set {
             "project config (.promptguard.json)"
         } else {
             "global credentials (~/.promptguard/credentials.json)"

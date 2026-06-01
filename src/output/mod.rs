@@ -113,14 +113,43 @@ impl Output {
         println!("  {circle} {msg}");
     }
 
+    /// Mask an API key for display, revealing only the non-secret class
+    /// prefix and the last 4 characters (e.g. `pg_live_…a1b2`).
+    ///
+    /// The `pg_live_` segment is a public key-class marker, not part of the
+    /// secret, so it is safe to show. Everything between the prefix and the
+    /// trailing 4 characters is hidden.
     pub fn mask_api_key(key: &str) -> String {
-        if key.len() <= 12 {
-            return "*".repeat(key.len());
+        const SUFFIX_LEN: usize = 4;
+
+        // Show the recognised key-class prefix if present; otherwise fall
+        // back to the generic `pg_` marker (or nothing for unknown keys).
+        let prefix = if key.starts_with("pg_live_") {
+            "pg_live_"
+        } else if key.starts_with("pg_") {
+            "pg_"
+        } else {
+            ""
+        };
+
+        // Count by characters, not bytes: byte-slicing a non-ASCII key on a
+        // non-char-boundary panics. `prefix` is ASCII so `prefix.len()` is its
+        // char count.
+        let total_chars = key.chars().count();
+        let prefix_chars = prefix.len();
+
+        // If the key is too short to mask meaningfully, fully redact it
+        // (one '*' per character).
+        if total_chars <= prefix_chars + SUFFIX_LEN {
+            return "*".repeat(total_chars);
         }
 
-        let prefix = &key[..12];
-        let masked_part = "*".repeat(key.len() - 12);
-        format!("{prefix}{masked_part}")
+        // Take the last SUFFIX_LEN characters in order, char-boundary-safe.
+        // Never reveals more than the prefix + last 4 characters.
+        let mut tail: Vec<char> = key.chars().rev().take(SUFFIX_LEN).collect();
+        tail.reverse();
+        let suffix: String = tail.into_iter().collect();
+        format!("{prefix}…{suffix}")
     }
 
     pub fn confirm(prompt: &str, default: bool) -> Result<bool> {
@@ -154,5 +183,62 @@ impl Output {
             .map_err(PromptGuardError::Io)?;
 
         Ok(input.trim().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mask_reveals_prefix_and_last_four() {
+        let masked = Output::mask_api_key("pg_live_abcdefghijklmnop1234");
+        assert_eq!(masked, "pg_live_…1234");
+    }
+
+    #[test]
+    fn mask_generic_pg_prefix() {
+        let masked = Output::mask_api_key("pg_secrettokenvalue9876");
+        assert_eq!(masked, "pg_…9876");
+    }
+
+    #[test]
+    fn mask_unknown_prefix_has_no_class_marker() {
+        let masked = Output::mask_api_key("sk-someothertoken5678");
+        assert_eq!(masked, "…5678");
+    }
+
+    #[test]
+    fn mask_short_key_is_fully_redacted() {
+        // Shorter than prefix + 4 suffix chars: never reveal anything.
+        let masked = Output::mask_api_key("pg_live_");
+        assert_eq!(masked, "********");
+        assert!(!masked.contains("pg_live_"));
+
+        let masked = Output::mask_api_key("pg_ab");
+        assert_eq!(masked, "*****");
+    }
+
+    #[test]
+    fn mask_non_ascii_key_does_not_panic() {
+        // A corrupted / non-ASCII key must not panic on byte-slicing.
+        // Multi-byte chars at the suffix boundary are the failure case the
+        // old `&key[len-4..]` implementation would hit.
+        let masked = Output::mask_api_key("pg_live_corrupted_кириллица");
+        // Last 4 *characters* are "лица"; prefix is recognised and shown.
+        assert_eq!(masked, "pg_live_…лица");
+
+        // Emoji (4-byte chars) at the boundary.
+        let masked = Output::mask_api_key("pg_live_xxxx🔑🔑🔑🔑");
+        assert_eq!(masked, "pg_live_…🔑🔑🔑🔑");
+    }
+
+    #[test]
+    fn mask_short_non_ascii_key_is_fully_redacted_by_char_count() {
+        // 4 characters total (all multi-byte), no recognised prefix: too
+        // short to mask meaningfully (<= 0 prefix + 4 suffix), so it must be
+        // fully redacted with one '*' per *character*, not per byte.
+        let masked = Output::mask_api_key("αβγδ");
+        assert_eq!(masked, "****");
     }
 }

@@ -421,7 +421,7 @@ fn test_config_create_and_load() {
 
     // Create and save config
     let config = PromptGuardConfig::new(
-        "pg_sk_test_demo123456789012345678901234".to_string(),
+        "pg_live_demo123456789012345678901234".to_string(),
         "https://api.promptguard.co/api/v1".to_string(),
         vec!["openai".to_string(), "anthropic".to_string()],
     )
@@ -448,7 +448,7 @@ fn test_config_custom_settings() {
         ConfigManager::new(Some(config_path)).expect("Failed to create config manager");
 
     let mut config = PromptGuardConfig::new(
-        "pg_sk_test_demo123456789012345678901234".to_string(),
+        "pg_live_demo123456789012345678901234".to_string(),
         "https://custom.proxy.example.com/v2".to_string(),
         vec!["openai".to_string()],
     )
@@ -477,7 +477,7 @@ fn test_config_delete() {
         ConfigManager::new(Some(config_path)).expect("Failed to create config manager");
 
     let config = PromptGuardConfig::new(
-        "pg_sk_test_demo123456789012345678901234".to_string(),
+        "pg_live_demo123456789012345678901234".to_string(),
         "https://api.promptguard.co/api/v1".to_string(),
         vec!["openai".to_string()],
     )
@@ -497,26 +497,26 @@ fn test_config_delete() {
 /// Test API key format validation
 #[test]
 fn test_api_key_format_validation() {
-    // Valid test key format
-    let valid_test = "pg_sk_test_demo123456789012345678901234";
+    use promptguard::config::is_valid_api_key;
+
+    // Canonical live key format
     assert!(
-        valid_test.starts_with("pg_sk_test_"),
-        "Should accept test key format"
+        is_valid_api_key("pg_live_demo123456789012345678901234"),
+        "Should accept canonical pg_live_ key format"
     );
 
-    // Valid prod key format
-    let valid_prod = "pg_sk_prod_live123456789012345678901234";
+    // Permissive: any pg_ prefix is accepted for forward-compatibility
     assert!(
-        valid_prod.starts_with("pg_sk_prod_"),
-        "Should accept prod key format"
+        is_valid_api_key("pg_demo123456789012345678901234"),
+        "Should accept any pg_ prefixed key"
     );
 
-    // Invalid formats
-    let invalid = "sk_live_abc123";
+    // Invalid formats (no pg_ prefix)
     assert!(
-        !invalid.starts_with("pg_sk_test_") && !invalid.starts_with("pg_sk_prod_"),
+        !is_valid_api_key("sk_live_abc123"),
         "Should reject non-PromptGuard key formats"
     );
+    assert!(!is_valid_api_key(""), "Should reject empty key");
 }
 
 // =============================================================================
@@ -656,7 +656,7 @@ fn test_status_initialized() {
         ConfigManager::new(Some(config_path)).expect("Failed to create config manager");
 
     let config = PromptGuardConfig::new(
-        "pg_sk_test_demo123456789012345678901234".to_string(),
+        "pg_live_demo123456789012345678901234".to_string(),
         "https://api.promptguard.co/api/v1".to_string(),
         vec!["openai".to_string()],
     )

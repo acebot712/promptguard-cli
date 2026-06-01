@@ -12,9 +12,7 @@ pub struct DoctorCommand {
 
 impl DoctorCommand {
     pub fn execute(&self) -> Result<()> {
-        Output::header("Running diagnostics...");
-
-        println!("\n🩺 Running diagnostics...\n");
+        Output::header("🩺 Diagnostics");
 
         let mut warnings_count = 0;
         let mut errors_count = 0;
@@ -22,10 +20,7 @@ impl DoctorCommand {
         let root_path = std::env::current_dir()?;
 
         // Check CLI version
-        Output::step(&format!(
-            "CLI version: {} (latest)",
-            env!("CARGO_PKG_VERSION")
-        ));
+        Output::step(&format!("CLI version: {}", env!("CARGO_PKG_VERSION")));
 
         // Check config file
         let config_manager = ConfigManager::new(None)?;
@@ -34,9 +29,7 @@ impl DoctorCommand {
                 Ok(config) => {
                     Output::step("Configuration file: .promptguard.json (valid)");
 
-                    if config.api_key.starts_with("pg_sk_test_")
-                        || config.api_key.starts_with("pg_sk_prod_")
-                    {
+                    if crate::config::is_valid_api_key(&config.api_key) {
                         Output::step("API key: valid format");
                     } else {
                         Output::warning("API key: invalid format");

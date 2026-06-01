@@ -22,19 +22,14 @@ impl KeyCommand {
         // Show current key (masked)
         println!("\nCurrent API key:");
         println!(
-            "  {} = {}...{}",
+            "  {} = {}",
             config.env_var_name,
-            &config.api_key[..12], // pg_sk_test_
-            if config.api_key.len() > 16 {
-                &config.api_key[config.api_key.len() - 4..]
-            } else {
-                ""
-            }
+            Output::mask_api_key(&config.api_key)
         );
 
         println!("\nOptions:");
         println!("  1. Update API key");
-        println!("  2. Show full key (masked)");
+        println!("  2. Show full key");
         println!("  3. Rotate key");
         println!("  4. Cancel");
 
@@ -55,7 +50,7 @@ impl KeyCommand {
                 let new_key = new_key.trim().to_string();
 
                 // Validate key format
-                if !new_key.starts_with("pg_sk_test_") && !new_key.starts_with("pg_sk_prod_") {
+                if !crate::config::is_valid_api_key(&new_key) {
                     return Err(PromptGuardError::InvalidApiKey);
                 }
 

@@ -74,7 +74,7 @@ fn tool_definitions() -> serde_json::Value {
                     "properties": {
                         "api_key": {
                             "type": "string",
-                            "description": "PromptGuard API key (starts with pg_sk_test_ or pg_sk_prod_). If omitted, opens the dashboard in the browser for the user to copy their key."
+                            "description": "PromptGuard API key (starts with pg_live_). If omitted, opens the dashboard in the browser for the user to copy their key."
                         }
                     }
                 }
@@ -338,10 +338,8 @@ fn handle_status(_params: &serde_json::Value) -> serde_json::Value {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
 
-        let key_type = if config.api_key.starts_with("pg_sk_test_") {
-            "test"
-        } else if config.api_key.starts_with("pg_sk_prod_") {
-            "production"
+        let key_type = if config.api_key.starts_with("pg_live_") {
+            "live"
         } else {
             "unknown"
         };
@@ -381,14 +379,14 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
             serde_json::json!({
                 "content": [{
                     "type": "text",
-                    "text": "Opened the PromptGuard dashboard in your browser. Please copy your API key (starts with pg_sk_test_ or pg_sk_prod_) and provide it here so I can save it."
+                    "text": "Opened the PromptGuard dashboard in your browser. Please copy your API key (starts with pg_live_) and provide it here so I can save it."
                 }]
             })
         },
         Some(key) => {
-            if !key.starts_with("pg_sk_test_") && !key.starts_with("pg_sk_prod_") {
+            if !crate::config::is_valid_api_key(key) {
                 return serde_json::json!({
-                    "content": [{"type": "text", "text": "Invalid API key format. Keys must start with 'pg_sk_test_' or 'pg_sk_prod_'."}],
+                    "content": [{"type": "text", "text": "Invalid API key format. Keys must start with 'pg_live_'."}],
                     "isError": true
                 });
             }
@@ -413,13 +411,8 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
 
             match result {
                 Ok(()) => {
-                    let key_type = if key.starts_with("pg_sk_test_") {
-                        "test"
-                    } else {
-                        "production"
-                    };
                     serde_json::json!({
-                        "content": [{"type": "text", "text": format!("Authenticated successfully with a {key_type} API key. PromptGuard is ready to use.\n\nTo associate requests with a specific project, set \"project_id\" in .promptguard.json or run 'promptguard projects select <id>'.")}]
+                        "content": [{"type": "text", "text": "Authenticated successfully. PromptGuard is ready to use.\n\nTo associate requests with a specific project, set \"project_id\" in .promptguard.json or run 'promptguard projects select <id>'.".to_string()}]
                     })
                 },
                 Err(e) => serde_json::json!({

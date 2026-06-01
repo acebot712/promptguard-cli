@@ -118,6 +118,12 @@ impl PromptGuardClient {
                         continue;
                     }
 
+                    // Authentication failures are not retryable and must be
+                    // surfaced distinctly (so callers like `login` can tell an
+                    // invalid key apart from a network problem).
+                    let is_auth_error = status == reqwest::StatusCode::UNAUTHORIZED
+                        || status == reqwest::StatusCode::FORBIDDEN;
+
                     // Non-retryable error or out of retries
                     let error_text = response
                         .text()
@@ -125,6 +131,10 @@ impl PromptGuardClient {
 
                     if let Ok(error_response) = serde_json::from_str::<ErrorResponse>(&error_text) {
                         let detail = error_response.error;
+
+                        if is_auth_error {
+                            return Err(PromptGuardError::Auth(detail.message));
+                        }
 
                         if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
                             let mut msg = detail.message.clone();
@@ -146,6 +156,12 @@ impl PromptGuardClient {
                         return Err(PromptGuardError::Api(format!(
                             "API error ({}): {}",
                             status, detail.message
+                        )));
+                    }
+
+                    if is_auth_error {
+                        return Err(PromptGuardError::Auth(format!(
+                            "API rejected the credentials ({status})"
                         )));
                     }
 
@@ -175,6 +191,25 @@ impl PromptGuardClient {
 
     pub fn health_check(&self) -> Result<()> {
         let _: serde_json::Value = self.request(&reqwest::Method::GET, "/health", None)?;
+
+        Ok(())
+    }
+
+    /// Validate the configured API key against an *authenticated* endpoint.
+    ///
+    /// Unlike [`health_check`], which hits an unauthenticated reachability
+    /// probe (`/health`) and therefore "succeeds" for any key, this calls the
+    /// authenticated `GET /projects` endpoint. The backend rejects an invalid
+    /// or deactivated key with 401/403, which `request` surfaces as
+    /// [`PromptGuardError::Auth`] — letting callers (e.g. `login`) distinguish
+    /// a bad key from a transient network problem.
+    ///
+    /// `GET /projects` is chosen because it is a lightweight, side-effect-free
+    /// read that every authenticated account can call; there is no dedicated
+    /// `whoami`/`usage`/`account` endpoint in the API contract.
+    pub fn validate_credentials(&self) -> Result<()> {
+        // We only care whether the request is authorized, not the payload.
+        let _: serde_json::Value = self.request(&reqwest::Method::GET, "/projects", None)?;
 
         Ok(())
     }

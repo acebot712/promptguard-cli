@@ -256,7 +256,7 @@
   "sdk_headers": {
     "description": "Every SDK must send these headers on every request.",
     "required_headers": {
-      "X-API-Key": "The user's API key (pg_live_*, pg_sk_test_*, or pg_sk_prod_*)",
+      "X-API-Key": "The user's API key (pg_live_*)",
       "Content-Type": "application/json"
     },
     "recommended_headers": {

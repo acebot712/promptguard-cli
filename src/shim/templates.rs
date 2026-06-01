@@ -408,8 +408,8 @@ pub fn get_python_provider_patch(provider: Provider) -> &'static str {
         Provider::Anthropic => PYTHON_ANTHROPIC_PATCH,
         Provider::Cohere => PYTHON_COHERE_PATCH,
         Provider::HuggingFace => PYTHON_HUGGINGFACE_PATCH,
-        Provider::Gemini => "# Gemini Python shim - coming soon\n",
-        Provider::Groq => "# Groq Python shim - coming soon\n",
+        Provider::Gemini => "# Runtime shim not yet available for Gemini — use proxy mode instead\n# (set base_url to the PromptGuard proxy on your Gemini client).\n",
+        Provider::Groq => "# Runtime shim not yet available for Groq — use proxy mode instead\n# (set base_url to the PromptGuard proxy on your Groq client).\n",
         Provider::Bedrock => "# Bedrock: use promptguard SDK auto-instrumentation instead\n# pip install promptguard-sdk && promptguard.init()\n",
     }
 }
@@ -423,8 +423,8 @@ pub fn get_python_install_call(provider: Provider) -> &'static str {
         Provider::HuggingFace => {
             "    _shim_huggingface()\n    providers_shimmed.append('HuggingFace')"
         },
-        Provider::Gemini => "    # Gemini shim - coming soon",
-        Provider::Groq => "    # Groq shim - coming soon",
+        Provider::Gemini => "    # Gemini: runtime shim not yet available — use proxy mode",
+        Provider::Groq => "    # Groq: runtime shim not yet available — use proxy mode",
         Provider::Bedrock => {
             "    # Bedrock: use promptguard SDK auto-instrumentation (promptguard.init())"
         },
@@ -438,8 +438,8 @@ pub fn get_typescript_provider_export(provider: Provider) -> &'static str {
         Provider::Anthropic => TYPESCRIPT_ANTHROPIC_EXPORT,
         Provider::Cohere => TYPESCRIPT_COHERE_EXPORT,
         Provider::HuggingFace => TYPESCRIPT_HUGGINGFACE_EXPORT,
-        Provider::Gemini => "// Gemini TypeScript shim - coming soon\n",
-        Provider::Groq => "// Groq TypeScript shim - coming soon\n",
+        Provider::Gemini => "// Runtime shim not yet available for Gemini — use proxy mode instead\n// (set baseURL to the PromptGuard proxy on your Gemini client).\n",
+        Provider::Groq => "// Runtime shim not yet available for Groq — use proxy mode instead\n// (set baseURL to the PromptGuard proxy on your Groq client).\n",
         Provider::Bedrock => "// Bedrock: use promptguard SDK auto-instrumentation instead\n// npm install promptguard-sdk && require('promptguard-sdk').init()\n",
     }
 }

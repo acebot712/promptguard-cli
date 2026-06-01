@@ -27,7 +27,7 @@ fn test_scan_command_accepts_text_flag() {
         ConfigManager::new(Some(config_path)).expect("Failed to create config manager");
 
     let config = PromptGuardConfig::new(
-        "pg_sk_test_demo123456789012345678901234".to_string(),
+        "pg_live_demo123456789012345678901234".to_string(),
         "https://api.promptguard.co/api/v1".to_string(),
         vec!["openai".to_string()],
     )
@@ -118,7 +118,7 @@ fn test_logs_command_uses_project_id() {
         ConfigManager::new(Some(config_path)).expect("Failed to create config manager");
 
     let mut config = PromptGuardConfig::new(
-        "pg_sk_test_demo123456789012345678901234".to_string(),
+        "pg_live_demo123456789012345678901234".to_string(),
         "https://api.promptguard.co/api/v1".to_string(),
         vec!["openai".to_string()],
     )
