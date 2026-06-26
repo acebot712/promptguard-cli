@@ -65,23 +65,36 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+  # Cost control: macOS runners bill at 10x the Linux rate, so the macos leg of
+  # this matrix was the dominant Actions spend. Run it only on main pushes and
+  # the nightly cron (full platform coverage where it counts); on pull_request
+  # — by far the most frequent trigger — test Linux-only (stable + beta, which
+  # already cover the compiler axis). set-matrix emits the include list per
+  # event. macos-stable still runs on every merge, so platform regressions are
+  # caught before release at a fraction of the per-PR cost.
+  set-matrix:
+    name: Select test matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      matrix: ${{ steps.pick.outputs.matrix }}
+    steps:
+      - id: pick
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo 'matrix={"include":[{"os":"ubuntu-latest","rust":"stable"},{"os":"ubuntu-latest","rust":"beta"}]}' >> "$GITHUB_OUTPUT"
+          else
+            echo 'matrix={"include":[{"os":"ubuntu-latest","rust":"stable"},{"os":"ubuntu-latest","rust":"beta"},{"os":"macos-latest","rust":"stable"}]}' >> "$GITHUB_OUTPUT"
+          fi
+
   test:
     name: Test Suite
+    needs: set-matrix
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        # Trimmed: ubuntu*{stable,beta} + macos*stable.
-        # Dropped macos*beta -- 10x runner cost for signal already
-        # covered by ubuntu-beta (compiler) and macos-stable (platform).
-        include:
-          - os: ubuntu-latest
-            rust: stable
-          - os: ubuntu-latest
-            rust: beta
-          - os: macos-latest
-            rust: stable
+      matrix: ${{ fromJSON(needs.set-matrix.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v6
 
