@@ -297,6 +297,63 @@ mod tests {
         );
     }
 
+    /// Async client classes (`AsyncOpenAI`/`AsyncAnthropic`/`AsyncGroq`/
+    /// `AsyncInferenceClient`) must be detected — previously they were
+    /// invisible while `enable --runtime` claimed full coverage.
+    #[test]
+    fn async_client_classes_are_detected() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("async_clients.py");
+        std::fs::write(
+            &path,
+            "from openai import AsyncOpenAI\n\
+             from anthropic import AsyncAnthropic\n\
+             from groq import AsyncGroq\n\
+             from huggingface_hub import AsyncInferenceClient\n\
+             c1 = AsyncOpenAI()\n\
+             c2 = AsyncAnthropic(api_key=key)\n\
+             c3 = AsyncGroq(api_key=key)\n\
+             c4 = AsyncInferenceClient(token=key)\n",
+        )
+        .unwrap();
+
+        let results = detect_all_providers_in_file(&path).unwrap();
+        for provider in [
+            Provider::OpenAI,
+            Provider::Anthropic,
+            Provider::Groq,
+            Provider::HuggingFace,
+        ] {
+            let instances = results
+                .iter()
+                .find(|(p, _)| *p == provider)
+                .map_or(0, |(_, r)| r.instances.len());
+            assert_eq!(
+                instances, 1,
+                "async client class for {provider:?} must be detected"
+            );
+        }
+    }
+
+    /// Module-qualified async constructor calls must also be detected.
+    #[test]
+    fn module_qualified_async_client_is_detected() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("async_attr.py");
+        std::fs::write(
+            &path,
+            "import openai\nclient = openai.AsyncOpenAI(api_key=key)\n",
+        )
+        .unwrap();
+
+        let results = detect_all_providers_in_file(&path).unwrap();
+        let openai = results
+            .iter()
+            .find(|(p, _)| *p == Provider::OpenAI)
+            .map_or(0, |(_, r)| r.instances.len());
+        assert_eq!(openai, 1, "openai.AsyncOpenAI(...) must be detected");
+    }
+
     #[test]
     fn grammar_selection_by_extension() {
         assert_eq!(Grammar::for_extension("ts"), Some(Grammar::TypeScript));

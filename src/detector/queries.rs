@@ -5,6 +5,7 @@
 /// Gemini and Bedrock have special patterns.
 use crate::detector::registry::ProviderInfo;
 use crate::types::Provider;
+use std::fmt::Write;
 
 pub fn get_typescript_query(provider: Provider) -> String {
     // An unregistered provider yields an empty query (matches nothing)
@@ -24,26 +25,45 @@ pub fn get_typescript_query(provider: Provider) -> String {
     )
 }
 
-fn standard_python_detection_query(class_name: &str) -> String {
-    format!(
-        r#"
-            [
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "{class_name}")
-                    arguments: (argument_list) @args
-                ) @call_expr
+/// Detection query for the standard providers: bare-identifier and
+/// attribute-form constructor calls, for the sync class name AND the SDK's
+/// async client class (`AsyncOpenAI`, `AsyncAnthropic`, `AsyncGroq`,
+/// `AsyncInferenceClient`) when the registry declares one. Async clients
+/// used to be invisible to detection entirely.
+///
+/// NOTE: the patterns are emitted as SEPARATE top-level query patterns, not
+/// one `[...]` alternation. Branches of a top-level alternation share a
+/// single pattern index, so their `#eq?` predicates accumulate — a capture
+/// name reused across branches with different expected values (`@function`
+/// = `"OpenAI"` vs `"AsyncOpenAI"`) could then never match anything.
+fn standard_python_detection_query(info: &ProviderInfo) -> String {
+    let mut patterns = String::new();
 
-                (call
-                    function: (attribute
-                        attribute: (identifier) @class
-                        (#eq? @class "{class_name}")
-                    )
-                    arguments: (argument_list) @args
-                ) @call_expr
-            ]
+    for class_name in [info.py_class_name, info.py_async_class_name] {
+        if class_name.is_empty() {
+            continue;
+        }
+        let _ = write!(
+            patterns,
+            r#"
+            (call
+                function: (identifier) @function
+                (#eq? @function "{class_name}")
+                arguments: (argument_list) @args
+            ) @call_expr
+
+            (call
+                function: (attribute
+                    attribute: (identifier) @class
+                    (#eq? @class "{class_name}")
+                )
+                arguments: (argument_list) @args
+            ) @call_expr
         "#
-    )
+        );
+    }
+
+    patterns
 }
 
 /// Transform query for the standard providers: bare-identifier calls
@@ -58,45 +78,48 @@ fn standard_python_detection_query(class_name: &str) -> String {
 /// `openai.OpenAI(...)` calls were silently reported "(no changes needed)"
 /// and never routed through the proxy.
 fn standard_python_transform_query(info: &ProviderInfo) -> String {
-    let class_name = info.py_class_name;
     let module_name = info.py_module_name;
+    let mut patterns = String::new();
 
-    let identifier_pattern = format!(
-        r#"
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "{class_name}")
-                    arguments: (argument_list) @args
-                ) @call_expr
-        "#
-    );
+    // Both the sync class and (when the registry declares one) the async
+    // client class accept the same base_url= keyword, so both are
+    // transformable. Separate top-level patterns, NOT one alternation —
+    // see standard_python_detection_query for why.
+    for class_name in [info.py_class_name, info.py_async_class_name] {
+        if class_name.is_empty() {
+            continue;
+        }
 
-    let attribute_pattern = if module_name.is_empty() {
-        String::new()
-    } else {
-        format!(
+        let _ = write!(
+            patterns,
             r#"
-                (call
-                    function: (attribute
-                        object: (identifier) @module
-                        (#eq? @module "{module_name}")
-                        attribute: (identifier) @class
-                        (#eq? @class "{class_name}")
-                    )
-                    arguments: (argument_list) @args
-                ) @call_expr
+            (call
+                function: (identifier) @function
+                (#eq? @function "{class_name}")
+                arguments: (argument_list) @args
+            ) @call_expr
         "#
-        )
-    };
+        );
 
-    format!(
-        r"
-            [
-{identifier_pattern}
-{attribute_pattern}
-            ]
-        "
-    )
+        if !module_name.is_empty() {
+            let _ = write!(
+                patterns,
+                r#"
+            (call
+                function: (attribute
+                    object: (identifier) @module
+                    (#eq? @module "{module_name}")
+                    attribute: (identifier) @class
+                    (#eq? @class "{class_name}")
+                )
+                arguments: (argument_list) @args
+            ) @call_expr
+        "#
+            );
+        }
+    }
+
+    patterns
 }
 
 pub fn get_python_detection_query(provider: Provider) -> String {
@@ -172,7 +195,7 @@ pub fn get_python_detection_query(provider: Provider) -> String {
         "#
         .to_string(),
         _ => ProviderInfo::get(provider)
-            .map(|info| standard_python_detection_query(info.py_class_name))
+            .map(standard_python_detection_query)
             .unwrap_or_default(),
     }
 }

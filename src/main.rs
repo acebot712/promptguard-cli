@@ -176,7 +176,8 @@ enum Commands {
     ///
     /// Restores proxy routing for LLM requests.
     Enable {
-        /// Use runtime shims for 100% SDK call coverage (recommended)
+        /// Use runtime shims that intercept the supported SDK client
+        /// classes, sync and async (recommended)
         #[arg(long)]
         runtime: bool,
 

@@ -208,14 +208,17 @@ This directory contains auto-generated runtime interception code.
 
 ## What is this?
 
-The PromptGuard runtime shim ensures that **all** LLM SDK calls in your application
-automatically route through PromptGuard for security monitoring and protection.
+The PromptGuard runtime shim intercepts the patched LLM SDK client classes
+(sync and async) so their API calls automatically route through PromptGuard
+for security monitoring and protection.
 
-This provides 100% coverage, even for:
+For those patched classes, interception works even with:
 - Dynamically constructed URLs
 - Configuration loaded from external sources
 - Environment variables
 - SDKs initialized in third-party libraries
+
+Classes and SDKs that are not patched are NOT intercepted.
 
 ## How it works
 
@@ -311,6 +314,34 @@ mod tests {
         assert!(content.contains("def _shim_openai()"));
         assert!(content.contains("def _shim_anthropic()"));
         assert!(content.contains("https://api.promptguard.co/api/v1"));
+    }
+
+    /// The Python shim must patch the async client classes too — async
+    /// clients used to bypass the shim entirely while `enable --runtime`
+    /// claimed full coverage.
+    #[test]
+    fn test_python_shim_patches_async_clients() {
+        let temp_dir = TempDir::new().unwrap();
+        let generator = ShimGenerator::new(
+            temp_dir.path(),
+            "https://api.promptguard.co/api/v1".to_string(),
+            vec![
+                Provider::OpenAI,
+                Provider::Anthropic,
+                Provider::Cohere,
+                Provider::HuggingFace,
+            ],
+        );
+
+        let shim_path = generator.generate_python_shim().unwrap();
+        let content = fs::read_to_string(&shim_path).unwrap();
+
+        assert!(content.contains("openai.AsyncOpenAI = PatchedAsyncOpenAI"));
+        assert!(content.contains("anthropic.AsyncAnthropic = PatchedAsyncAnthropic"));
+        assert!(content.contains("cohere.AsyncClient = PatchedAsyncCohereClient"));
+        assert!(
+            content.contains("huggingface_hub.AsyncInferenceClient = PatchedAsyncInferenceClient")
+        );
     }
 
     #[test]

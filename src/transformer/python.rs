@@ -464,6 +464,31 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), input);
     }
 
+    /// Async client constructors (`AsyncOpenAI`) accept `base_url` too and must
+    /// be transformed — previously they were neither detected nor rewritten.
+    #[test]
+    fn async_client_constructor_is_transformed() {
+        let input = "from openai import AsyncOpenAI\nclient = AsyncOpenAI(api_key=key)\n";
+        let out = transform_python(input);
+        assert!(
+            out.contains("base_url=\"https://api.promptguard.co/api/v1\""),
+            "AsyncOpenAI(...) must be transformed:\n{out}"
+        );
+        assert_reparses_clean(&out);
+    }
+
+    /// Module-qualified async constructor calls are transformed as well.
+    #[test]
+    fn module_qualified_async_client_is_transformed() {
+        let input = "import openai\nclient = openai.AsyncOpenAI(api_key=key)\n";
+        let out = transform_python(input);
+        assert!(
+            out.contains("base_url=\"https://api.promptguard.co/api/v1\""),
+            "openai.AsyncOpenAI(...) must be transformed:\n{out}"
+        );
+        assert_reparses_clean(&out);
+    }
+
     #[test]
     fn os_import_detection_true_positives() {
         assert!(has_os_import("import os\n"));

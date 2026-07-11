@@ -13,6 +13,10 @@ pub struct ProviderInfo {
     /// module-qualified constructor calls (`openai.OpenAI(...)`). Empty for
     /// providers whose queries are special-cased (Gemini, Bedrock).
     pub py_module_name: &'static str,
+    /// Async client class name (`AsyncOpenAI`, ...), empty when the SDK has
+    /// no distinct async client class (or it is too generically named to
+    /// match safely, e.g. Cohere's `AsyncClient`).
+    pub py_async_class_name: &'static str,
     pub ts_class_name: &'static str,
     pub ts_base_url_param: &'static str,
     pub ts_api_key_param: &'static str,
@@ -23,6 +27,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::OpenAI,
         py_class_name: "OpenAI",
         py_module_name: "openai",
+        py_async_class_name: "AsyncOpenAI",
         ts_class_name: "OpenAI",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -31,6 +36,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::Anthropic,
         py_class_name: "Anthropic",
         py_module_name: "anthropic",
+        py_async_class_name: "AsyncAnthropic",
         ts_class_name: "Anthropic",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -39,6 +45,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::Cohere,
         py_class_name: "CohereClient",
         py_module_name: "cohere",
+        py_async_class_name: "",
         ts_class_name: "CohereClient",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -47,6 +54,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::HuggingFace,
         py_class_name: "InferenceClient",
         py_module_name: "huggingface_hub",
+        py_async_class_name: "AsyncInferenceClient",
         ts_class_name: "HfInference",
         ts_base_url_param: "baseUrl",
         ts_api_key_param: "accessToken",
@@ -55,6 +63,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::Gemini,
         py_class_name: "Client",
         py_module_name: "",
+        py_async_class_name: "",
         ts_class_name: "GoogleGenAI",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -63,6 +72,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::Groq,
         py_class_name: "Groq",
         py_module_name: "groq",
+        py_async_class_name: "AsyncGroq",
         ts_class_name: "Groq",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -71,6 +81,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         provider: Provider::Bedrock,
         py_class_name: "",
         py_module_name: "",
+        py_async_class_name: "",
         ts_class_name: "BedrockRuntimeClient",
         ts_base_url_param: "",
         ts_api_key_param: "",

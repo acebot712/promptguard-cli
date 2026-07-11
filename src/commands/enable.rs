@@ -39,7 +39,7 @@ impl EnableCommand {
 
         // Determine mode
         let mode = if self.runtime {
-            "Runtime Shim Mode (100% Coverage)"
+            "Runtime Shim Mode"
         } else {
             "Static Transform Mode"
         };
@@ -51,7 +51,7 @@ impl EnableCommand {
 
         if self.runtime {
             println!("\nRuntime mode provides:");
-            println!("  ✓ 100% coverage of all SDK calls");
+            println!("  ✓ Intercepts the patched SDK client classes (sync and async)");
             println!("  ✓ Catches dynamic URL construction");
             println!("  ✓ Works with environment variables");
             println!("  ✓ No code modification needed");
@@ -199,7 +199,24 @@ impl EnableCommand {
         Output::success("PromptGuard runtime mode enabled!");
         println!("\n  • Shim files generated: {}", shim_files.len());
         println!("  • Entry points injected: {total_injected}");
-        println!("\n  Coverage: 100% - All SDK calls will route through PromptGuard");
+
+        // Be honest about coverage: list exactly which client classes the
+        // generated shim patches instead of claiming "100% - All SDK calls".
+        let mut any_patched = false;
+        println!("\n  Coverage — calls constructed via these patched classes route");
+        println!("  through PromptGuard:");
+        for provider in &providers {
+            let classes = crate::shim::templates::get_python_patched_classes(*provider);
+            if !classes.is_empty() {
+                println!("    • {}: {}", provider.display_name(), classes.join(", "));
+                any_patched = true;
+            }
+        }
+        if !any_patched {
+            println!("    (none — no configured provider has a runtime shim yet)");
+        }
+        println!("  Other classes/SDKs are not intercepted by the runtime shim.");
+
         println!("\n  Shim directory: .promptguard/");
         println!("  (Safe to commit to version control)");
 

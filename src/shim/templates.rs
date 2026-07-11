@@ -100,7 +100,7 @@ _install_shims()
 /// `OpenAI` Python provider patch template
 pub const PYTHON_OPENAI_PATCH: &str = r#"
 def _shim_openai() -> None:
-    """Monkey-patch OpenAI SDK."""
+    """Monkey-patch OpenAI SDK (sync and async clients)."""
     if "openai" in _shimmed_providers:
         return
 
@@ -122,6 +122,23 @@ def _shim_openai() -> None:
 
         # Apply monkey-patch
         openai.OpenAI = PatchedOpenAI
+
+        # Async client (guarded: very old SDKs may not expose it)
+        if hasattr(openai, "AsyncOpenAI"):
+            if "AsyncOpenAI" not in _original_classes:
+                _original_classes["AsyncOpenAI"] = openai.AsyncOpenAI
+
+            original_async_openai = _original_classes["AsyncOpenAI"]
+
+            class PatchedAsyncOpenAI(original_async_openai):
+                """PromptGuard-wrapped AsyncOpenAI client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "AsyncOpenAI", "base_url")
+                    super().__init__(**kwargs)
+
+            openai.AsyncOpenAI = PatchedAsyncOpenAI
+
         _shimmed_providers.add("openai")
         _debug("OpenAI SDK shimmed successfully")
 
@@ -134,7 +151,7 @@ def _shim_openai() -> None:
 /// Anthropic Python provider patch template
 pub const PYTHON_ANTHROPIC_PATCH: &str = r#"
 def _shim_anthropic() -> None:
-    """Monkey-patch Anthropic SDK."""
+    """Monkey-patch Anthropic SDK (sync and async clients)."""
     if "anthropic" in _shimmed_providers:
         return
 
@@ -156,6 +173,23 @@ def _shim_anthropic() -> None:
 
         # Apply monkey-patch
         anthropic.Anthropic = PatchedAnthropic
+
+        # Async client (guarded: very old SDKs may not expose it)
+        if hasattr(anthropic, "AsyncAnthropic"):
+            if "AsyncAnthropic" not in _original_classes:
+                _original_classes["AsyncAnthropic"] = anthropic.AsyncAnthropic
+
+            original_async_anthropic = _original_classes["AsyncAnthropic"]
+
+            class PatchedAsyncAnthropic(original_async_anthropic):
+                """PromptGuard-wrapped AsyncAnthropic client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "AsyncAnthropic", "base_url")
+                    super().__init__(**kwargs)
+
+            anthropic.AsyncAnthropic = PatchedAsyncAnthropic
+
         _shimmed_providers.add("anthropic")
         _debug("Anthropic SDK shimmed successfully")
 
@@ -168,7 +202,7 @@ def _shim_anthropic() -> None:
 /// Cohere Python provider patch template
 pub const PYTHON_COHERE_PATCH: &str = r#"
 def _shim_cohere() -> None:
-    """Monkey-patch Cohere SDK."""
+    """Monkey-patch Cohere SDK (sync and async clients)."""
     if "cohere" in _shimmed_providers:
         return
 
@@ -190,6 +224,23 @@ def _shim_cohere() -> None:
 
         # Apply monkey-patch
         cohere.Client = PatchedCohereClient
+
+        # Async client (guarded: very old SDKs may not expose it)
+        if hasattr(cohere, "AsyncClient"):
+            if "CohereAsyncClient" not in _original_classes:
+                _original_classes["CohereAsyncClient"] = cohere.AsyncClient
+
+            original_async_cohere = _original_classes["CohereAsyncClient"]
+
+            class PatchedAsyncCohereClient(original_async_cohere):
+                """PromptGuard-wrapped Cohere async client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "CohereAsync", "base_url")
+                    super().__init__(**kwargs)
+
+            cohere.AsyncClient = PatchedAsyncCohereClient
+
         _shimmed_providers.add("cohere")
         _debug("Cohere SDK shimmed successfully")
 
@@ -202,7 +253,7 @@ def _shim_cohere() -> None:
 /// `HuggingFace` Python provider patch template
 pub const PYTHON_HUGGINGFACE_PATCH: &str = r#"
 def _shim_huggingface() -> None:
-    """Monkey-patch HuggingFace InferenceClient."""
+    """Monkey-patch HuggingFace InferenceClient (sync and async)."""
     if "huggingface" in _shimmed_providers:
         return
 
@@ -225,6 +276,23 @@ def _shim_huggingface() -> None:
 
         # Apply monkey-patch
         huggingface_hub.InferenceClient = PatchedInferenceClient
+
+        # Async client (guarded: added in later huggingface_hub releases)
+        if hasattr(huggingface_hub, "AsyncInferenceClient"):
+            if "AsyncInferenceClient" not in _original_classes:
+                _original_classes["AsyncInferenceClient"] = huggingface_hub.AsyncInferenceClient
+
+            original_async_hf = _original_classes["AsyncInferenceClient"]
+
+            class PatchedAsyncInferenceClient(original_async_hf):
+                """PromptGuard-wrapped HuggingFace AsyncInferenceClient."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "HuggingFaceAsync", "base_url")
+                    super().__init__(**kwargs)
+
+            huggingface_hub.AsyncInferenceClient = PatchedAsyncInferenceClient
+
         _shimmed_providers.add("huggingface")
         _debug("HuggingFace SDK shimmed successfully")
 
@@ -424,6 +492,22 @@ if (!HfInference) {
   };
 }
 "#;
+
+/// Client classes the generated Python shim actually patches for a provider
+/// (module-qualified, sync + async), for honest user-facing coverage
+/// reporting. Empty for providers without a runtime shim.
+pub fn get_python_patched_classes(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::OpenAI => &["openai.OpenAI", "openai.AsyncOpenAI"],
+        Provider::Anthropic => &["anthropic.Anthropic", "anthropic.AsyncAnthropic"],
+        Provider::Cohere => &["cohere.Client", "cohere.AsyncClient"],
+        Provider::HuggingFace => &[
+            "huggingface_hub.InferenceClient",
+            "huggingface_hub.AsyncInferenceClient",
+        ],
+        Provider::Gemini | Provider::Groq | Provider::Bedrock => &[],
+    }
+}
 
 /// Get Python provider patch code for a given provider
 pub fn get_python_provider_patch(provider: Provider) -> &'static str {
