@@ -181,6 +181,68 @@ fn test_generated_shims_are_syntactically_valid() {
     }
 }
 
+/// Gate: the generated Python shim must be syntactically valid.
+///
+/// Mirrors `test_generated_shims_are_syntactically_valid` for Python:
+/// generates the shim for every single-provider set, a multi-provider set,
+/// and the all-provider set (including the comment-only placeholders), then
+/// validates each with `python3 -m py_compile`. Regression for the template
+/// indenting `{{INSTALL_CALLS}}`, which made every generated shim an
+/// `IndentationError` and crashed user apps at startup.
+/// Skips silently if python3 is not installed (e.g. minimal build machines).
+#[test]
+fn test_generated_python_shims_are_syntactically_valid() {
+    use std::process::Command;
+
+    let all_providers = [
+        Provider::OpenAI,
+        Provider::Anthropic,
+        Provider::Cohere,
+        Provider::HuggingFace,
+        Provider::Gemini,
+        Provider::Groq,
+        Provider::Bedrock,
+    ];
+
+    // Every single-provider combo, one multi-provider combo, and all providers.
+    let mut provider_sets: Vec<Vec<Provider>> = all_providers.iter().map(|p| vec![*p]).collect();
+    provider_sets.push(vec![
+        Provider::OpenAI,
+        Provider::Anthropic,
+        Provider::Cohere,
+    ]);
+    provider_sets.push(all_providers.to_vec());
+
+    for providers in provider_sets {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let generator = ShimGenerator::new(
+            temp_dir.path(),
+            "https://api.promptguard.co/api/v1".to_string(),
+            providers.clone(),
+        );
+
+        let shim_path = generator
+            .generate_python_shim()
+            .expect("Failed to generate Python shim");
+
+        // python3 -m py_compile: parses and byte-compiles without executing
+        let Ok(out) = Command::new("python3")
+            .args(["-m", "py_compile"])
+            .arg(&shim_path)
+            .output()
+        else {
+            eprintln!("python3 not found; skipping Python syntax validation");
+            return;
+        };
+        assert!(
+            out.status.success(),
+            "py_compile rejected generated Python shim for {providers:?}:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 /// Test that multiple shims are generated for multi-language projects
 #[test]
 fn test_multi_language_shim_generation() {

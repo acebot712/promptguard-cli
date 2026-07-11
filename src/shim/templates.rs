@@ -9,6 +9,11 @@ use crate::types::Provider;
 ///
 /// This template monkey-patches SDK constructors to automatically inject
 /// the `PromptGuard` proxy URL if not already configured.
+///
+/// NOTE: `{{INSTALL_CALLS}}` must stay at column 0. Each install-call
+/// snippet already carries its own 4-space function-body indent; indenting
+/// the placeholder itself put the first call at 8 spaces and made every
+/// generated shim an `IndentationError` (crashing user apps at startup).
 pub const PYTHON_SHIM_TEMPLATE: &str = r#"#!/usr/bin/env python3
 """
 PromptGuard Runtime Shim - Auto-generated
@@ -80,7 +85,7 @@ def _install_shims() -> None:
     """Install all runtime shims for detected providers."""
     providers_shimmed = []
 
-    {{INSTALL_CALLS}}
+{{INSTALL_CALLS}}
 
     if providers_shimmed:
         _debug(f"Installed shims for: {', '.join(providers_shimmed)}")
