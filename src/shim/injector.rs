@@ -161,6 +161,14 @@ impl ShimInjector {
                 continue;
             }
 
+            // follow_links(false) stops walkdir from traversing INTO
+            // symlinked directories, but symlinked files are still yielded
+            // (and path.is_file() follows the link). Skip them: injecting
+            // through a symlink writes outside the project tree.
+            if entry.file_type().is_symlink() {
+                continue;
+            }
+
             if !path.is_file() {
                 continue;
             }
@@ -261,6 +269,14 @@ impl ShimInjector {
                     .components()
                     .any(|c| c.as_os_str().to_str().is_some_and(is_skip_dir))
                 {
+                    continue;
+                }
+
+                // follow_links(false) stops walkdir from traversing INTO
+                // symlinked directories, but symlinked files are still yielded
+                // (and path.is_file() follows the link). Skip them: injecting
+                // through a symlink writes outside the project tree.
+                if entry.file_type().is_symlink() {
                     continue;
                 }
 
@@ -439,6 +455,14 @@ impl ShimInjector {
         {
             let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();
+
+            // follow_links(false) stops walkdir from traversing INTO
+            // symlinked directories, but symlinked files are still yielded
+            // (and path.is_file() follows the link). Skip them: rewriting
+            // through a symlink writes outside the project tree.
+            if entry.file_type().is_symlink() {
+                continue;
+            }
 
             if !path.is_file() {
                 continue;
@@ -657,6 +681,78 @@ mod tests {
             assert!(!after.contains("promptguard_shim"));
             assert!(after.contains("print('hello')"));
         }
+    }
+
+    /// MEDIUM regression: entry-point detection and injection removal used to
+    /// write through symlinked files, so a repo-planted symlink (e.g.
+    /// `main.py -> /outside/victim.py`) got a file OUTSIDE the project
+    /// rewritten by enable/disable. Symlinked entries must be skipped, same
+    /// as `FileScanner::scan_files`.
+    #[cfg(unix)]
+    #[test]
+    fn test_symlinked_entry_points_are_skipped() {
+        // A "victim" file outside the project that a malicious repo points at.
+        let outside_dir = TempDir::new().unwrap();
+        let victim = outside_dir.path().join("victim.py");
+        let victim_content = "print('outside the project')\n";
+        fs::write(&victim, victim_content).unwrap();
+
+        // The victim for removal: contains an injected-looking shim block.
+        let victim_with_shim = outside_dir.path().join("victim_with_shim.py");
+        let shimmed_content = "\n# PromptGuard runtime shim - auto-injected\nimport sys\n# PromptGuard runtime shim - end\nprint('user code')\n";
+        fs::write(&victim_with_shim, shimmed_content).unwrap();
+
+        let project_dir = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(&victim, project_dir.path().join("main.py")).unwrap();
+        std::os::unix::fs::symlink(&victim_with_shim, project_dir.path().join("app.py")).unwrap();
+
+        let injector = ShimInjector::new(project_dir.path());
+
+        // Detection must not surface symlinked entry points.
+        let entry_points = injector.detect_python_entry_points().unwrap();
+        assert!(
+            entry_points.is_empty(),
+            "symlinked entry points must be skipped, got {entry_points:?}"
+        );
+
+        // Injection must not write through the symlink.
+        let injected = injector
+            .inject_shims(crate::types::Language::Python)
+            .unwrap();
+        assert!(injected.is_empty(), "no injection through symlinks");
+        assert_eq!(
+            fs::read_to_string(&victim).unwrap(),
+            victim_content,
+            "file outside the project must be untouched by enable"
+        );
+
+        // Removal must not write through the symlink either.
+        let removed = injector.remove_all_injections().unwrap();
+        assert_eq!(removed, 0, "no removal through symlinks");
+        assert_eq!(
+            fs::read_to_string(&victim_with_shim).unwrap(),
+            shimmed_content,
+            "file outside the project must be untouched by disable"
+        );
+    }
+
+    /// Symlinked TypeScript entry points must be skipped too.
+    #[cfg(unix)]
+    #[test]
+    fn test_symlinked_typescript_entry_points_are_skipped() {
+        let outside_dir = TempDir::new().unwrap();
+        let victim = outside_dir.path().join("victim.js");
+        fs::write(&victim, "console.log('outside');\n").unwrap();
+
+        let project_dir = TempDir::new().unwrap();
+        std::os::unix::fs::symlink(&victim, project_dir.path().join("index.js")).unwrap();
+
+        let injector = ShimInjector::new(project_dir.path());
+        let entry_points = injector.detect_typescript_entry_points().unwrap();
+        assert!(
+            entry_points.is_empty(),
+            "symlinked TS entry points must be skipped, got {entry_points:?}"
+        );
     }
 
     /// Legacy blocks (injected by older versions without an end-marker) must
