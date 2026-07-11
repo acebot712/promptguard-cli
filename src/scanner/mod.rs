@@ -164,6 +164,14 @@ impl FileScanner {
         {
             let path = entry.path();
 
+            // follow_links(false) stops walkdir from traversing INTO
+            // symlinked directories, but symlinked files are still yielded
+            // (and path.is_file() follows the link). Skip them: transforming
+            // through a symlink writes outside the project tree.
+            if entry.file_type().is_symlink() {
+                continue;
+            }
+
             if !path.is_file() {
                 continue;
             }

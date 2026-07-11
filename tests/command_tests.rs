@@ -295,6 +295,38 @@ fn test_scanner_finds_supported_files() {
     );
 }
 
+/// Symlinked files must not be scanned (transforming through a symlink
+/// writes outside the project tree)
+#[cfg(unix)]
+#[test]
+fn test_scanner_skips_symlinked_files() {
+    let outside_dir = TempDir::new().expect("Failed to create outside dir");
+    let project_dir = TempDir::new().expect("Failed to create project dir");
+
+    let real_target = outside_dir.path().join("outside.py");
+    fs::write(
+        &real_target,
+        "from openai import OpenAI\nclient = OpenAI()\n",
+    )
+    .expect("Failed to write target");
+
+    fs::write(project_dir.path().join("inside.py"), "print('ok')\n").expect("write");
+    std::os::unix::fs::symlink(&real_target, project_dir.path().join("linked.py"))
+        .expect("Failed to create symlink");
+
+    let scanner = FileScanner::new(project_dir.path(), None).expect("Failed to create scanner");
+    let files = scanner.scan_files(None).expect("Scan should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("inside.py")),
+        "regular file should be scanned"
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("linked.py")),
+        "symlinked file must be skipped"
+    );
+}
+
 // =============================================================================
 // TRANSFORMER TESTS - Code Modification
 // =============================================================================

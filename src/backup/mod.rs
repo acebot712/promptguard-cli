@@ -22,10 +22,19 @@ impl BackupManager {
             .unwrap_or("")
             .to_string();
 
+        // strip_prefix instead of [1..]: an extension without a leading dot
+        // (or an empty one, which used to panic here) is handled gracefully.
+        // Config load validates the extension, but BackupManager can be
+        // constructed with arbitrary strings.
+        let bare_extension = self
+            .backup_extension
+            .strip_prefix('.')
+            .unwrap_or(&self.backup_extension);
+
         let new_extension = if current_extension.is_empty() {
-            self.backup_extension[1..].to_string() // Remove leading dot
+            bare_extension.to_string()
         } else {
-            format!("{}{}", current_extension, self.backup_extension)
+            format!("{current_extension}.{bare_extension}")
         };
 
         backup.set_extension(&new_extension);

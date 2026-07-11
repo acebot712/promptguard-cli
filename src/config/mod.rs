@@ -79,6 +79,29 @@ pub fn validate_proxy_url(url_str: &str) -> Result<()> {
     }
 }
 
+/// Validate a backup extension (e.g. `.bak`).
+///
+/// Must be non-empty, start with a dot, and contain no path separators,
+/// whitespace, or further dots. An empty extension used to panic in
+/// `BackupManager::backup_path` (`self.backup_extension[1..]`), and a
+/// non-dot value silently mangled backup filenames.
+pub fn validate_backup_extension(ext: &str) -> Result<()> {
+    let rest = ext.strip_prefix('.').ok_or_else(|| {
+        PromptGuardError::Config(format!(
+            "Invalid backup_extension '{ext}': must start with '.' (e.g. \".bak\")"
+        ))
+    })?;
+
+    if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(PromptGuardError::Config(format!(
+            "Invalid backup_extension '{ext}': must be '.' followed by alphanumerics \
+             (e.g. \".bak\")"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Validate an environment variable name for use in generated source code.
 ///
 /// Strict allowlist (`^[A-Z_][A-Z0-9_]*$`): the value is interpolated into
@@ -264,6 +287,7 @@ impl ConfigManager {
         // generated source code — validate with strict allowlists.
         validate_proxy_url(&config.proxy_url)?;
         validate_env_var_name(&config.env_var_name)?;
+        validate_backup_extension(&config.backup_extension)?;
 
         Ok(config)
     }
