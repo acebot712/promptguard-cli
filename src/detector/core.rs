@@ -44,6 +44,15 @@ impl Grammar {
         }
     }
 
+    /// Human-readable grammar name, used in transform error messages.
+    pub fn language_name(self) -> &'static str {
+        match self {
+            Self::TypeScript => "TypeScript",
+            Self::Tsx => "TSX",
+            Self::Python => "Python",
+        }
+    }
+
     fn capture_name(self) -> &'static str {
         match self {
             Self::Python => "call_expr",
@@ -79,9 +88,30 @@ static QUERY_CACHE: LazyLock<HashMap<(Grammar, Provider), Query>> = LazyLock::ne
     cache
 });
 
+/// Whether a Python constructor argument list already sets `base_url`.
+///
+/// Shared by the detector and the transformer so the two never drift on what
+/// counts as "already configured" (a drift that would let the transformer
+/// double-inject a `base_url`).
+pub fn python_args_have_base_url(args_text: &str) -> bool {
+    args_text.contains("base_url=") || args_text.contains("base_url =")
+}
+
+/// Whether a TypeScript options object already sets the provider's base-URL
+/// parameter. Shared by the detector and the transformer.
+pub fn typescript_object_has_base_url(
+    object_text: &str,
+    info: &crate::detector::registry::ProviderInfo,
+) -> bool {
+    object_text.contains(&format!("{}:", info.ts_base_url_param))
+        || object_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
+        || object_text.contains(&format!("'{}': ", info.ts_base_url_param))
+        || object_text.contains("base_url:")
+}
+
 fn python_check_base_url(source: &str, args_node: tree_sitter::Node) -> (bool, Option<String>) {
     let args_text = &source[args_node.start_byte()..args_node.end_byte()];
-    let has_base_url = args_text.contains("base_url=") || args_text.contains("base_url =");
+    let has_base_url = python_args_have_base_url(args_text);
     let current = has_base_url.then(|| "(configured)".to_string());
     (has_base_url, current)
 }
@@ -96,10 +126,7 @@ fn typescript_check_base_url(
     };
     let args_text = &source[args_node.start_byte()..args_node.end_byte()];
 
-    let has_base_url = args_text.contains(&format!("{}:", info.ts_base_url_param))
-        || args_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
-        || args_text.contains(&format!("'{}': ", info.ts_base_url_param))
-        || args_text.contains("base_url:");
+    let has_base_url = typescript_object_has_base_url(args_text, info);
 
     let current = has_base_url.then(|| "(configured)".to_string());
     (has_base_url, current)

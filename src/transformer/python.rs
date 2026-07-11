@@ -1,5 +1,5 @@
-use super::core::{transform_file_generic, TransformConfig};
-use crate::detector::get_python_transform_query;
+use super::core::transform_file_generic;
+use crate::detector::{python_args_have_base_url, Grammar};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
 use std::fmt::Write;
@@ -21,7 +21,7 @@ impl PythonTransformer {
 
 fn has_base_url(source: &str, args_node: tree_sitter::Node) -> bool {
     let args_text = &source[args_node.start_byte()..args_node.end_byte()];
-    args_text.contains("base_url=") || args_text.contains("base_url =")
+    python_args_have_base_url(args_text)
 }
 
 fn transform_args(
@@ -35,9 +35,14 @@ fn transform_args(
     }
 
     let args_text = &source[args_node.start_byte()..args_node.end_byte()];
+    // Strip exactly ONE outer `(` / `)` — the delimiters of this
+    // `argument_list` node. `trim_end_matches(')')` stripped *every* trailing
+    // paren, so `OpenAI(api_key=os.getenv("KEY"))` lost the inner call's
+    // closing paren too and produced a SyntaxError.
     let inner = args_text
-        .trim_start_matches('(')
-        .trim_end_matches(')')
+        .strip_prefix('(')
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(args_text)
         .trim();
 
     let mut new_args = String::from("(\n");
@@ -104,18 +109,19 @@ fn ensure_os_import(source: String) -> String {
     let lines: Vec<&str> = source.lines().collect();
     let insert_at = crate::shim::injector::python_insertion_line(&lines);
 
-    let mut result = String::with_capacity(source.len() + 16);
+    let mut out: Vec<String> = Vec::with_capacity(lines.len() + 1);
     for (i, line) in lines.iter().enumerate() {
         if i == insert_at {
-            result.push_str("import os\n");
+            out.push("import os".to_string());
         }
-        result.push_str(line);
-        result.push('\n');
+        out.push((*line).to_string());
     }
     if insert_at >= lines.len() {
-        result.push_str("import os\n");
+        out.push("import os".to_string());
     }
-    result
+    // Preserve the file's dominant line ending and trailing-newline state
+    // rather than forcing LF and a final newline.
+    crate::text::join_preserving_style(&out, &source)
 }
 
 impl Transformer for PythonTransformer {
@@ -126,16 +132,10 @@ impl Transformer for PythonTransformer {
         proxy_url: &str,
         api_key_env_var: &str,
     ) -> crate::error::Result<TransformResult> {
-        let config = TransformConfig {
-            parser_language: tree_sitter_python::LANGUAGE.into(),
-            language_name: "Python",
-        };
-        let query_str = get_python_transform_query(provider);
-
         transform_file_generic(
             file_path,
-            &config,
-            &query_str,
+            Grammar::Python,
+            provider,
             |source, args_node| {
                 transform_args(source, args_node, proxy_url, api_key_env_var)
                     .map(|new_args| (args_node.start_byte(), args_node.end_byte(), new_args))
@@ -146,8 +146,80 @@ impl Transformer for PythonTransformer {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::transformer::Transformer;
+    use std::fs;
+    use tempfile::TempDir;
+    use tree_sitter::Parser;
+
+    /// Parse `source` as Python and assert the tree has zero ERROR nodes.
+    fn assert_reparses_clean(source: &str) {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .expect("set python language");
+        let tree = parser.parse(source, None).expect("parse");
+        assert!(
+            !tree.root_node().has_error(),
+            "transformed Python has tree-sitter ERROR node(s):\n{source}"
+        );
+    }
+
+    fn transform_python(input: &str) -> String {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("client.py");
+        fs::write(&path, input).unwrap();
+        PythonTransformer::new()
+            .transform_file(
+                &path,
+                Provider::OpenAI,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+            )
+            .unwrap();
+        fs::read_to_string(&path).unwrap()
+    }
+
+    /// Regression: `trim_end_matches(')')` stripped the inner `os.getenv(...)`
+    /// closing paren too, producing unbalanced parens / a `SyntaxError`.
+    #[test]
+    fn nested_call_arg_keeps_balanced_parens() {
+        let input =
+            "from openai import OpenAI\nclient = OpenAI(api_key=os.getenv(\"OPENAI_API_KEY\"))\n";
+        let out = transform_python(input);
+        assert!(
+            out.contains("os.getenv(\"OPENAI_API_KEY\")"),
+            "output:\n{out}"
+        );
+        assert!(out.contains("base_url=\"https://api.promptguard.co/api/v1\""));
+        // The original nested-call paren must survive.
+        assert!(
+            out.contains("getenv(\"OPENAI_API_KEY\"),"),
+            "output:\n{out}"
+        );
+        assert_reparses_clean(&out);
+    }
+
+    #[test]
+    fn empty_args_transform_reparses_clean() {
+        let input = "from openai import OpenAI\nclient = OpenAI()\n";
+        let out = transform_python(input);
+        assert!(out.contains("base_url="));
+        assert_reparses_clean(&out);
+    }
+
+    #[test]
+    fn crlf_source_transform_preserves_crlf() {
+        let input = "from openai import OpenAI\r\nclient = OpenAI(api_key=os.getenv(\"K\"))\r\n";
+        let out = transform_python(input);
+        assert!(out.contains("\r\n"), "CRLF must be preserved:\n{out:?}");
+        assert!(!out.contains("\n\r"), "no mangled endings:\n{out:?}");
+        // No bare LF that isn't part of a CRLF pair.
+        assert_eq!(out.matches('\n').count(), out.matches("\r\n").count());
+        assert_reparses_clean(&out);
+    }
 
     #[test]
     fn os_import_detection_true_positives() {

@@ -1,5 +1,5 @@
-use super::core::{transform_file_generic, TransformConfig};
-use crate::detector::{get_typescript_query, ProviderInfo};
+use super::core::transform_file_generic;
+use crate::detector::{typescript_object_has_base_url, Grammar, ProviderInfo};
 use crate::transformer::Transformer;
 use crate::types::{Provider, TransformResult};
 use std::fmt::Write;
@@ -24,10 +24,7 @@ fn ts_has_base_url(source: &str, object_node: tree_sitter::Node, provider: Provi
         return false;
     };
     let object_text = &source[object_node.start_byte()..object_node.end_byte()];
-
-    object_text.contains(&format!("{}:", info.ts_base_url_param))
-        || object_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
-        || object_text.contains("base_url:")
+    typescript_object_has_base_url(object_text, info)
 }
 
 fn transform_ts_object(
@@ -45,9 +42,14 @@ fn transform_ts_object(
     // another provider's parameter names.
     let info = ProviderInfo::get(provider)?;
     let object_text = &source[object_node.start_byte()..object_node.end_byte()];
+    // Strip exactly ONE outer `{` / `}` — the delimiters of this `object`
+    // node. `trim_end_matches('}')` stripped *every* trailing brace, so a
+    // nested object literal like `{apiKey:k, defaults:{timeout:1}}` lost its
+    // inner closing brace and became invalid.
     let inner = object_text
-        .trim_start_matches('{')
-        .trim_end_matches('}')
+        .strip_prefix('{')
+        .and_then(|s| s.strip_suffix('}'))
+        .unwrap_or(object_text)
         .trim();
 
     let mut new_object = String::from("{\n");
@@ -85,20 +87,15 @@ impl Transformer for TypeScriptTransformer {
         // .tsx/.jsx need the TSX grammar: JSX syntax does not parse under
         // the plain TypeScript grammar (and .ts must not use TSX, where
         // generics are ambiguous with JSX).
-        let parser_language = match file_path.extension().and_then(|e| e.to_str()) {
-            Some("tsx" | "jsx") => tree_sitter_typescript::LANGUAGE_TSX.into(),
-            _ => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        let grammar = match file_path.extension().and_then(|e| e.to_str()) {
+            Some("tsx" | "jsx") => Grammar::Tsx,
+            _ => Grammar::TypeScript,
         };
-        let config = TransformConfig {
-            parser_language,
-            language_name: "TypeScript",
-        };
-        let query_str = get_typescript_query(provider);
 
         transform_file_generic(
             file_path,
-            &config,
-            &query_str,
+            grammar,
+            provider,
             |source, args_node| {
                 let mut cursor = args_node.walk();
                 for child in args_node.children(&mut cursor) {
@@ -117,5 +114,74 @@ impl Transformer for TypeScriptTransformer {
             },
             |s| s,
         )
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+    use tree_sitter::Parser;
+
+    /// Parse `source` as TypeScript and assert zero ERROR nodes.
+    fn assert_reparses_clean(source: &str) {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
+            .expect("set typescript language");
+        let tree = parser.parse(source, None).expect("parse");
+        assert!(
+            !tree.root_node().has_error(),
+            "transformed TypeScript has tree-sitter ERROR node(s):\n{source}"
+        );
+    }
+
+    fn transform_ts(input: &str) -> String {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("client.ts");
+        fs::write(&path, input).unwrap();
+        TypeScriptTransformer::new()
+            .transform_file(
+                &path,
+                Provider::OpenAI,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+            )
+            .unwrap();
+        fs::read_to_string(&path).unwrap()
+    }
+
+    /// Regression: `trim_end_matches('}')` stripped the nested object's
+    /// closing brace too, producing an unbalanced/invalid object literal.
+    #[test]
+    fn nested_object_literal_keeps_balanced_braces() {
+        let input = "import OpenAI from \"openai\";\nconst client = new OpenAI({apiKey: k, defaultHeaders: {timeout: 1}});\n";
+        let out = transform_ts(input);
+        assert!(
+            out.contains("defaultHeaders: {timeout: 1}"),
+            "nested object must survive:\n{out}"
+        );
+        assert!(out.contains("baseURL: \"https://api.promptguard.co/api/v1\""));
+        assert_reparses_clean(&out);
+    }
+
+    #[test]
+    fn empty_options_object_reparses_clean() {
+        let input = "import OpenAI from \"openai\";\nconst client = new OpenAI({});\n";
+        let out = transform_ts(input);
+        assert!(out.contains("baseURL:"));
+        assert_reparses_clean(&out);
+    }
+
+    #[test]
+    fn simple_options_object_reparses_clean() {
+        let input =
+            "import OpenAI from \"openai\";\nconst client = new OpenAI({apiKey: process.env.KEY});\n";
+        let out = transform_ts(input);
+        assert!(out.contains("apiKey: process.env.KEY"));
+        assert!(out.contains("baseURL:"));
+        assert_reparses_clean(&out);
     }
 }

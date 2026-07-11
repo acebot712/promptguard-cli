@@ -275,21 +275,27 @@ impl ShimInjector {
         let lines: Vec<&str> = content.lines().collect();
         let inject_pos = python_insertion_line(&lines);
 
-        // Insert shim import
-        let mut new_content = String::new();
+        // Insert the shim block as individual lines so the file's dominant
+        // line ending (CRLF or LF) and trailing-newline state are preserved.
+        // The const's leading "" yields the blank line before the marker;
+        // trim its trailing newline so we don't add a stray blank line.
+        let shim_lines: Vec<&str> = PYTHON_SHIM_IMPORT
+            .trim_end_matches('\n')
+            .split('\n')
+            .collect();
+
+        let mut out: Vec<String> = Vec::with_capacity(lines.len() + shim_lines.len());
         for (i, line) in lines.iter().enumerate() {
             if i == inject_pos {
-                new_content.push_str(PYTHON_SHIM_IMPORT);
+                out.extend(shim_lines.iter().map(|s| (*s).to_string()));
             }
-            new_content.push_str(line);
-            new_content.push('\n');
+            out.push((*line).to_string());
         }
-
-        // Handle case where inject_pos is at the end
         if inject_pos >= lines.len() {
-            new_content.push_str(PYTHON_SHIM_IMPORT);
+            out.extend(shim_lines.iter().map(|s| (*s).to_string()));
         }
 
+        let new_content = crate::text::join_preserving_style(&out, &content);
         fs::write(file_path, new_content)?;
         Ok(true)
     }
@@ -346,7 +352,9 @@ impl ShimInjector {
             i += 1;
         }
 
-        let new_content = new_lines.join("\n") + "\n";
+        // Preserve the file's dominant line ending and trailing-newline state
+        // instead of forcing LF + a final newline.
+        let new_content = crate::text::join_preserving_style(&new_lines, &content);
         fs::write(file_path, new_content)?;
         Ok(true)
     }
@@ -510,6 +518,36 @@ mod tests {
             "user code must survive inject/remove"
         );
         assert!(!after.contains("promptguard_shim"));
+    }
+
+    /// CRLF files must survive an inject/remove round-trip without being
+    /// converted to LF.
+    #[test]
+    fn test_inject_remove_preserves_crlf() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.py");
+
+        let original = "#!/usr/bin/env python3\r\nimport json\r\n\r\nif __name__ == \"__main__\":\r\n    main()\r\n";
+        fs::write(&test_file, original).unwrap();
+
+        let injector = ShimInjector::new(temp_dir.path());
+        injector.inject_python_shim(&test_file).unwrap();
+
+        let injected = fs::read_to_string(&test_file).unwrap();
+        assert!(injected.contains("promptguard_shim"));
+        assert!(
+            injected.contains("\r\n"),
+            "CRLF must be preserved on inject"
+        );
+        assert_eq!(
+            injected.matches('\n').count(),
+            injected.matches("\r\n").count(),
+            "no bare LF introduced on inject"
+        );
+
+        injector.remove_python_shim(&test_file).unwrap();
+        let after = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(after, original, "CRLF file must round-trip exactly");
     }
 
     /// Legacy blocks (injected by older versions without an end-marker) must

@@ -39,7 +39,9 @@ impl EnvManager {
             lines.push(format!("{key}={value}"));
         }
 
-        let new_content = lines.join("\n");
+        // Preserve the file's dominant line ending and trailing-newline state
+        // instead of forcing LF.
+        let new_content = crate::text::join_preserving_style(&lines, &content);
         // .env files hold secrets: write with owner-only permissions.
         crate::config::write_private_file(env_path, &new_content)?;
 
@@ -65,7 +67,8 @@ impl EnvManager {
         let removed = new_lines.len() < content.lines().count();
 
         if removed {
-            fs::write(env_path, new_lines.join("\n"))?;
+            let new_content = crate::text::join_preserving_style(&new_lines, &content);
+            fs::write(env_path, new_content)?;
         }
 
         Ok(removed)
@@ -84,5 +87,51 @@ impl EnvManager {
         } else {
             false
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn add_key_preserves_crlf() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        fs::write(&path, "EXISTING=1\r\nOTHER=2\r\n").unwrap();
+
+        EnvManager::add_or_update_key(&path, "PROMPTGUARD_API_KEY", "pg_live_x").unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("PROMPTGUARD_API_KEY=pg_live_x"));
+        assert!(
+            content.contains("\r\n"),
+            "CRLF must be preserved:\n{content:?}"
+        );
+        assert_eq!(
+            content.matches('\n').count(),
+            content.matches("\r\n").count(),
+            "no bare LF introduced:\n{content:?}"
+        );
+    }
+
+    #[test]
+    fn update_existing_key_preserves_crlf() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join(".env");
+        fs::write(&path, "PROMPTGUARD_API_KEY=old\r\nOTHER=2\r\n").unwrap();
+
+        EnvManager::add_or_update_key(&path, "PROMPTGUARD_API_KEY", "new").unwrap();
+
+        let content = fs::read_to_string(&path).unwrap();
+        assert!(content.contains("PROMPTGUARD_API_KEY=new"));
+        assert!(!content.contains("=old"));
+        assert_eq!(
+            content.matches('\n').count(),
+            content.matches("\r\n").count(),
+            "CRLF preserved on update:\n{content:?}"
+        );
     }
 }

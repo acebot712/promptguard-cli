@@ -20,6 +20,7 @@ mod error;
 mod output;
 mod scanner;
 mod shim;
+mod text;
 mod transformer;
 mod types;
 

@@ -13,6 +13,7 @@ pub mod detector;
 pub mod error;
 pub mod scanner;
 pub mod shim;
+pub mod text;
 pub mod transformer;
 pub mod types;
 
