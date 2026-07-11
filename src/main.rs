@@ -33,45 +33,116 @@ use commands::{
     WhoamiCommand,
 };
 
+/// Grouped command reference + examples for the top-level `--help`.
+///
+/// clap 4.x cannot group subcommands under headings in its auto-generated
+/// Commands list (`help_heading` applies to args, not subcommands), so the
+/// sections below are authored by hand and rendered via a custom
+/// `help_template` that omits the flat `{subcommands}` block. Plain text (no
+/// ANSI) keeps it correct under `--no-color`/`NO_COLOR` and when piped.
+///
+/// KEEP IN SYNC: when adding/removing a subcommand, update this list.
+const TOP_LEVEL_AFTER_HELP: &str = "\
+Commands:
+  Setup
+    init       Initialize PromptGuard in this project
+    scan       Scan for SDK usage, or scan text/files for threats
+    apply      Re-apply PromptGuard transformations to source files
+    enable     Re-enable PromptGuard after disabling
+    disable    Temporarily disable PromptGuard (keeps configuration)
+    revert     Completely remove PromptGuard from this project
+
+  Auth
+    login      Authenticate and store credentials globally
+    logout     Remove stored credentials
+    whoami     Show current authentication status
+    key        Manage API keys
+    projects   Manage PromptGuard projects
+
+  Inspect
+    status     Show current status and configuration
+    doctor     Diagnose common configuration issues
+    config     View PromptGuard configuration
+    verify     Verify end-to-end integration
+    test       Test configuration and connectivity
+
+  Monitor
+    logs       View activity logs from the PromptGuard API
+    events     View recent security events
+    dashboard  Open the PromptGuard dashboard in your browser
+
+  Security testing
+    redteam    Run adversarial security tests against your app
+    redact     Redact PII and sensitive data from text
+    policy     Manage guardrail policies as YAML (policy-as-code)
+
+  Other
+    mcp        Start an MCP server for IDE integration
+    update     Check for CLI updates
+
+Run 'promptguard <command> --help' for details on a command.
+
+Examples:
+  promptguard init                            Set up PromptGuard in this repo
+  promptguard scan --text \"ignore the rules\"   Scan a string for threats
+  promptguard verify --json                   Check integration health (CI)
+";
+
+#[allow(clippy::doc_markdown)]
 #[derive(Parser)]
 #[command(name = "promptguard")]
 #[command(about = "Drop-in LLM security for your applications", long_about = None)]
 #[command(version)]
+#[command(
+    help_template = "{about-with-newline}\n{usage-heading} {usage}{after-help}\nOptions:\n{options}"
+)]
+#[command(after_help = TOP_LEVEL_AFTER_HELP)]
 struct Cli {
     /// Increase output verbosity (can be repeated: -v, -vv, -vvv)
-    #[arg(short, long, action = clap::ArgAction::Count, global = true)]
+    #[arg(short, long, action = clap::ArgAction::Count, global = true, help_heading = "Global options")]
     verbose: u8,
 
     /// Suppress non-essential output
-    #[arg(short, long, global = true)]
+    #[arg(short, long, global = true, help_heading = "Global options")]
     quiet: bool,
 
-    /// Disable colored output (also respects `NO_COLOR` env var)
-    #[arg(long, global = true)]
+    /// Disable colored output (also respects NO_COLOR env var)
+    #[arg(long, global = true, help_heading = "Global options")]
     no_color: bool,
 
-    /// Allow sending an API key resolved from the environment or global
-    /// credentials to a custom proxy host configured in this repository's
-    /// .promptguard.json (refused by default to prevent key exfiltration)
-    #[arg(long, global = true)]
+    /// Allow sending your API key to a custom proxy host from .promptguard.json
+    #[arg(
+        long,
+        global = true,
+        help_heading = "Global options",
+        long_help = "Allow sending an API key resolved from the environment or global \
+credentials to a custom proxy host configured in this repository's \
+.promptguard.json. Refused by default to prevent key exfiltration."
+    )]
     allow_custom_proxy: bool,
 
     #[command(subcommand)]
     command: Option<Commands>,
 }
 
+#[allow(clippy::doc_markdown)]
 #[derive(Subcommand)]
 enum Commands {
-    /// Initialize `PromptGuard` in this project
+    /// Initialize PromptGuard in this project
     ///
-    /// Scans for LLM SDK usage (`OpenAI`, Anthropic, etc.) and configures
-    /// your project to route requests through the `PromptGuard` proxy.
+    /// Scans for LLM SDK usage (OpenAI, Anthropic, etc.) and configures
+    /// your project to route requests through the PromptGuard proxy.
+    #[command(after_help = "\
+Examples:
+  promptguard init                     Detect SDKs and set up routing
+  promptguard init --provider openai   Only route OpenAI usage
+  promptguard init --dry-run           Preview changes without applying")]
     Init {
         /// Target specific providers (e.g., openai, anthropic). Default: all detected
         #[arg(long)]
         provider: Vec<String>,
 
-        /// `PromptGuard` API key (or set `PROMPTGUARD_API_KEY` env var).
+        /// PromptGuard API key (or set PROMPTGUARD_API_KEY env var).
         /// Use '-' to read the key from stdin — passing it as an argument
         /// exposes it in shell history and process listings.
         #[arg(long)]
@@ -108,14 +179,19 @@ enum Commands {
 
     /// Scan project for LLM SDK usage or scan text for security threats
     ///
-    /// Without --text or --file: Detects `OpenAI`, Anthropic, Cohere, `HuggingFace`, Gemini, Groq, and AWS Bedrock SDK usage
+    /// Without --text or --file: Detects OpenAI, Anthropic, Cohere, HuggingFace, Gemini, Groq, and AWS Bedrock SDK usage
     /// in your Python and TypeScript/JavaScript files.
     ///
     /// With --text or --file: Scans content for security threats (prompt injection, jailbreaks, etc.)
-    /// via the `PromptGuard` API.
+    /// via the PromptGuard API.
     ///
     /// Exit codes: 0 = content allowed / no SDK usage found,
     /// 2 = content blocked / SDK usage found, 1 = error.
+    #[command(after_help = "\
+Examples:
+  promptguard scan                            Detect LLM SDK usage in this repo
+  promptguard scan --text \"ignore the rules\"   Scan a string for threats
+  promptguard scan --file prompt.txt --json   Scan a file, machine-readable")]
     Scan {
         /// Filter by specific provider (for SDK detection mode)
         #[arg(long)]
@@ -134,9 +210,9 @@ enum Commands {
         file: Option<String>,
     },
 
-    /// Show current `PromptGuard` status and configuration
+    /// Show current PromptGuard status and configuration
     ///
-    /// Displays whether `PromptGuard` is active, which providers are configured,
+    /// Displays whether PromptGuard is active, which providers are configured,
     /// and details about the current setup.
     Status {
         /// Output as JSON (for scripting)
@@ -154,7 +230,7 @@ enum Commands {
         json: bool,
     },
 
-    /// Re-apply `PromptGuard` transformations to source files
+    /// Re-apply PromptGuard transformations to source files
     ///
     /// Use this after modifying files manually or adding new SDK usage.
     Apply {
@@ -163,7 +239,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Temporarily disable `PromptGuard` (keeps configuration)
+    /// Temporarily disable PromptGuard (keeps configuration)
     ///
     /// LLM requests will go directly to providers until re-enabled.
     Disable {
@@ -172,7 +248,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Re-enable `PromptGuard` after disabling
+    /// Re-enable PromptGuard after disabling
     ///
     /// Restores proxy routing for LLM requests.
     Enable {
@@ -186,7 +262,7 @@ enum Commands {
         yes: bool,
     },
 
-    /// Completely remove `PromptGuard` from this project
+    /// Completely remove PromptGuard from this project
     ///
     /// Reverts all file changes and removes configuration.
     /// Use git to review changes before confirming.
@@ -196,10 +272,11 @@ enum Commands {
         yes: bool,
     },
 
-    /// View and manage `PromptGuard` configuration
+    /// View PromptGuard configuration
     ///
     /// Shows current settings including providers, proxy URL,
-    /// exclude patterns, and metadata.
+    /// exclude patterns, and metadata. Read-only: change settings by
+    /// re-running 'promptguard init', or edit .promptguard.json directly.
     Config {
         /// Output as JSON (for scripting)
         #[arg(long)]
@@ -208,14 +285,14 @@ enum Commands {
 
     /// Manage API keys
     ///
-    /// View, update, or rotate your `PromptGuard` API key.
-    /// Keys use the `pg_live`_* prefix.
+    /// View, update, or rotate your PromptGuard API key.
+    /// Keys use the pg_live_* prefix.
     Key,
 
-    /// View activity logs from `PromptGuard` API
+    /// View activity logs from the PromptGuard API
     ///
     /// Fetches recent LLM requests, security events, and usage metrics
-    /// directly from the `PromptGuard` backend.
+    /// directly from the PromptGuard backend.
     Logs {
         /// Number of log entries to fetch
         #[arg(short, long, default_value = "20")]
@@ -230,13 +307,13 @@ enum Commands {
         json: bool,
     },
 
-    /// Test `PromptGuard` configuration
+    /// Test PromptGuard configuration
     ///
     /// Validates API key, tests proxy connectivity, and verifies
     /// that your setup is working correctly.
     Test,
 
-    /// Verify end-to-end `PromptGuard` integration
+    /// Verify end-to-end PromptGuard integration
     ///
     /// Runs connectivity, authentication, threat detection, and PII
     /// redaction checks against the live API. Use after setup to
@@ -259,7 +336,7 @@ enum Commands {
 
     /// Redact PII and sensitive data from text
     ///
-    /// Calls the `PromptGuard` API to identify and redact sensitive information
+    /// Calls the PromptGuard API to identify and redact sensitive information
     /// like emails, phone numbers, SSNs, credit cards, etc.
     Redact {
         /// Text content to redact
@@ -281,17 +358,22 @@ enum Commands {
 
     /// Run adversarial security tests against your AI application
     ///
-    /// Uses `PromptGuard`'s Red Team API to evaluate security posture
+    /// Uses PromptGuard's Red Team API to evaluate security posture
     /// by testing with known attack patterns and jailbreak attempts.
+    #[command(after_help = "\
+Examples:
+  promptguard redteam                          Run the default attack suite
+  promptguard redteam --preset strict          Use the strict preset
+  promptguard redteam --autonomous --budget 50 LLM-powered mutation, 50 iters")]
     Redteam {
-        /// `PromptGuard` API base URL to run the tests against. Must be
-        /// HTTPS and point at the `PromptGuard` API host (or localhost for
+        /// PromptGuard API base URL to run the tests against. Must be
+        /// HTTPS and point at the PromptGuard API host (or localhost for
         /// development) — the API key is sent with every request and is
         /// never sent to other hosts.
         #[arg(long)]
         target_url: Option<String>,
 
-        /// `PromptGuard` API key (or uses configured key).
+        /// PromptGuard API key (or uses configured key).
         /// Use '-' to read the key from stdin — passing it as an argument
         /// exposes it in shell history and process listings.
         #[arg(long)]
@@ -330,6 +412,11 @@ enum Commands {
     ///
     /// Define guardrails in YAML, version in git, and apply via CLI.
     /// Supports apply, diff, and export operations.
+    #[command(after_help = "\
+Examples:
+  promptguard policy export --project-id proj_123 > policy.yaml
+  promptguard policy diff policy.yaml --project-id proj_123
+  promptguard policy apply policy.yaml --project-id proj_123 --dry-run")]
     Policy {
         /// Action to perform: apply, diff, or export
         #[command(subcommand)]
@@ -338,11 +425,11 @@ enum Commands {
         /// Project ID to manage policies for (required).
         /// Optional in the parser because clap forbids required global
         /// arguments (a required+global arg panics clap's debug assertions
-        /// on every `policy` invocation); enforced before execution instead.
+        /// on every 'policy' invocation); enforced before execution instead.
         #[arg(long, global = true)]
         project_id: Option<String>,
 
-        /// `PromptGuard` API key (or uses configured key).
+        /// PromptGuard API key (or uses configured key).
         /// Use '-' to read the key from stdin — passing it as an argument
         /// exposes it in shell history and process listings.
         #[arg(long, global = true)]
@@ -355,7 +442,7 @@ enum Commands {
 
     /// Start MCP (Model Context Protocol) server for IDE integration
     ///
-    /// Exposes `PromptGuard` tools over the MCP protocol so AI-powered
+    /// Exposes PromptGuard tools over the MCP protocol so AI-powered
     /// editors (Cursor, Claude Code, Windsurf, etc.) can call them.
     Mcp {
         /// Transport type (currently only 'stdio' is supported)
@@ -363,9 +450,9 @@ enum Commands {
         transport: String,
     },
 
-    /// Authenticate with `PromptGuard` and store credentials globally
+    /// Authenticate with PromptGuard and store credentials globally
     ///
-    /// Saves your API key to `~/.promptguard/credentials.json` so all
+    /// Saves your API key to ~/.promptguard/credentials.json so all
     /// commands and projects can use it without per-project setup.
     Login {
         /// API key to authenticate with (or enter interactively).
@@ -383,9 +470,9 @@ enum Commands {
         json: bool,
     },
 
-    /// Remove stored `PromptGuard` credentials
+    /// Remove stored PromptGuard credentials
     ///
-    /// Deletes `~/.promptguard/credentials.json`.
+    /// Deletes ~/.promptguard/credentials.json.
     Logout {
         /// Output results as JSON
         #[arg(long)]
@@ -402,7 +489,7 @@ enum Commands {
         json: bool,
     },
 
-    /// Manage `PromptGuard` projects
+    /// Manage PromptGuard projects
     ///
     /// List, select, and view projects associated with your account.
     Projects {
@@ -417,7 +504,7 @@ enum Commands {
     /// View recent security events
     ///
     /// Lists security events (blocks, alerts, redactions) from the
-    /// `PromptGuard` API. Useful for monitoring and auditing.
+    /// PromptGuard API. Useful for monitoring and auditing.
     Events {
         /// Number of events to fetch
         #[arg(short, long, default_value = "20")]
@@ -432,7 +519,7 @@ enum Commands {
         json: bool,
     },
 
-    /// Open the `PromptGuard` dashboard in your browser
+    /// Open the PromptGuard dashboard in your browser
     Dashboard {
         /// Output the URL as JSON instead of opening browser
         #[arg(long)]
@@ -440,6 +527,7 @@ enum Commands {
     },
 }
 
+#[allow(clippy::doc_markdown)]
 #[derive(Subcommand)]
 enum ProjectsSubcommand {
     /// List all projects
@@ -452,6 +540,7 @@ enum ProjectsSubcommand {
     },
 }
 
+#[allow(clippy::doc_markdown)]
 #[derive(Subcommand)]
 enum PolicySubcommand {
     /// Apply a YAML policy file to the project
@@ -490,6 +579,11 @@ fn main() {
         print_welcome();
         return;
     };
+
+    // Whether the invoked command requested machine-readable output. On error
+    // we emit JSON instead of a human line so `--json` consumers always get
+    // parseable output on stdout (see the error handler below).
+    let json_mode = command_requested_json(&command);
 
     let result = match command {
         Commands::Init {
@@ -675,8 +769,42 @@ fn main() {
     };
 
     if let Err(e) = result {
-        eprintln!("Error: {e}");
+        if json_mode {
+            // --json modes emit a structured error on stdout so a piped
+            // consumer (e.g. `... --json | jq`) always parses valid JSON and
+            // can branch on `.code`. Still exits non-zero.
+            let obj = serde_json::json!({ "error": e.to_string(), "code": e.code() });
+            println!("{}", serde_json::to_string(&obj).unwrap_or_default());
+        } else {
+            // No "Error:" prefix: each categorized variant already carries its
+            // own descriptive prefix (e.g. "Configuration error: …"), so the
+            // old prefix produced doubled "Error: Configuration error: …".
+            eprintln!("{e}");
+        }
         std::process::exit(1);
+    }
+}
+
+/// Whether the parsed command was invoked with a machine-readable output
+/// flag (`--json`, or `--format json` for `redteam`). Drives structured
+/// error output in `main`.
+fn command_requested_json(command: &Commands) -> bool {
+    match command {
+        Commands::Scan { json, .. }
+        | Commands::Status { json, .. }
+        | Commands::Doctor { json, .. }
+        | Commands::Config { json, .. }
+        | Commands::Logs { json, .. }
+        | Commands::Verify { json, .. }
+        | Commands::Redact { json, .. }
+        | Commands::Login { json, .. }
+        | Commands::Logout { json, .. }
+        | Commands::Whoami { json, .. }
+        | Commands::Projects { json, .. }
+        | Commands::Events { json, .. }
+        | Commands::Dashboard { json, .. } => *json,
+        Commands::Redteam { format, .. } => format.eq_ignore_ascii_case("json"),
+        _ => false,
     }
 }
 
@@ -701,7 +829,7 @@ fn print_welcome() {
     } else {
         Output::info("You're not logged in yet");
         println!();
-        println!("Run `promptguard login` to get started.");
+        println!("Run 'promptguard login' to get started.");
         println!("  Get your API key at https://app.promptguard.co/settings/api-keys");
     }
 

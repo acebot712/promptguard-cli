@@ -146,6 +146,37 @@ pub fn run_transform_pipeline(
     outcome
 }
 
+/// Read a file to a string with terminal-friendly error messages.
+///
+/// The default `std::io::Error` Display leaks the raw errno (e.g.
+/// "No such file or directory (os error 2)"), which is noise for a CLI user.
+/// This maps the common not-found case to "File not found: <path>" and keeps
+/// other IO errors readable (permission denied, etc.) without the errno tail.
+pub fn read_file_friendly(file_path: &str) -> crate::error::Result<String> {
+    std::fs::read_to_string(file_path).map_err(|e| {
+        let msg = match e.kind() {
+            std::io::ErrorKind::NotFound => format!("File not found: {file_path}"),
+            std::io::ErrorKind::PermissionDenied => {
+                format!("Permission denied reading file: {file_path}")
+            },
+            _ => format!("Could not read file '{file_path}': {e}"),
+        };
+        crate::error::PromptGuardError::Io(std::io::Error::new(e.kind(), msg))
+    })
+}
+
+/// Return `singular` when `count == 1`, otherwise `plural`.
+///
+/// Tiny grammar helper so summaries read "1 file" not "1 files".
+#[must_use]
+pub fn pluralize(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 {
+        singular
+    } else {
+        plural
+    }
+}
+
 /// Resolve an `--api-key` flag value, supporting `-` to read the key from
 /// stdin (avoids exposing the key in shell history and process listings).
 pub fn resolve_api_key_flag(value: &str) -> crate::error::Result<String> {

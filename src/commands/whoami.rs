@@ -8,9 +8,15 @@ pub struct WhoamiCommand {
 }
 
 impl WhoamiCommand {
+    // Exits the process with code 1 when unauthenticated (see below), so
+    // shell/CI callers can gate on `whoami` succeeding.
+    #[allow(clippy::exit)]
     pub fn execute(&self) -> Result<()> {
-        // Not logged in at all: report gracefully. Any other resolve_session
-        // error (e.g. refusing a repo-configured custom proxy) propagates.
+        // Not logged in at all: report gracefully but exit non-zero so
+        // `promptguard whoami` can be used as an "am I authenticated?" gate.
+        // The message uses a neutral ℹ tone (this is a state, not an error).
+        // Any other resolve_session error (e.g. refusing a repo-configured
+        // custom proxy) propagates as a normal error instead.
         if resolve_api_key().is_err() {
             if self.json {
                 let result = serde_json::json!({
@@ -22,9 +28,9 @@ impl WhoamiCommand {
                     serde_json::to_string_pretty(&result).unwrap_or_default()
                 );
             } else {
-                Output::error("Not logged in. Run 'promptguard login' to authenticate.");
+                Output::info("Not logged in. Run 'promptguard login' to authenticate.");
             }
-            return Ok(());
+            std::process::exit(1);
         }
 
         let (api_key, base_url) = resolve_session()?;

@@ -91,7 +91,11 @@ impl ApplyCommand {
 
         println!();
         Output::success("Configuration applied!");
-        println!("\n  • {} files modified", outcome.files_modified.len());
+        let n = outcome.files_modified.len();
+        println!(
+            "\n  • {n} {} modified",
+            super::pluralize(n, "file", "files")
+        );
 
         Ok(())
     }

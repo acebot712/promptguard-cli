@@ -7,7 +7,6 @@ use crate::scanner::FileScanner;
 use crate::types::{DetectionInstance, Provider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
 /// Response from the /security/scan endpoint.
@@ -60,12 +59,7 @@ impl ScanCommand {
         let content = if let Some(ref text) = self.text {
             text.clone()
         } else if let Some(ref file_path) = self.file {
-            fs::read_to_string(file_path).map_err(|e| {
-                PromptGuardError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!("Failed to read file '{file_path}': {e}"),
-                ))
-            })?
+            super::read_file_friendly(file_path)?
         } else {
             return Err(PromptGuardError::Custom(
                 "Either --text or --file must be provided".to_string(),

@@ -128,7 +128,7 @@ impl InitCommand {
             unique_files.dedup();
 
             println!(
-                "   • {} SDK ({} files)",
+                "  • {} SDK ({} files)",
                 provider.display_name(),
                 unique_files.len()
             );
@@ -142,11 +142,10 @@ impl InitCommand {
         }
 
         // Show configuration
-        println!();
         Output::section("Configuration:", "📝");
-        println!("   • Proxy URL: {}", self.base_url);
-        println!("   • Environment: {}", self.env_file);
-        println!("   • Version control: Git (backups via git diff/revert)");
+        println!("  • Proxy URL: {}", self.base_url);
+        println!("  • Environment: {}", self.env_file);
+        println!("  • Version control: Git (backups via git diff/revert)");
 
         // Confirm changes
         if !self.auto && !self.dry_run {
@@ -162,7 +161,6 @@ impl InitCommand {
         }
 
         // Apply transformations
-        println!();
         Output::section(
             if self.dry_run {
                 "Preview:"
@@ -300,9 +298,16 @@ impl InitCommand {
             println!("  • Run your app normally - all LLM requests now go through PromptGuard");
             println!("  • View logs: promptguard logs");
             println!("  • Check dashboard: https://app.promptguard.co/dashboard");
-            println!("\n💡 To revert changes: git diff (review) | git checkout -- . (undo)");
+            println!("\nManaging PromptGuard:");
+            println!("  • Pause protection:  promptguard disable");
+            println!("  • Remove entirely:   promptguard revert");
+            println!("  • Undo file edits:   git diff (review) | git checkout -- . (undo)");
         } else {
-            println!("✓ {} files would be modified", files_modified.len());
+            let n = files_modified.len();
+            println!(
+                "✓ {n} {} would be modified",
+                super::pluralize(n, "file", "files")
+            );
             println!("✓ 1 file would be created (.promptguard.json)");
             println!("\nTo apply: promptguard init");
         }
