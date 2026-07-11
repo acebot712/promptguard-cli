@@ -148,8 +148,8 @@ fn tool_definitions() -> serde_json::Value {
 // Tool handlers
 // ---------------------------------------------------------------------------
 
-fn resolve_project_id(config: &crate::config::PromptGuardConfig) -> Option<String> {
-    if let Some(ref pid) = config.project_id {
+fn resolve_project_id(config: Option<&crate::config::PromptGuardConfig>) -> Option<String> {
+    if let Some(pid) = config.and_then(|c| c.project_id.as_ref()) {
         if !pid.is_empty() {
             return Some(pid.clone());
         }
@@ -172,15 +172,17 @@ fn handle_scan_text(params: &serde_json::Value) -> serde_json::Value {
     };
 
     let result = (|| -> Result<serde_json::Value> {
-        let config_manager = ConfigManager::new(None)?;
-        let config = config_manager.load()?;
+        // Project config is OPTIONAL here: it only contributes a project_id.
+        // Requiring it meant scan_text failed with "not initialized" even
+        // though global credentials were perfectly sufficient.
+        let config = ConfigManager::new(None).ok().and_then(|cm| cm.load().ok());
         // Resolve via the shared precedence (env > project > global) and the
         // key-exfiltration guard rather than reading project config directly.
         let (api_key, base_url) = crate::auth::resolve_session()?;
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let mut body = serde_json::json!({ "content": text, "type": "prompt" });
-        if let Some(pid) = resolve_project_id(&config) {
+        if let Some(pid) = resolve_project_id(config.as_ref()) {
             body["project_id"] = serde_json::Value::String(pid);
         }
 
@@ -309,15 +311,17 @@ fn handle_redact(params: &serde_json::Value) -> serde_json::Value {
     };
 
     let result = (|| -> Result<serde_json::Value> {
-        let config_manager = ConfigManager::new(None)?;
-        let config = config_manager.load()?;
+        // Project config is OPTIONAL here: it only contributes a project_id.
+        // Requiring it meant redact failed with "not initialized" even
+        // though global credentials were perfectly sufficient.
+        let config = ConfigManager::new(None).ok().and_then(|cm| cm.load().ok());
         // Resolve via the shared precedence (env > project > global) and the
         // key-exfiltration guard rather than reading project config directly.
         let (api_key, base_url) = crate::auth::resolve_session()?;
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let mut body = serde_json::json!({ "content": text });
-        if let Some(pid) = resolve_project_id(&config) {
+        if let Some(pid) = resolve_project_id(config.as_ref()) {
             body["project_id"] = serde_json::Value::String(pid);
         }
 
