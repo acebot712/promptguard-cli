@@ -42,8 +42,15 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         ts_api_key_param: "apiKey",
     },
     ProviderInfo {
+        // The Cohere Python SDK has NO `CohereClient` class (verified:
+        // `hasattr(cohere, "CohereClient")` is False). The real classes are
+        // `cohere.Client` and `cohere.ClientV2`, both of which accept a valid
+        // `base_url=` kwarg. Detection/transform are special-cased in
+        // `queries.rs` (module-constrained to `cohere.`, covering both
+        // classes), because a bare `Client` identifier is far too generic to
+        // match safely. `py_class_name` is kept accurate for the record.
         provider: Provider::Cohere,
-        py_class_name: "CohereClient",
+        py_class_name: "Client",
         py_module_name: "cohere",
         py_async_class_name: "",
         ts_class_name: "CohereClient",
@@ -60,13 +67,24 @@ pub const PROVIDERS: &[ProviderInfo] = &[
         ts_api_key_param: "accessToken",
     },
     ProviderInfo {
+        // Gemini is DETECT-ONLY (like Bedrock). The Python SDK's
+        // `genai.Client.__init__` has no `base_url` param (verified: it is
+        // keyword-only over enterprise/vertexai/api_key/credentials/project/
+        // location/debug_config/http_options), so injecting `base_url=` raised
+        // a TypeError at runtime. The TS SDK reads its base URL from
+        // `httpOptions.baseUrl`, NOT a top-level `baseURL`, so a `baseURL:`
+        // injection would be silently ignored (traffic still hits Google while
+        // we falsely report coverage). Empty ts params mark the provider
+        // detect-only for the TS transformer; the Python transform query is
+        // empty in `queries.rs`. Runtime shim coverage is honestly absent for
+        // Gemini (see `templates.rs`), so detect-only is the truthful state.
         provider: Provider::Gemini,
         py_class_name: "Client",
         py_module_name: "",
         py_async_class_name: "",
         ts_class_name: "GoogleGenAI",
-        ts_base_url_param: "baseURL",
-        ts_api_key_param: "apiKey",
+        ts_base_url_param: "",
+        ts_api_key_param: "",
     },
     ProviderInfo {
         provider: Provider::Groq,

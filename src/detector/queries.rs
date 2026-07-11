@@ -122,8 +122,40 @@ fn standard_python_transform_query(info: &ProviderInfo) -> String {
     patterns
 }
 
+/// Module-constrained detection/transform patterns for a provider whose class
+/// name is too generic to match bare (e.g. Cohere's `Client` / `ClientV2`).
+/// Matches only `module.Class(...)` attribute calls, never a bare `Class(...)`
+/// — mirroring the Gemini handling, which is why a bare `from cohere import
+/// Client; Client(...)` is intentionally not matched.
+fn module_qualified_query(module_name: &str, class_names: &[&str]) -> String {
+    let mut patterns = String::new();
+    for class_name in class_names {
+        let _ = write!(
+            patterns,
+            r#"
+            (call
+                function: (attribute
+                    object: (identifier) @module
+                    (#eq? @module "{module_name}")
+                    attribute: (identifier) @class
+                    (#eq? @class "{class_name}")
+                )
+                arguments: (argument_list) @args
+            ) @call_expr
+        "#
+        );
+    }
+    patterns
+}
+
 pub fn get_python_detection_query(provider: Provider) -> String {
     match provider {
+        // Cohere's real Python classes are `cohere.Client` and
+        // `cohere.ClientV2` (there is NO `CohereClient`). Both are matched
+        // module-qualified only: a bare `Client(...)` is far too generic
+        // (database clients, HTTP clients, ...). This aligns static detection
+        // with the runtime shim, which patches `cohere.Client`.
+        Provider::Cohere => module_qualified_query("cohere", &["Client", "ClientV2"]),
         // Match genai.Client(...) and google.genai.Client(...) only. A bare
         // Client(...) alternative used to be included, but "Client" is far
         // too generic an identifier (database clients, HTTP clients, ...)
@@ -202,23 +234,22 @@ pub fn get_python_detection_query(provider: Provider) -> String {
 
 pub fn get_python_transform_query(provider: Provider) -> String {
     match provider {
-        Provider::Gemini => r#"
-            (call
-                function: (attribute
-                    object: (identifier) @module
-                    (#eq? @module "genai")
-                    attribute: (identifier) @class
-                    (#eq? @class "Client")
-                )
-                arguments: (argument_list) @args
-            ) @call_expr
-        "#
-        .to_string(),
-        // Bedrock is detect-only: boto3 clients authenticate via AWS
-        // credentials/SigV4, and boto3.client() accepts neither api_key= nor
-        // base_url= — injecting them raised TypeError at runtime. An empty
-        // query compiles and matches nothing, so the transformer is a no-op.
-        Provider::Bedrock => String::new(),
+        // Cohere's `cohere.Client` / `cohere.ClientV2` BOTH accept a valid
+        // `base_url=` kwarg (verified against cohere 7.x), so — unlike Gemini
+        // — Cohere is transformable, not detect-only. Same module-qualified
+        // patterns as detection.
+        Provider::Cohere => module_qualified_query("cohere", &["Client", "ClientV2"]),
+        // Gemini and Bedrock are both DETECT-ONLY — an empty query compiles
+        // and matches nothing, so the transformer is a no-op:
+        //  * Gemini: `genai.Client.__init__` has no `base_url` param (injecting
+        //    one raised TypeError at runtime), and the TS SDK reads its base
+        //    URL from `httpOptions.baseUrl` (a top-level `baseURL` is silently
+        //    ignored). Runtime coverage is honestly absent (see templates.rs);
+        //    use proxy mode (point httpOptions.baseUrl at the PromptGuard proxy).
+        //  * Bedrock: boto3 clients authenticate via AWS credentials/SigV4, and
+        //    boto3.client() accepts neither api_key= nor base_url= — injecting
+        //    them raised TypeError at runtime.
+        Provider::Gemini | Provider::Bedrock => String::new(),
         _ => ProviderInfo::get(provider)
             .map(standard_python_transform_query)
             .unwrap_or_default(),

@@ -421,6 +421,64 @@ mod tests {
         assert_eq!(out, input, "boto3 calls must be byte-for-byte untouched");
     }
 
+    /// Gemini is detect-only: `genai.Client.__init__` has NO `base_url` param
+    /// (verified against `google-genai` — injecting one raised `TypeError` at
+    /// runtime), so the transformer must leave `genai.Client(...)` calls
+    /// byte-for-byte unchanged (mirrors the Bedrock detect-only test).
+    #[test]
+    fn gemini_transform_is_a_noop() {
+        let input = "import google.genai as genai\nclient = genai.Client(api_key=key)\n";
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("gem.py");
+        fs::write(&path, input).unwrap();
+        let result = PythonTransformer::new()
+            .transform_file(
+                &path,
+                Provider::Gemini,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+                false,
+            )
+            .unwrap();
+
+        assert!(!result.modified, "gemini must be detect-only");
+        let out = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            out, input,
+            "genai.Client(...) must be byte-for-byte untouched"
+        );
+    }
+
+    /// Cohere IS transformable: `cohere.Client` / `cohere.ClientV2` both accept
+    /// a valid `base_url=` kwarg. The real classes are `cohere.Client` and
+    /// `cohere.ClientV2` (there is NO `CohereClient`), matched module-qualified.
+    #[test]
+    fn cohere_client_and_clientv2_are_transformed() {
+        for call in ["cohere.Client(api_key=key)", "cohere.ClientV2(api_key=key)"] {
+            let input = format!("import cohere\nclient = {call}\n");
+            let dir = TempDir::new().unwrap();
+            let path = dir.path().join("co.py");
+            fs::write(&path, &input).unwrap();
+            let result = PythonTransformer::new()
+                .transform_file(
+                    &path,
+                    Provider::Cohere,
+                    "https://api.promptguard.co/api/v1",
+                    "PROMPTGUARD_API_KEY",
+                    false,
+                )
+                .unwrap();
+            assert!(result.modified, "{call} must be transformed");
+            let out = fs::read_to_string(&path).unwrap();
+            assert!(
+                out.contains("base_url=\"https://api.promptguard.co/api/v1\""),
+                "{call} must get base_url injected:\n{out}"
+            );
+            assert_reparses_clean(&out);
+        }
+    }
+
     /// Regression: attribute-form calls (`openai.OpenAI(...)`) were detected
     /// but the transform query matched only bare identifiers, so the file
     /// was silently reported "(no changes needed)" and never routed through

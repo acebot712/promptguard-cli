@@ -103,10 +103,19 @@ pub fn typescript_object_has_base_url(
     object_text: &str,
     info: &crate::detector::registry::ProviderInfo,
 ) -> bool {
-    object_text.contains(&format!("{}:", info.ts_base_url_param))
-        || object_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
-        || object_text.contains(&format!("'{}': ", info.ts_base_url_param))
-        || object_text.contains("base_url:")
+    // Detect-only providers (Bedrock, Gemini) have an empty base-URL param.
+    // Interpolating it yields `":"`/`"\"\": "` which matches ANY object with a
+    // colon, so we'd falsely report every detected instance as "(configured)".
+    // Skip the param-based checks entirely and fall back to the snake_case
+    // literal only.
+    if !info.ts_base_url_param.is_empty()
+        && (object_text.contains(&format!("{}:", info.ts_base_url_param))
+            || object_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
+            || object_text.contains(&format!("'{}': ", info.ts_base_url_param)))
+    {
+        return true;
+    }
+    object_text.contains("base_url:")
 }
 
 fn python_check_base_url(source: &str, args_node: tree_sitter::Node) -> (bool, Option<String>) {
@@ -294,6 +303,37 @@ mod tests {
             gemini.map_or(0, |r| r.instances.len()),
             2,
             "only genai.Client and google.genai.Client must match"
+        );
+    }
+
+    /// Cohere Python detection must match `cohere.Client` and
+    /// `cohere.ClientV2` (the real SDK classes — there is NO `CohereClient`,
+    /// which the registry previously used, so real Cohere code was never
+    /// detected). A bare `Client(...)` is too generic and must NOT match.
+    #[test]
+    fn cohere_detects_client_and_clientv2_module_qualified() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("co.py");
+        std::fs::write(
+            &path,
+            "import cohere\n\
+             c1 = cohere.Client(api_key=key)\n\
+             c2 = cohere.ClientV2(api_key=key)\n\
+             from some_other import Client\n\
+             other = Client(host=\"localhost\")\n",
+        )
+        .unwrap();
+
+        let results = detect_all_providers_in_file(&path).unwrap();
+        let cohere = results
+            .iter()
+            .find(|(p, _)| *p == Provider::Cohere)
+            .map(|(_, r)| r);
+
+        assert_eq!(
+            cohere.map_or(0, |r| r.instances.len()),
+            2,
+            "only cohere.Client and cohere.ClientV2 must match (not bare Client)"
         );
     }
 

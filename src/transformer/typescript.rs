@@ -424,6 +424,56 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), input);
     }
 
+    /// Gemini is detect-only in TS: `@google/genai` reads its base URL from
+    /// `httpOptions.baseUrl`, NOT a top-level `baseURL` (verified against the
+    /// package's `GoogleGenAIOptions` type, which has no top-level base-URL
+    /// field — only `httpOptions` carries `baseUrl`).
+    /// A `baseURL:` injection would be silently ignored (false coverage), so
+    /// the transformer must leave `new GoogleGenAI({...})` untouched.
+    #[test]
+    fn gemini_googlegenai_is_left_untouched() {
+        let input = "import { GoogleGenAI } from \"@google/genai\";\nconst client = new GoogleGenAI({ apiKey: k });\n";
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("gem.ts");
+        fs::write(&path, input).unwrap();
+        let result = TypeScriptTransformer::new()
+            .transform_file(
+                &path,
+                Provider::Gemini,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+                false,
+            )
+            .unwrap();
+
+        assert!(!result.modified, "gemini must be detect-only");
+        let out = fs::read_to_string(&path).unwrap();
+        assert_eq!(out, input, "GoogleGenAI must be untouched");
+    }
+
+    /// Gemini detect-only also covers the empty-argument-list case: no options
+    /// object must be synthesized (that would inject an ignored `baseURL`).
+    #[test]
+    fn gemini_empty_arguments_left_untouched() {
+        let input =
+            "import { GoogleGenAI } from \"@google/genai\";\nconst client = new GoogleGenAI();\n";
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("gem.ts");
+        fs::write(&path, input).unwrap();
+        let result = TypeScriptTransformer::new()
+            .transform_file(
+                &path,
+                Provider::Gemini,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+                false,
+            )
+            .unwrap();
+        assert!(!result.modified, "gemini must stay detect-only");
+        assert_eq!(fs::read_to_string(&path).unwrap(), input);
+    }
+
     #[test]
     fn simple_options_object_reparses_clean() {
         let input =
