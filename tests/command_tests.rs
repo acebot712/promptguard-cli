@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Unit and integration tests for CLI commands
 ///
 /// Tests cover the critical paths:
@@ -842,4 +842,109 @@ fn test_proxy_url_validation() {
             || url.starts_with("http://127.0.0.1");
         assert!(!is_valid, "Invalid URL should be rejected: {url}");
     }
+}
+
+// =============================================================================
+// NON-INTERACTIVE PROCESS TESTS - disable/enable must never hang on stdin
+// =============================================================================
+//
+// Regression for the VS Code extension hang: it spawns the CLI via execFile
+// with PIPED stdin that it never writes to and never closes, so a blocking
+// `read_line` in `Output::confirm` hung until the extension's timeout. These
+// tests spawn the real binary the same way and require it to exit.
+
+/// Write a minimal valid .promptguard.json (static mode, enabled) into `dir`.
+fn write_minimal_config(dir: &std::path::Path) {
+    let config = PromptGuardConfig::new(
+        "pg_live_test_key_1234567890".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec!["openai".to_string()],
+    )
+    .expect("valid test config");
+    let manager = ConfigManager::new(Some(dir.join(".promptguard.json"))).unwrap();
+    manager.save(&config).unwrap();
+}
+
+/// Poll `child` for up to `secs` seconds; `None` means it never exited.
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    secs: u64,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait failed") {
+            return Some(status);
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Run the built promptguard binary in `dir` with piped stdin that is kept
+/// open and never written to (exactly how the VS Code extension spawns it).
+fn run_with_open_stdin(dir: &std::path::Path, args: &[&str]) -> std::process::ExitStatus {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_promptguard"))
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn promptguard binary");
+
+    // Deliberately keep child.stdin alive (open, no data, no EOF).
+    let status = wait_with_timeout(&mut child, 30);
+    let Some(status) = status else {
+        let _ = child.kill();
+        panic!("promptguard {args:?} hung waiting on stdin instead of exiting");
+    };
+    status
+}
+
+/// `disable --yes` must skip the confirmation prompt entirely.
+#[test]
+fn test_disable_yes_flag_does_not_block_on_stdin() {
+    let temp_dir = TempDir::new().unwrap();
+    write_minimal_config(temp_dir.path());
+
+    let status = run_with_open_stdin(temp_dir.path(), &["disable", "--yes"]);
+    assert!(status.success(), "disable --yes must exit successfully");
+
+    let manager = ConfigManager::new(Some(temp_dir.path().join(".promptguard.json"))).unwrap();
+    let config = manager.load().unwrap();
+    assert!(!config.enabled, "disable --yes must actually disable");
+}
+
+/// Even WITHOUT --yes, a non-interactive stdin must fall through to the
+/// prompt's default answer instead of blocking forever.
+#[test]
+fn test_disable_without_yes_falls_back_to_default_on_non_tty_stdin() {
+    let temp_dir = TempDir::new().unwrap();
+    write_minimal_config(temp_dir.path());
+
+    let status = run_with_open_stdin(temp_dir.path(), &["disable"]);
+    assert!(
+        status.success(),
+        "disable must exit (default answer) when stdin is not a TTY"
+    );
+}
+
+/// `enable --yes` must skip the confirmation prompt entirely.
+#[test]
+fn test_enable_yes_flag_does_not_block_on_stdin() {
+    let temp_dir = TempDir::new().unwrap();
+    write_minimal_config(temp_dir.path());
+
+    // Start disabled so `enable` has work to do (and reaches its prompt).
+    let manager = ConfigManager::new(Some(temp_dir.path().join(".promptguard.json"))).unwrap();
+    let mut config = manager.load().unwrap();
+    config.enabled = false;
+    manager.save(&config).unwrap();
+
+    let status = run_with_open_stdin(temp_dir.path(), &["enable", "--yes"]);
+    assert!(status.success(), "enable --yes must exit successfully");
 }

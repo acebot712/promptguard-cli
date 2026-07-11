@@ -166,7 +166,11 @@ enum Commands {
     /// Temporarily disable `PromptGuard` (keeps configuration)
     ///
     /// LLM requests will go directly to providers until re-enabled.
-    Disable,
+    Disable {
+        /// Skip confirmation prompt (for CI/CD and non-interactive callers)
+        #[arg(short = 'y', long)]
+        yes: bool,
+    },
 
     /// Re-enable `PromptGuard` after disabling
     ///
@@ -175,6 +179,10 @@ enum Commands {
         /// Use runtime shims for 100% SDK call coverage (recommended)
         #[arg(long)]
         runtime: bool,
+
+        /// Skip confirmation prompt (for CI/CD and non-interactive callers)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
 
     /// Completely remove `PromptGuard` from this project
@@ -527,8 +535,8 @@ fn main() {
 
         Commands::Revert { yes } => RevertCommand { yes }.execute(),
 
-        Commands::Disable => DisableCommand::execute(),
-        Commands::Enable { runtime } => EnableCommand { runtime }.execute(),
+        Commands::Disable { yes } => DisableCommand { yes }.execute(),
+        Commands::Enable { runtime, yes } => EnableCommand { runtime, yes }.execute(),
         Commands::Config { json } => ConfigCommand { json }.execute(),
         Commands::Key => KeyCommand::execute(),
         Commands::Logs {
@@ -684,4 +692,70 @@ fn print_welcome() {
 
     println!();
     println!("See all commands: promptguard --help");
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// `disable` must accept `--yes`/`-y` so non-interactive callers (the
+    /// VS Code extension spawns the CLI with piped stdin) can skip the
+    /// confirmation prompt instead of hanging on a stdin read.
+    #[test]
+    fn disable_accepts_yes_flag() {
+        for argv in [
+            &["promptguard", "disable", "--yes"][..],
+            &["promptguard", "disable", "-y"][..],
+        ] {
+            let cli = Cli::try_parse_from(argv).expect("disable must accept --yes/-y");
+            assert!(
+                matches!(cli.command, Some(Commands::Disable { yes: true })),
+                "expected Disable {{ yes: true }} for {argv:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn disable_defaults_to_confirming() {
+        let cli = Cli::try_parse_from(["promptguard", "disable"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Disable { yes: false })
+        ));
+    }
+
+    /// `enable` must accept `--yes`/`-y`, with and without `--runtime`.
+    #[test]
+    fn enable_accepts_yes_flag() {
+        let cli = Cli::try_parse_from(["promptguard", "enable", "--runtime", "--yes"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Enable {
+                runtime: true,
+                yes: true
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["promptguard", "enable", "-y"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Enable {
+                runtime: false,
+                yes: true
+            })
+        ));
+    }
+
+    #[test]
+    fn enable_defaults_to_confirming() {
+        let cli = Cli::try_parse_from(["promptguard", "enable"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Enable {
+                runtime: false,
+                yes: false
+            })
+        ));
+    }
 }

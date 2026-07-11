@@ -13,10 +13,15 @@ enum RestoreOutcome {
     Failed,
 }
 
-pub struct DisableCommand;
+pub struct DisableCommand {
+    /// Skip confirmation prompts (each prompt falls through to its default
+    /// answer). Required for non-interactive callers — e.g. the VS Code
+    /// extension spawns the CLI with piped stdin that never delivers input.
+    pub yes: bool,
+}
 
 impl DisableCommand {
-    pub fn execute() -> Result<()> {
+    pub fn execute(&self) -> Result<()> {
         Output::header("Disable PromptGuard");
 
         let config_manager = ConfigManager::new(None)?;
@@ -56,7 +61,7 @@ impl DisableCommand {
             }
         );
 
-        if !Output::confirm("Continue?", true)? {
+        if !self.yes && !Output::confirm("Continue?", true)? {
             return Ok(());
         }
 
@@ -131,8 +136,12 @@ impl DisableCommand {
                      nothing to restore automatically.",
                 );
 
+                // With --yes this opt-in keeps its DEFAULT answer (No):
+                // "skip the prompts" must never silently opt in to restoring
+                // backups PromptGuard did not create.
                 let discovered = backup_manager.list_backups(&root_path);
                 if !discovered.is_empty()
+                    && !self.yes
                     && Output::confirm(
                         &format!(
                             "Found {} '{}' file(s) in the tree that PromptGuard did not track. \

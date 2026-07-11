@@ -11,6 +11,10 @@ use std::path::PathBuf;
 
 pub struct EnableCommand {
     pub runtime: bool,
+    /// Skip the confirmation prompt. Required for non-interactive callers —
+    /// e.g. the VS Code extension spawns the CLI with piped stdin that never
+    /// delivers input.
+    pub yes: bool,
 }
 
 impl EnableCommand {
@@ -53,7 +57,7 @@ impl EnableCommand {
             println!("  ✓ No code modification needed");
         }
 
-        if !Output::confirm("Continue?", true)? {
+        if !self.yes && !Output::confirm("Continue?", true)? {
             return Ok(());
         }
 

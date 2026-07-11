@@ -163,16 +163,41 @@ impl Output {
         }
     }
 
+    /// Ask a yes/no question and return the answer.
+    ///
+    /// Non-interactive safety: when stdin is not a TTY (piped, redirected, or
+    /// closed — e.g. spawned by an editor extension or CI), or when
+    /// `read_line` hits EOF, this falls through to `default` instead of
+    /// blocking forever on input that will never arrive. Callers that need a
+    /// scripted "yes" should pass their command's `--yes` flag rather than
+    /// piping input.
     pub fn confirm(prompt: &str, default: bool) -> Result<bool> {
+        use std::io::IsTerminal;
+
         let default_str = if default { "Y/n" } else { "y/N" };
         let bold_prompt = Self::colorize(prompt, |s| s.bold());
+
+        if !io::stdin().is_terminal() {
+            let answer = if default { "yes" } else { "no" };
+            println!(
+                "{bold_prompt} [{default_str}]: {answer} (stdin is not interactive; using default)"
+            );
+            return Ok(default);
+        }
+
         print!("{bold_prompt} [{default_str}]: ");
         io::stdout().flush().map_err(PromptGuardError::Io)?;
 
         let mut input = String::new();
-        io::stdin()
+        let bytes_read = io::stdin()
             .read_line(&mut input)
             .map_err(PromptGuardError::Io)?;
+
+        // EOF (Ctrl-D / stream closed): no answer is coming.
+        if bytes_read == 0 {
+            println!();
+            return Ok(default);
+        }
 
         let input = input.trim().to_lowercase();
 
