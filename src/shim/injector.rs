@@ -10,9 +10,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const PYTHON_SHIM_IMPORT: &str = "\n# PromptGuard runtime shim - auto-injected\nimport sys\nimport os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), '.promptguard'))\nimport promptguard_shim\n";
+const PYTHON_SHIM_IMPORT: &str = "\n# PromptGuard runtime shim - auto-injected\nimport sys\nimport os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), '.promptguard'))\nimport promptguard_shim\n# PromptGuard runtime shim - end\n";
 
 const PYTHON_SHIM_IMPORT_MARKER: &str = "# PromptGuard runtime shim - auto-injected";
+
+const PYTHON_SHIM_END_MARKER: &str = "# PromptGuard runtime shim - end";
+
+/// The exact lines injected by older CLI versions that did not emit an
+/// end-marker. Used to remove legacy blocks without deleting user code.
+const PYTHON_SHIM_LEGACY_LINES: &[&str] = &[
+    "import sys",
+    "import os",
+    "sys.path.insert(0, os.path.join(os.path.dirname(__file__), '.promptguard'))",
+    "import promptguard_shim",
+];
 
 /// Entry point detector and injector
 pub struct ShimInjector {
@@ -252,25 +263,48 @@ impl ShimInjector {
             return Ok(false); // Not injected
         }
 
-        // Remove the shim import block
+        // Remove the shim import block: start-marker to end-marker. For
+        // legacy blocks (no end-marker), remove exactly the known injected
+        // lines so user code is never deleted.
         let lines: Vec<&str> = content.lines().collect();
-        let mut new_lines = Vec::new();
-        let mut skip_until_blank = false;
+        let mut new_lines: Vec<&str> = Vec::new();
+        let mut i = 0;
 
-        for line in lines {
+        while i < lines.len() {
+            let line = lines[i];
+
             if line.contains(PYTHON_SHIM_IMPORT_MARKER) {
-                skip_until_blank = true;
-                continue;
-            }
+                // Injection always prepends one blank line before the marker;
+                // drop it so inject + remove round-trips exactly.
+                if new_lines.last().is_some_and(|l| l.trim().is_empty()) {
+                    new_lines.pop();
+                }
 
-            if skip_until_blank {
-                if line.trim().is_empty() {
-                    skip_until_blank = false;
+                i += 1; // skip the start-marker line
+
+                let has_end_marker = lines[i..]
+                    .iter()
+                    .any(|l| l.contains(PYTHON_SHIM_END_MARKER));
+
+                if has_end_marker {
+                    // Skip everything up to and including the end marker.
+                    while i < lines.len() && !lines[i].contains(PYTHON_SHIM_END_MARKER) {
+                        i += 1;
+                    }
+                    i += 1; // skip the end-marker line itself
+                } else {
+                    // Legacy block: remove only the exact injected lines.
+                    for expected in PYTHON_SHIM_LEGACY_LINES {
+                        if i < lines.len() && lines[i].trim() == *expected {
+                            i += 1;
+                        }
+                    }
                 }
                 continue;
             }
 
             new_lines.push(line);
+            i += 1;
         }
 
         let new_content = new_lines.join("\n") + "\n";
@@ -395,5 +429,69 @@ mod tests {
 
         let after_remove = fs::read_to_string(&test_file).unwrap();
         assert!(!after_remove.contains("import promptguard_shim"));
+    }
+
+    /// Regression test: user code following the injected block (with no blank
+    /// line separating it) must survive an inject/remove round-trip.
+    #[test]
+    fn test_remove_python_shim_preserves_user_code() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.py");
+
+        let original = "#!/usr/bin/env python3\nimport json\n\ndef main():\n    print('hello')\n\nif __name__ == \"__main__\":\n    main()\n";
+        fs::write(&test_file, original).unwrap();
+
+        let injector = ShimInjector::new(temp_dir.path());
+        injector.inject_python_shim(&test_file).unwrap();
+        injector.remove_python_shim(&test_file).unwrap();
+
+        let after = fs::read_to_string(&test_file).unwrap();
+        assert_eq!(after, original, "user code must survive inject/remove");
+    }
+
+    /// Round-trip with trailing blank lines in the original file.
+    #[test]
+    fn test_remove_python_shim_preserves_trailing_blank_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.py");
+
+        let original = "import json\nprint('a')\nprint('b')\n\n";
+        fs::write(&test_file, original).unwrap();
+
+        let injector = ShimInjector::new(temp_dir.path());
+        injector.inject_python_shim(&test_file).unwrap();
+        injector.remove_python_shim(&test_file).unwrap();
+
+        let after = fs::read_to_string(&test_file).unwrap();
+        // lines() drops trailing blank lines and we re-add a single final
+        // newline, so compare line content (user code intact).
+        assert_eq!(
+            after.trim_end(),
+            original.trim_end(),
+            "user code must survive inject/remove"
+        );
+        assert!(!after.contains("promptguard_shim"));
+    }
+
+    /// Legacy blocks (injected by older versions without an end-marker) must
+    /// be removed without deleting the user code that follows them.
+    #[test]
+    fn test_remove_legacy_python_shim_block_without_end_marker() {
+        let temp_dir = TempDir::new().unwrap();
+        let test_file = temp_dir.path().join("test.py");
+
+        // Simulate an old-format injection: no end-marker, user code
+        // immediately after the injected lines (no blank line).
+        let legacy = "\n# PromptGuard runtime shim - auto-injected\nimport sys\nimport os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), '.promptguard'))\nimport promptguard_shim\nprint('user code 1')\nprint('user code 2')\n";
+        fs::write(&test_file, legacy).unwrap();
+
+        let injector = ShimInjector::new(temp_dir.path());
+        let removed = injector.remove_python_shim(&test_file).unwrap();
+        assert!(removed);
+
+        let after = fs::read_to_string(&test_file).unwrap();
+        assert!(!after.contains("promptguard_shim"));
+        assert!(after.contains("print('user code 1')"), "user code deleted");
+        assert!(after.contains("print('user code 2')"), "user code deleted");
     }
 }
