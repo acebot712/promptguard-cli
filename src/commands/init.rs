@@ -416,21 +416,30 @@ impl InitCommand {
             return Err(crate::error::PromptGuardError::InvalidApiKey);
         }
 
-        // Validate API key against the backend (skip in dry-run mode)
+        // Validate API key against the backend (skip in dry-run mode).
+        // Uses the authenticated /projects endpoint: the unauthenticated
+        // /health probe "succeeds" for any key and proves nothing.
         if !self.dry_run {
             Output::info("Validating API key...");
 
             let client = PromptGuardClient::new(api_key.clone(), Some(self.base_url.clone()))?;
 
-            match client.health_check() {
+            match client.validate_credentials() {
                 Ok(()) => {
                     Output::success("API key validated successfully");
                 },
+                // 401/403: the key is definitively bad — don't offer to continue.
+                Err(crate::error::PromptGuardError::Auth(msg)) => {
+                    Output::error(&format!("API key rejected: {msg}"));
+                    println!();
+                    println!("Check your key at https://app.promptguard.co/settings/api-keys");
+                    return Err(crate::error::PromptGuardError::Auth(msg));
+                },
+                // Network or server issue: the key may be fine.
                 Err(e) => {
                     Output::warning(&format!("Could not validate API key: {e}"));
                     println!();
                     println!("This could mean:");
-                    println!("  • The API key is invalid or expired");
                     println!("  • The PromptGuard API is temporarily unavailable");
                     println!("  • Network connectivity issues");
                     println!();

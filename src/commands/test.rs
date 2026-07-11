@@ -19,21 +19,37 @@ impl TestCommand {
         println!("\nTesting configuration...");
         Output::section("API Key Validation", "🔑");
 
-        // Test API key by calling health endpoint
         let client =
             PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
 
+        // Reachability first (unauthenticated /health probe)
         match client.health_check() {
             Ok(()) => {
-                Output::success("✓ API key is valid");
                 Output::success("✓ Proxy endpoint is reachable");
             },
             Err(e) => {
                 Output::warning(&format!("✗ Connection failed: {e}"));
                 println!("\nPossible issues:");
-                println!("  • Invalid API key");
                 println!("  • Network connectivity");
                 println!("  • Proxy endpoint unavailable");
+                return Ok(());
+            },
+        }
+
+        // Then validate the key against an authenticated endpoint. The
+        // /health probe succeeds for any key, so it says nothing about
+        // whether the key itself is valid.
+        match client.validate_credentials() {
+            Ok(()) => {
+                Output::success("✓ API key is valid");
+            },
+            Err(crate::error::PromptGuardError::Auth(msg)) => {
+                Output::error(&format!("✗ API key rejected: {msg}"));
+                println!("\nCheck your key at https://app.promptguard.co/settings/api-keys");
+                return Ok(());
+            },
+            Err(e) => {
+                Output::warning(&format!("✗ Could not validate API key: {e}"));
                 return Ok(());
             },
         }
