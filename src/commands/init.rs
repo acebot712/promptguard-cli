@@ -176,6 +176,15 @@ impl InitCommand {
         );
 
         let mut files_modified = Vec::new();
+        let mut backups_created: Vec<String> = Vec::new();
+
+        // Same backup strategy as `apply`: copy each file to <file>.bak
+        // before transforming it, so `disable` has something to restore.
+        let backup_manager = if self.dry_run {
+            None
+        } else {
+            Some(crate::backup::BackupManager::new(None))
+        };
 
         for (provider, files) in &detection_results {
             let mut unique_files = files.clone();
@@ -183,6 +192,18 @@ impl InitCommand {
             unique_files.dedup();
 
             for file_path in unique_files {
+                if let Some(ref bm) = backup_manager {
+                    if let Ok(backup_path) = bm.create_backup(&file_path) {
+                        backups_created.push(
+                            backup_path
+                                .strip_prefix(&root_path)
+                                .unwrap_or(&backup_path)
+                                .to_string_lossy()
+                                .to_string(),
+                        );
+                    }
+                }
+
                 match transformer::transform_file(
                     &file_path,
                     *provider,
@@ -268,6 +289,8 @@ impl InitCommand {
                         .to_string()
                 })
                 .collect();
+            config.metadata.backups = backups_created;
+            config.metadata.last_applied = Some(chrono::Utc::now());
 
             config_manager.save(&config)?;
             Output::step(".promptguard.json (created)");

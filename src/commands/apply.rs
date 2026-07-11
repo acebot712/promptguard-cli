@@ -22,7 +22,7 @@ impl ApplyCommand {
             return Err(PromptGuardError::NotInitialized);
         }
 
-        let config = config_manager.load()?;
+        let mut config = config_manager.load()?;
 
         println!("\nThis will re-apply PromptGuard transformations to:");
         println!("  • Proxy URL: {}", config.proxy_url);
@@ -111,6 +111,11 @@ impl ApplyCommand {
                 }
             }
         }
+
+        // Record when transformations were last applied (surfaced by
+        // `promptguard status`).
+        config.metadata.last_applied = Some(chrono::Utc::now());
+        config_manager.save(&config)?;
 
         println!();
         Output::success("Configuration applied!");

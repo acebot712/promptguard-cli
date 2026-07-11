@@ -29,7 +29,11 @@ impl StatusCommand {
         if self.json {
             let output = serde_json::json!({
                 "initialized": true,
-                "status": if config.metadata.last_applied.is_some() { "active" } else { "disabled" },
+                // Derived from config.enabled — the same field `disable` and
+                // `enable` toggle — so JSON and human output agree.
+                "status": if config.enabled { "active" } else { "disabled" },
+                "enabled": config.enabled,
+                "runtime_mode": config.runtime_mode,
                 "api_key": Output::mask_api_key(&config.api_key),
                 "proxy_url": config.proxy_url,
                 "configuration": {
@@ -48,7 +52,11 @@ impl StatusCommand {
             });
             println!("{}", serde_json::to_string_pretty(&output)?);
         } else {
-            println!("\nStatus: ✓ Active");
+            if config.enabled {
+                println!("\nStatus: ✓ Active");
+            } else {
+                println!("\nStatus: ⊘ Disabled (re-enable with: promptguard enable)");
+            }
             println!(
                 "API Key: {} (configured)",
                 Output::mask_api_key(&config.api_key)

@@ -105,6 +105,15 @@ impl DisableCommand {
 
             if restored_count > 0 {
                 Output::step(&format!("Restored {restored_count} files"));
+            } else {
+                // Be honest: nothing was actually restored. Projects
+                // initialized before backups existed (or with backups
+                // deleted) still have the transformations in place.
+                Output::warning(
+                    "No backup files (.bak) found — no files were restored. \
+                     Transformed files keep routing through PromptGuard until you \
+                     revert them (e.g. 'git checkout -- .' or 'promptguard revert').",
+                );
             }
         }
 

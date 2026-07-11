@@ -194,6 +194,7 @@ impl EnableCommand {
         // Update config
         config.enabled = true;
         config.runtime_mode = true;
+        config.metadata.last_applied = Some(chrono::Utc::now());
         config_manager.save(config)?;
 
         println!();
@@ -283,6 +284,7 @@ impl EnableCommand {
         // Update config
         config.enabled = true;
         config.runtime_mode = false;
+        config.metadata.last_applied = Some(chrono::Utc::now());
         config_manager.save(config)?;
         Output::step("Updated configuration");
 
