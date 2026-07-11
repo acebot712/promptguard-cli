@@ -160,11 +160,8 @@ pub fn resolve_base_url_with_source() -> (String, CredentialSource) {
 /// loopback (a proxy on the user's own machine cannot exfiltrate the key).
 fn is_trusted_host(url_str: &str) -> bool {
     match url::Url::parse(url_str) {
-        Ok(parsed) => match parsed.host_str() {
-            Some(host) => {
-                host == DEFAULT_HOST || host == "localhost" || host == "127.0.0.1" || host == "::1"
-            },
-            None => false,
+        Ok(parsed) => {
+            parsed.host_str() == Some(DEFAULT_HOST) || crate::config::is_loopback_host(&parsed)
         },
         Err(_) => false,
     }
@@ -229,6 +226,8 @@ mod tests {
         assert!(is_trusted_host("https://api.promptguard.co/api/v1"));
         assert!(is_trusted_host("http://localhost:8080/api/v1"));
         assert!(is_trusted_host("http://127.0.0.1:3000"));
+        // IPv6 loopback ("[::1]" once parsed) must be recognized.
+        assert!(is_trusted_host("http://[::1]:8080/api/v1"));
         assert!(!is_trusted_host("https://evil.example.com/api/v1"));
         assert!(!is_trusted_host("https://api.promptguard.co.evil.com/v1"));
         assert!(!is_trusted_host("not a url"));

@@ -46,6 +46,23 @@ pub fn is_valid_api_key(key: &str) -> bool {
     key.starts_with("pg_") && key.len() >= 16 && !key.chars().any(char::is_whitespace)
 }
 
+/// True when `url`'s host is a loopback address: IPv4 `127.0.0.0/8`, IPv6
+/// `::1`, or the literal `localhost`.
+///
+/// A proxy on the user's own machine cannot exfiltrate the API key, so
+/// loopback hosts are trusted. This must go through [`url::Url::host`]: the
+/// `url` crate renders an IPv6 host as the bracketed `"[::1]"` in
+/// [`url::Url::host_str`], so a naive `host == "::1"` string compare never
+/// matches.
+pub fn is_loopback_host(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
 /// Validate a proxy URL for use in config and generated source code.
 ///
 /// The value is interpolated into generated Python/TypeScript shims and
@@ -67,8 +84,7 @@ pub fn validate_proxy_url(url_str: &str) -> Result<()> {
     let parsed = url::Url::parse(url_str)
         .map_err(|e| PromptGuardError::Config(format!("Invalid proxy_url '{url_str}': {e}")))?;
 
-    let host = parsed.host_str().unwrap_or("");
-    let is_loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+    let is_loopback = is_loopback_host(&parsed);
 
     match parsed.scheme() {
         "https" => Ok(()),
@@ -319,6 +335,7 @@ impl ConfigManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -328,6 +345,30 @@ mod tests {
         assert!(validate_proxy_url("https://proxy.example.com:8443/v1").is_ok());
         assert!(validate_proxy_url("http://localhost:8080/api/v1").is_ok());
         assert!(validate_proxy_url("http://127.0.0.1:3000").is_ok());
+        // IPv6 loopback: the url crate renders this host as "[::1]", so a
+        // string compare against "::1" would miss it.
+        assert!(validate_proxy_url("http://[::1]:8080/api/v1").is_ok());
+    }
+
+    #[test]
+    fn loopback_host_matches_all_loopback_forms() {
+        let loopback = [
+            "http://localhost:8080",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.5",
+            "http://[::1]:9000",
+            "http://LOCALHOST/x",
+        ];
+        for url in loopback {
+            let parsed = url::Url::parse(url).unwrap();
+            assert!(is_loopback_host(&parsed), "{url} should be loopback");
+        }
+
+        let remote = ["https://api.promptguard.co", "https://evil.example.com"];
+        for url in remote {
+            let parsed = url::Url::parse(url).unwrap();
+            assert!(!is_loopback_host(&parsed), "{url} should not be loopback");
+        }
     }
 
     #[test]
