@@ -87,21 +87,6 @@ impl RedTeamCommand {
     pub fn execute(self) -> Result<()> {
         println!("🔴 PromptGuard Red Team - Adversarial Security Testing\n");
 
-        // Get API key from config or argument
-        let api_key = if let Some(key) = &self.api_key {
-            key.clone()
-        } else {
-            ConfigManager::new(None)
-                .ok()
-                .and_then(|cm| cm.load().ok())
-                .map(|c| c.api_key)
-                .ok_or_else(|| {
-                    PromptGuardError::Config(
-                        "API key required. Run 'promptguard init' or pass --api-key".to_string(),
-                    )
-                })?
-        };
-
         // --target-url is used as the API base URL, and every request
         // attaches the PromptGuard API key. Never send that key to an
         // arbitrary host: require HTTPS (or loopback) and refuse hosts other
@@ -112,7 +97,17 @@ impl RedTeamCommand {
             Self::validate_target_url(target)?;
         }
 
-        let base_url = self.target_url.clone();
+        // Resolve credentials through the shared precedence (env > project >
+        // global) and the key-exfiltration guard, unless the caller passed an
+        // explicit --api-key. --target-url always overrides the resolved base
+        // URL (and is separately restricted by validate_target_url above).
+        let (api_key, base_url) = if let Some(key) = &self.api_key {
+            (key.clone(), self.target_url.clone())
+        } else {
+            let (key, resolved_base) = crate::auth::resolve_session()?;
+            (key, self.target_url.clone().or(Some(resolved_base)))
+        };
+
         let client = PromptGuardClient::new(api_key, base_url)
             .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
 
@@ -144,7 +139,7 @@ impl RedTeamCommand {
             })?
             .to_string();
 
-        let is_loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+        let is_loopback = crate::config::is_loopback_host(&parsed);
 
         if parsed.scheme() != "https" && !is_loopback {
             return Err(PromptGuardError::Config(format!(

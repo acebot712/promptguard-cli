@@ -58,8 +58,12 @@ impl LogsCommand {
             return Err(PromptGuardError::NotInitialized);
         }
 
+        // Still load the project config for project_id, but resolve the
+        // credential + base URL through the shared precedence (env > project >
+        // global) and the key-exfiltration guard, like every other command.
         let config = config_manager.load()?;
-        let client = PromptGuardClient::new(config.api_key, Some(config.proxy_url))?;
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         if !self.json {
             Output::header("Activity Logs");

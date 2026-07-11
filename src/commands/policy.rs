@@ -5,7 +5,6 @@
 //! not a new config system.
 
 use crate::api::PromptGuardClient;
-use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
@@ -41,21 +40,18 @@ pub struct PolicyCommand {
 
 impl PolicyCommand {
     pub fn execute(self) -> Result<()> {
-        let api_key = if let Some(key) = &self.api_key {
-            key.clone()
+        // Resolve credentials through the shared precedence (env > project >
+        // global) and the key-exfiltration guard, unless the caller passed an
+        // explicit --api-key. An explicit --base-url always wins over the
+        // resolved base URL.
+        let (api_key, base_url) = if let Some(key) = &self.api_key {
+            (key.clone(), self.base_url.clone())
         } else {
-            ConfigManager::new(None)
-                .ok()
-                .and_then(|cm| cm.load().ok())
-                .map(|c| c.api_key)
-                .ok_or_else(|| {
-                    PromptGuardError::Config(
-                        "API key required. Run 'promptguard init' or pass --api-key".to_string(),
-                    )
-                })?
+            let (key, resolved_base) = crate::auth::resolve_session()?;
+            (key, self.base_url.clone().or(Some(resolved_base)))
         };
 
-        let client = PromptGuardClient::new(api_key, self.base_url.clone())
+        let client = PromptGuardClient::new(api_key, base_url)
             .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
 
         match self.action {

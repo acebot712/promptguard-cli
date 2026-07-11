@@ -19,8 +19,11 @@ impl TestCommand {
         println!("\nTesting configuration...");
         Output::section("API Key Validation", "🔑");
 
-        let client =
-            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
+        // Resolve via the shared precedence (env > project > global) and the
+        // key-exfiltration guard, so `test` validates the credentials that
+        // will actually be used at runtime.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url.clone()))?;
 
         // Reachability first (unauthenticated /health probe)
         match client.health_check() {
@@ -64,7 +67,7 @@ impl TestCommand {
         }
 
         println!("  Providers: {}", config.providers.join(", "));
-        println!("  Proxy: {}", config.proxy_url);
+        println!("  Proxy: {base_url}");
 
         println!();
         Output::success("Configuration test complete!");

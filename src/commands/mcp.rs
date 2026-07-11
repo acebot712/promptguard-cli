@@ -174,8 +174,10 @@ fn handle_scan_text(params: &serde_json::Value) -> serde_json::Value {
     let result = (|| -> Result<serde_json::Value> {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
-        let client =
-            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
+        // Resolve via the shared precedence (env > project > global) and the
+        // key-exfiltration guard rather than reading project config directly.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let mut body = serde_json::json!({ "content": text, "type": "prompt" });
         if let Some(pid) = resolve_project_id(&config) {
@@ -309,8 +311,10 @@ fn handle_redact(params: &serde_json::Value) -> serde_json::Value {
     let result = (|| -> Result<serde_json::Value> {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
-        let client =
-            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
+        // Resolve via the shared precedence (env > project > global) and the
+        // key-exfiltration guard rather than reading project config directly.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let mut body = serde_json::json!({ "content": text });
         if let Some(pid) = resolve_project_id(&config) {
@@ -338,7 +342,11 @@ fn handle_status(_params: &serde_json::Value) -> serde_json::Value {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
 
-        let key_type = if config.api_key.starts_with("pg_live_") {
+        // Report the effective credential/base URL (env > project > global,
+        // with the exfiltration guard) rather than the raw project config.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+
+        let key_type = if api_key.starts_with("pg_live_") {
             "live"
         } else {
             "unknown"
@@ -347,7 +355,7 @@ fn handle_status(_params: &serde_json::Value) -> serde_json::Value {
         Ok(serde_json::json!({
             "initialized": true,
             "api_key_type": key_type,
-            "proxy_url": config.proxy_url,
+            "proxy_url": base_url,
             "providers": config.providers,
             "version": env!("CARGO_PKG_VERSION"),
         }))
