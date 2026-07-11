@@ -28,6 +28,11 @@ pub struct SecurityScanResponse {
     pub processing_time_ms: Option<f64>,
 }
 
+/// Exit code for a clean scan (content allowed / no SDK findings).
+pub const EXIT_CLEAN: i32 = 0;
+/// Exit code when content is blocked or SDK usage is found.
+pub const EXIT_FINDINGS: i32 = 2;
+
 pub struct ScanCommand {
     pub provider: Option<String>,
     pub json: bool,
@@ -38,7 +43,9 @@ pub struct ScanCommand {
 }
 
 impl ScanCommand {
-    pub fn execute(&self) -> Result<()> {
+    /// Returns the process exit code: 0 = allow/clean, 2 = block/findings.
+    /// Errors map to exit code 1 in main.
+    pub fn execute(&self) -> Result<i32> {
         // If --text or --file is provided, do an API security scan instead of local SDK detection
         if self.text.is_some() || self.file.is_some() {
             return self.execute_api_scan();
@@ -49,7 +56,7 @@ impl ScanCommand {
     }
 
     /// Scan text or file content for security threats via the backend API
-    fn execute_api_scan(&self) -> Result<()> {
+    fn execute_api_scan(&self) -> Result<i32> {
         let content = if let Some(ref text) = self.text {
             text.clone()
         } else if let Some(ref file_path) = self.file {
@@ -120,11 +127,15 @@ impl ScanCommand {
             }
         }
 
-        Ok(())
+        Ok(if response.blocked || response.decision == "block" {
+            EXIT_FINDINGS
+        } else {
+            EXIT_CLEAN
+        })
     }
 
     /// Local SDK detection scan (original behavior)
-    fn execute_local_scan(&self) -> Result<()> {
+    fn execute_local_scan(&self) -> Result<i32> {
         if !self.json {
             Output::header(&format!(
                 "🛡️  PromptGuard CLI v{}",
@@ -165,7 +176,11 @@ impl ScanCommand {
             self.print_human(&detection_results, &root_path, files.len())?;
         }
 
-        Ok(())
+        Ok(if detection_results.is_empty() {
+            EXIT_CLEAN
+        } else {
+            EXIT_FINDINGS
+        })
     }
 
     fn print_json(

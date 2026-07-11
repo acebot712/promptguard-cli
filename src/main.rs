@@ -110,6 +110,9 @@ enum Commands {
     ///
     /// With --text or --file: Scans content for security threats (prompt injection, jailbreaks, etc.)
     /// via the `PromptGuard` API.
+    ///
+    /// Exit codes: 0 = content allowed / no SDK usage found,
+    /// 2 = content blocked / SDK usage found, 1 = error.
     Scan {
         /// Filter by specific provider (for SDK detection mode)
         #[arg(long)]
@@ -498,7 +501,14 @@ fn main() {
             text,
             file,
         }
-        .execute(),
+        .execute()
+        .map(|exit_code| {
+            // Differentiated exit codes for scripting/CI:
+            // 0 = allow/clean, 2 = block/findings (errors exit 1 below).
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+        }),
 
         Commands::Status { json } => StatusCommand { json }.execute(),
 
