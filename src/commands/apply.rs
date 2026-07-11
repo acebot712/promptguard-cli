@@ -61,7 +61,7 @@ impl ApplyCommand {
         let outcome = super::run_transform_pipeline(
             &detection_results,
             &root_path,
-            backup_manager.as_ref(),
+            super::TransformMode::Apply(backup_manager.as_ref()),
             &config.proxy_url,
             &config.env_var_name,
             |_provider, file_path, modified| {

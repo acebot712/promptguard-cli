@@ -348,6 +348,7 @@ client = OpenAI()
         Provider::OpenAI,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     )
     .expect("Transform should succeed");
 
@@ -368,6 +369,41 @@ client = OpenAI()
     );
 }
 
+/// A dry-run transform must report `modified` accurately while leaving the
+/// file on disk byte-for-byte unchanged (init --dry-run previously rewrote
+/// source files, without backups).
+#[test]
+fn test_transform_dry_run_leaves_file_untouched() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let python_file = temp_dir.path().join("app.py");
+    let original = r"from openai import OpenAI
+
+client = OpenAI()
+";
+    fs::write(&python_file, original).expect("Failed to write");
+
+    let result = transformer::transform_file(
+        &python_file,
+        Provider::OpenAI,
+        "https://api.promptguard.co/api/v1",
+        "PROMPTGUARD_API_KEY",
+        true,
+    )
+    .expect("Dry-run transform should succeed");
+
+    assert!(
+        result.modified,
+        "Dry run must still report the file as would-be modified"
+    );
+
+    let content = fs::read_to_string(&python_file).expect("Failed to read");
+    assert_eq!(
+        content, original,
+        "Dry run must leave the file byte-for-byte unchanged"
+    );
+}
+
 /// Test Python Anthropic transformation
 #[test]
 fn test_transform_python_anthropic_adds_base_url() {
@@ -385,6 +421,7 @@ client = Anthropic()
         Provider::Anthropic,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     )
     .expect("Transform should succeed");
 
@@ -415,6 +452,7 @@ client = OpenAI(base_url="https://api.promptguard.co/api/v1", api_key=os.getenv(
         Provider::OpenAI,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     )
     .expect("Transform should succeed");
 
@@ -447,6 +485,7 @@ const openai = new OpenAI();
         Provider::OpenAI,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     );
 
     // TypeScript transformation may or may not be supported

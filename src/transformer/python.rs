@@ -170,6 +170,7 @@ impl Transformer for PythonTransformer {
         provider: Provider,
         proxy_url: &str,
         api_key_env_var: &str,
+        dry_run: bool,
     ) -> crate::error::Result<TransformResult> {
         transform_file_generic(
             file_path,
@@ -180,6 +181,7 @@ impl Transformer for PythonTransformer {
                     .map(|new_args| (args_node.start_byte(), args_node.end_byte(), new_args))
             },
             ensure_os_import,
+            dry_run,
         )
     }
 }
@@ -216,6 +218,7 @@ mod tests {
                 Provider::OpenAI,
                 "https://api.promptguard.co/api/v1",
                 "PROMPTGUARD_API_KEY",
+                false,
             )
             .unwrap();
         fs::read_to_string(&path).unwrap()
@@ -315,6 +318,7 @@ mod tests {
                 Provider::Bedrock,
                 "https://api.promptguard.co/api/v1",
                 "PROMPTGUARD_API_KEY",
+                false,
             )
             .unwrap();
 

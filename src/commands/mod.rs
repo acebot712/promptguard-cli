@@ -65,19 +65,37 @@ pub fn detect_providers_in_files(
 /// Shared dedup → backup → transform → record pipeline used by `init`,
 /// `apply`, and `enable`.
 ///
+/// How [`run_transform_pipeline`] treats the filesystem.
+///
+/// Dry-run implying "no backups" is modeled in the type: there is no way to
+/// combine `DryRun` with a backup manager.
+#[derive(Clone, Copy)]
+pub enum TransformMode<'a> {
+    /// Write transformed files, backing each up first when a
+    /// [`BackupManager`] is provided.
+    Apply(Option<&'a BackupManager>),
+    /// Compute and report every would-be modification but write nothing:
+    /// no backups are created and no file is touched on disk.
+    DryRun,
+}
+
 /// For each provider the detected files are deduped and sorted, backed up
-/// BEFORE transformation (when a [`BackupManager`] is provided), then
-/// transformed. `on_result` receives each successfully processed file so
+/// BEFORE transformation (in [`TransformMode::Apply`] with a backup manager),
+/// then transformed. `on_result` receives each successfully processed file so
 /// callers can print their command-specific output; transform failures are
 /// reported as warnings and skipped.
 pub fn run_transform_pipeline(
     detection_results: &HashMap<Provider, Vec<PathBuf>>,
     root_path: &Path,
-    backup_manager: Option<&BackupManager>,
+    mode: TransformMode<'_>,
     proxy_url: &str,
     env_var_name: &str,
     mut on_result: impl FnMut(Provider, &Path, bool),
 ) -> TransformOutcome {
+    let (backup_manager, dry_run) = match mode {
+        TransformMode::Apply(bm) => (bm, false),
+        TransformMode::DryRun => (None, true),
+    };
     let mut outcome = TransformOutcome {
         files_modified: Vec::new(),
         backups_created: Vec::new(),
@@ -101,8 +119,13 @@ pub fn run_transform_pipeline(
                 }
             }
 
-            match crate::transformer::transform_file(&file_path, *provider, proxy_url, env_var_name)
-            {
+            match crate::transformer::transform_file(
+                &file_path,
+                *provider,
+                proxy_url,
+                env_var_name,
+                dry_run,
+            ) {
                 Ok(result) => {
                     if result.modified {
                         outcome.files_modified.push(file_path.clone());

@@ -127,6 +127,7 @@ impl Transformer for TypeScriptTransformer {
         provider: Provider,
         proxy_url: &str,
         api_key_env_var: &str,
+        dry_run: bool,
     ) -> crate::error::Result<TransformResult> {
         // .tsx/.jsx need the TSX grammar: JSX syntax does not parse under
         // the plain TypeScript grammar (and .ts must not use TSX, where
@@ -157,6 +158,7 @@ impl Transformer for TypeScriptTransformer {
                 None
             },
             |s| s,
+            dry_run,
         )
     }
 }
@@ -192,6 +194,7 @@ mod tests {
                 Provider::OpenAI,
                 "https://api.promptguard.co/api/v1",
                 "PROMPTGUARD_API_KEY",
+                false,
             )
             .unwrap();
         fs::read_to_string(&path).unwrap()
@@ -260,6 +263,7 @@ mod tests {
                 Provider::Bedrock,
                 "https://api.promptguard.co/api/v1",
                 "PROMPTGUARD_API_KEY",
+                false,
             )
             .unwrap();
 

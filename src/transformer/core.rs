@@ -40,6 +40,7 @@ pub fn transform_file_generic<F, G>(
     provider: Provider,
     extract_modification: F,
     finalize: G,
+    dry_run: bool,
 ) -> Result<TransformResult>
 where
     F: Fn(&str, tree_sitter::Node) -> Option<(usize, usize, String)>,
@@ -107,7 +108,11 @@ where
     // source would otherwise end up with mixed endings.
     new_source = crate::text::reencode_line_endings(&new_source, source_eol);
 
-    fs::write(file_path, &new_source)?;
+    // Dry-run computes the full transformation (so callers can report exactly
+    // what would change) but must never touch the file on disk.
+    if !dry_run {
+        fs::write(file_path, &new_source)?;
+    }
 
     Ok(TransformResult { modified: true })
 }

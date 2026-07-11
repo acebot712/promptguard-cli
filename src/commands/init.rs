@@ -184,10 +184,16 @@ impl InitCommand {
         // transformed source and the .env entry can never drift apart.
         let env_var_name = crate::config::default_env_var_name();
 
+        let mode = if self.dry_run {
+            super::TransformMode::DryRun
+        } else {
+            super::TransformMode::Apply(backup_manager.as_ref())
+        };
+
         let outcome = super::run_transform_pipeline(
             &detection_results,
             &root_path,
-            backup_manager.as_ref(),
+            mode,
             &self.base_url,
             &env_var_name,
             |provider, file_path, modified| {
@@ -196,9 +202,11 @@ impl InitCommand {
                 if modified {
                     let base_url_param = ProviderInfo::get(provider)
                         .map_or("base_url", |info| info.ts_base_url_param);
+                    let verb = if self.dry_run { "would add" } else { "added" };
                     Output::step(&format!(
-                        "{} (added {} for {})",
+                        "{} ({} {} for {})",
                         rel_path.display(),
+                        verb,
                         base_url_param,
                         provider.display_name()
                     ));
