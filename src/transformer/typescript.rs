@@ -56,31 +56,68 @@ fn transform_ts_object(
     let inner = object_text
         .strip_prefix('{')
         .and_then(|s| s.strip_suffix('}'))
-        .unwrap_or(object_text)
-        .trim();
+        .unwrap_or(object_text);
+
+    // End of the last real property (comments excluded): the injected comma
+    // must go right after it. Appending the comma to the raw text swallowed
+    // it into any trailing line comment (`apiKey: k // note` became
+    // `apiKey: k // note,`) and produced a syntax error.
+    let last_prop_end = last_non_comment_child_end(object_node);
 
     let mut new_object = String::from("{\n");
 
-    if inner.is_empty() {
-        let _ = writeln!(
-            new_object,
-            "  {}: process.env.{api_key_env_var},",
-            info.ts_api_key_param
-        );
-        let _ = writeln!(new_object, "  {}: \"{proxy_url}\"", info.ts_base_url_param);
-    } else {
-        let trimmed = inner.trim();
-        new_object.push_str("  ");
-        new_object.push_str(trimmed);
-        if !trimmed.ends_with(',') {
+    match last_prop_end {
+        Some(end) if object_text.starts_with('{') => {
+            let split_at = end - object_node.start_byte() - 1;
+            let (props_part, tail) = inner.split_at(split_at);
+
+            let mut tail = tail.trim_start();
+            if let Some(rest) = tail.strip_prefix(',') {
+                tail = rest.trim_start();
+            }
+            let tail = tail.trim_end();
+
+            new_object.push_str("  ");
+            new_object.push_str(props_part.trim());
             new_object.push(',');
-        }
-        new_object.push('\n');
-        let _ = writeln!(new_object, "  {}: \"{proxy_url}\"", info.ts_base_url_param);
+            if !tail.is_empty() {
+                new_object.push_str("  ");
+                new_object.push_str(tail);
+            }
+            new_object.push('\n');
+            let _ = writeln!(new_object, "  {}: \"{proxy_url}\"", info.ts_base_url_param);
+        },
+        _ => {
+            // No properties: inject both the api key and the proxy URL. Keep
+            // any comment-only content after the injected properties.
+            let _ = writeln!(
+                new_object,
+                "  {}: process.env.{api_key_env_var},",
+                info.ts_api_key_param
+            );
+            let _ = writeln!(new_object, "  {}: \"{proxy_url}\"", info.ts_base_url_param);
+            let comments = inner.trim();
+            if !comments.is_empty() {
+                let _ = writeln!(new_object, "  {comments}");
+            }
+        },
     }
 
     new_object.push('}');
     Some(new_object)
+}
+
+/// Byte offset just past the last named child of `node` that is not a
+/// comment, or `None` when there is no such child.
+fn last_non_comment_child_end(node: tree_sitter::Node) -> Option<usize> {
+    let mut cursor = node.walk();
+    let mut last_end = None;
+    for child in node.named_children(&mut cursor) {
+        if child.kind() != "comment" {
+            last_end = Some(child.end_byte());
+        }
+    }
+    last_end
 }
 
 impl Transformer for TypeScriptTransformer {
@@ -179,6 +216,31 @@ mod tests {
         let input = "import OpenAI from \"openai\";\nconst client = new OpenAI({});\n";
         let out = transform_ts(input);
         assert!(out.contains("baseURL:"));
+        assert_reparses_clean(&out);
+    }
+
+    /// Regression: appending the comma to the raw object text swallowed it
+    /// into a trailing line comment (`apiKey: k // note,`) → syntax error.
+    #[test]
+    fn trailing_line_comment_keeps_comma_out_of_comment() {
+        let input = "import OpenAI from \"openai\";\nconst client = new OpenAI({\n  apiKey: k // from env\n});\n";
+        let out = transform_ts(input);
+        assert!(out.contains("baseURL: \"https://api.promptguard.co/api/v1\""));
+        assert!(
+            out.contains("apiKey: k,"),
+            "comma must land after the property, not inside the comment:\n{out}"
+        );
+        assert!(out.contains("// from env"), "comment kept:\n{out}");
+        assert_reparses_clean(&out);
+    }
+
+    /// Trailing comma plus trailing comment must not produce a double comma.
+    #[test]
+    fn trailing_comma_and_comment_reparses_clean() {
+        let input = "import OpenAI from \"openai\";\nconst client = new OpenAI({\n  apiKey: k, // note\n});\n";
+        let out = transform_ts(input);
+        assert!(!out.contains(",,"), "no double comma:\n{out}");
+        assert!(out.contains("// note"));
         assert_reparses_clean(&out);
     }
 

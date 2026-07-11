@@ -42,30 +42,69 @@ fn transform_args(
     let inner = args_text
         .strip_prefix('(')
         .and_then(|s| s.strip_suffix(')'))
-        .unwrap_or(args_text)
-        .trim();
+        .unwrap_or(args_text);
+
+    // End of the last real argument (comments excluded): the injected comma
+    // must go right after it. Appending the comma to the raw text swallowed
+    // it into any trailing line comment (`api_key=key  # note` became
+    // `api_key=key  # note,`) and produced a SyntaxError.
+    let last_arg_end = last_non_comment_child_end(args_node);
 
     let mut new_args = String::from("(\n");
 
-    if inner.is_empty() {
-        let _ = writeln!(
-            new_args,
-            "    api_key=os.environ.get(\"{api_key_env_var}\"),"
-        );
-        let _ = writeln!(new_args, "    base_url=\"{proxy_url}\"");
-    } else {
-        let trimmed = inner.trim();
-        new_args.push_str("    ");
-        new_args.push_str(trimmed);
-        if !trimmed.ends_with(',') {
+    match last_arg_end {
+        Some(end) if args_text.starts_with('(') => {
+            // Split `inner` right after the last argument; the tail is only
+            // ever an optional trailing comma, whitespace, and comments.
+            let split_at = end - args_node.start_byte() - 1;
+            let (args_part, tail) = inner.split_at(split_at);
+
+            let mut tail = tail.trim_start();
+            if let Some(rest) = tail.strip_prefix(',') {
+                tail = rest.trim_start();
+            }
+            let tail = tail.trim_end();
+
+            new_args.push_str("    ");
+            new_args.push_str(args_part.trim());
             new_args.push(',');
-        }
-        new_args.push('\n');
-        let _ = writeln!(new_args, "    base_url=\"{proxy_url}\"");
+            if !tail.is_empty() {
+                new_args.push_str("  ");
+                new_args.push_str(tail);
+            }
+            new_args.push('\n');
+            let _ = writeln!(new_args, "    base_url=\"{proxy_url}\"");
+        },
+        _ => {
+            // No arguments: inject both the api_key and the proxy URL. Keep
+            // any comment-only content after the injected arguments.
+            let _ = writeln!(
+                new_args,
+                "    api_key=os.environ.get(\"{api_key_env_var}\"),"
+            );
+            let _ = writeln!(new_args, "    base_url=\"{proxy_url}\"");
+            let comments = inner.trim();
+            if !comments.is_empty() {
+                let _ = writeln!(new_args, "    {comments}");
+            }
+        },
     }
 
     new_args.push(')');
     Some(new_args)
+}
+
+/// Byte offset just past the last named child of `node` that is not a
+/// comment, or `None` when there is no such child.
+fn last_non_comment_child_end(node: tree_sitter::Node) -> Option<usize> {
+    let mut cursor = node.walk();
+    let mut last_end = None;
+    for child in node.named_children(&mut cursor) {
+        if child.kind() != "comment" {
+            last_end = Some(child.end_byte());
+        }
+    }
+    last_end
 }
 
 /// Whether the module already binds the name `os` via an import.
@@ -207,6 +246,41 @@ mod tests {
         let input = "from openai import OpenAI\nclient = OpenAI()\n";
         let out = transform_python(input);
         assert!(out.contains("base_url="));
+        assert_reparses_clean(&out);
+    }
+
+    /// Regression: appending the comma to the raw argument text swallowed it
+    /// into a trailing line comment (`api_key=key  # note,`) → `SyntaxError`.
+    #[test]
+    fn trailing_line_comment_keeps_comma_out_of_comment() {
+        let input = "from openai import OpenAI\nclient = OpenAI(\n    api_key=key  # loaded from vault\n)\n";
+        let out = transform_python(input);
+        assert!(out.contains("base_url=\"https://api.promptguard.co/api/v1\""));
+        assert!(
+            out.contains("api_key=key,"),
+            "comma must land after the argument, not inside the comment:\n{out}"
+        );
+        assert!(out.contains("# loaded from vault"), "comment kept:\n{out}");
+        assert_reparses_clean(&out);
+    }
+
+    /// Trailing comma plus trailing comment must not produce a double comma.
+    #[test]
+    fn trailing_comma_and_comment_reparses_clean() {
+        let input = "from openai import OpenAI\nclient = OpenAI(\n    api_key=key,  # note\n)\n";
+        let out = transform_python(input);
+        assert!(!out.contains(",,"), "no double comma:\n{out}");
+        assert!(out.contains("# note"));
+        assert_reparses_clean(&out);
+    }
+
+    /// Comment-only argument lists must keep the comment and stay valid.
+    #[test]
+    fn comment_only_args_reparses_clean() {
+        let input = "from openai import OpenAI\nclient = OpenAI(\n    # configured elsewhere\n)\n";
+        let out = transform_python(input);
+        assert!(out.contains("base_url="));
+        assert!(out.contains("# configured elsewhere"));
         assert_reparses_clean(&out);
     }
 
