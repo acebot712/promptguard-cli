@@ -53,7 +53,7 @@ impl RedactCommand {
 
         if !self.json {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
             Output::section("PII Redaction", "🔒");

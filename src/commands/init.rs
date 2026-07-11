@@ -25,7 +25,7 @@ impl InitCommand {
     pub fn execute(&self) -> Result<()> {
         if !self.dry_run {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
         }

@@ -203,7 +203,7 @@ pub use doctor::DoctorCommand;
 pub use enable::EnableCommand;
 pub use events::EventsCommand;
 pub use init::InitCommand;
-pub use key::KeyCommand;
+pub use key::{KeyAction, KeyCommand};
 pub use login::LoginCommand;
 pub use logout::LogoutCommand;
 pub use logs::LogsCommand;

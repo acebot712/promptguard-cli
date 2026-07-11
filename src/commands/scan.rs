@@ -74,7 +74,7 @@ impl ScanCommand {
 
         if !self.json {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
             Output::section("Security Threat Scan", "🔍");
@@ -132,7 +132,7 @@ impl ScanCommand {
     fn execute_local_scan(&self) -> Result<i32> {
         if !self.json {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
             Output::section("LLM SDK Detection Report", "📊");

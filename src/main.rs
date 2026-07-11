@@ -27,10 +27,10 @@ mod types;
 use clap::{Parser, Subcommand};
 use commands::{
     ApplyCommand, ConfigCommand, DashboardCommand, DisableCommand, DoctorCommand, EnableCommand,
-    EventsCommand, InitCommand, KeyCommand, LoginCommand, LogoutCommand, LogsCommand, McpCommand,
-    PolicyAction, PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand, RedactCommand,
-    RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand, VerifyCommand,
-    WhoamiCommand,
+    EventsCommand, InitCommand, KeyAction, KeyCommand, LoginCommand, LogoutCommand, LogsCommand,
+    McpCommand, PolicyAction, PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand,
+    RedactCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
+    VerifyCommand, WhoamiCommand,
 };
 
 /// Grouped command reference + examples for the top-level `--help`.
@@ -83,9 +83,9 @@ Commands:
 Run 'promptguard <command> --help' for details on a command.
 
 Examples:
-  promptguard init                            Set up PromptGuard in this repo
+  promptguard init                             Set up PromptGuard in this repo
   promptguard scan --text \"ignore the rules\"   Scan a string for threats
-  promptguard verify --json                   Check integration health (CI)
+  promptguard verify --json                    Check integration health (CI)
 ";
 
 #[allow(clippy::doc_markdown)]
@@ -189,9 +189,9 @@ Examples:
     /// 2 = content blocked / SDK usage found, 1 = error.
     #[command(after_help = "\
 Examples:
-  promptguard scan                            Detect LLM SDK usage in this repo
+  promptguard scan                             Detect LLM SDK usage in this repo
   promptguard scan --text \"ignore the rules\"   Scan a string for threats
-  promptguard scan --file prompt.txt --json   Scan a file, machine-readable")]
+  promptguard scan --file prompt.txt --json    Scan a file, machine-readable")]
     Scan {
         /// Filter by specific provider (for SDK detection mode)
         #[arg(long)]
@@ -287,7 +287,19 @@ Examples:
     ///
     /// View, update, or rotate your PromptGuard API key.
     /// Keys use the pg_live_* prefix.
-    Key,
+    ///
+    /// Run without a subcommand for an interactive menu.
+    #[command(after_help = "\
+Examples:
+  promptguard key show               Show the current key (masked)
+  promptguard key show --full        Reveal the full key
+  promptguard key show --json        Machine-readable key info
+  promptguard key update             Replace the stored key
+  promptguard key rotate             How to rotate your key")]
+    Key {
+        #[command(subcommand)]
+        action: Option<KeySubcommand>,
+    },
 
     /// View activity logs from the PromptGuard API
     ///
@@ -362,9 +374,9 @@ Examples:
     /// by testing with known attack patterns and jailbreak attempts.
     #[command(after_help = "\
 Examples:
-  promptguard redteam                          Run the default attack suite
-  promptguard redteam --preset strict          Use the strict preset
-  promptguard redteam --autonomous --budget 50 LLM-powered mutation, 50 iters")]
+  promptguard redteam                             Run the default attack suite
+  promptguard redteam --preset strict             Use the strict preset
+  promptguard redteam --autonomous --budget 50    Autonomous mode, 50 iterations")]
     Redteam {
         /// PromptGuard API base URL to run the tests against. Must be
         /// HTTPS and point at the PromptGuard API host (or localhost for
@@ -422,10 +434,10 @@ Examples:
         #[command(subcommand)]
         action: PolicySubcommand,
 
-        /// Project ID to manage policies for (required).
-        /// Optional in the parser because clap forbids required global
-        /// arguments (a required+global arg panics clap's debug assertions
-        /// on every 'policy' invocation); enforced before execution instead.
+        /// Project ID to manage policies for. Required.
+        // Optional in the parser because clap forbids required global
+        // arguments (a required+global arg panics clap's debug assertions
+        // on every 'policy' invocation); enforced before execution instead.
         #[arg(long, global = true)]
         project_id: Option<String>,
 
@@ -525,6 +537,27 @@ Examples:
         #[arg(long)]
         json: bool,
     },
+}
+
+#[allow(clippy::doc_markdown)]
+#[derive(Subcommand)]
+enum KeySubcommand {
+    /// Show the current API key
+    Show {
+        /// Reveal the full key instead of a masked version
+        #[arg(long)]
+        full: bool,
+
+        /// Output results as JSON (for scripting)
+        #[arg(long)]
+        json: bool,
+    },
+
+    /// Update the stored API key (prompts for a new one)
+    Update,
+
+    /// Show how to rotate your API key
+    Rotate,
 }
 
 #[allow(clippy::doc_markdown)]
@@ -640,7 +673,14 @@ fn main() {
         Commands::Disable { yes } => DisableCommand { yes }.execute(),
         Commands::Enable { runtime, yes } => EnableCommand { runtime, yes }.execute(),
         Commands::Config { json } => ConfigCommand { json }.execute(),
-        Commands::Key => KeyCommand::execute(),
+        Commands::Key { action } => {
+            let key_action = action.map(|a| match a {
+                KeySubcommand::Show { full, json } => KeyAction::Show { full, json },
+                KeySubcommand::Update => KeyAction::Update,
+                KeySubcommand::Rotate => KeyAction::Rotate,
+            });
+            KeyCommand::run(key_action)
+        },
         Commands::Logs {
             limit,
             log_type,
@@ -802,7 +842,10 @@ fn command_requested_json(command: &Commands) -> bool {
         | Commands::Whoami { json, .. }
         | Commands::Projects { json, .. }
         | Commands::Events { json, .. }
-        | Commands::Dashboard { json, .. } => *json,
+        | Commands::Dashboard { json, .. }
+        | Commands::Key {
+            action: Some(KeySubcommand::Show { json, .. }),
+        } => *json,
         Commands::Redteam { format, .. } => format.eq_ignore_ascii_case("json"),
         _ => false,
     }
@@ -812,7 +855,7 @@ fn command_requested_json(command: &Commands) -> bool {
 fn print_welcome() {
     use output::Output;
 
-    Output::header("🛡️  PromptGuard CLI");
+    Output::header("🛡️ PromptGuard CLI");
     println!("Drop-in LLM security for your applications");
     println!();
 
@@ -922,6 +965,60 @@ mod tests {
         let cli = Cli::try_parse_from(["promptguard", "redteam", "-v"]).unwrap();
         assert_eq!(cli.verbose, 1);
         assert!(matches!(cli.command, Some(Commands::Redteam { .. })));
+    }
+
+    /// `key` gains `show`/`update`/`rotate` subcommands (mirroring
+    /// projects/policy) so the actions are discoverable via `--help` and
+    /// scriptable, while a bare `key` still drops to the interactive menu.
+    #[test]
+    fn key_parses_subcommands() {
+        // Bare `key` → no subcommand (interactive menu fallback).
+        let cli = Cli::try_parse_from(["promptguard", "key"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Key { action: None })));
+
+        // `key show` defaults to masked, non-JSON.
+        let cli = Cli::try_parse_from(["promptguard", "key", "show"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Key {
+                action: Some(KeySubcommand::Show {
+                    full: false,
+                    json: false
+                })
+            })
+        ));
+
+        // `key show --full --json` toggles both flags.
+        let cli = Cli::try_parse_from(["promptguard", "key", "show", "--full", "--json"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Key {
+                action: Some(KeySubcommand::Show {
+                    full: true,
+                    json: true
+                })
+            })
+        ));
+
+        // `key update` and `key rotate` parse to their variants.
+        let cli = Cli::try_parse_from(["promptguard", "key", "update"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Key {
+                action: Some(KeySubcommand::Update)
+            })
+        ));
+
+        let cli = Cli::try_parse_from(["promptguard", "key", "rotate"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Key {
+                action: Some(KeySubcommand::Rotate)
+            })
+        ));
+
+        // An unknown `key` subcommand is rejected (not silently swallowed).
+        assert!(Cli::try_parse_from(["promptguard", "key", "bogus"]).is_err());
     }
 
     /// `policy --api-key -` must parse the same way.
