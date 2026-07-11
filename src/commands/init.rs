@@ -58,14 +58,19 @@ impl InitCommand {
         // Scan project
         Output::section("Scanning project...", "📁");
 
-        let scanner = FileScanner::new(
-            &root_path,
-            if self.exclude.is_empty() {
-                None
-            } else {
-                Some(self.exclude.clone())
-            },
-        )?;
+        // User-provided --exclude patterns ADD to the defaults rather than
+        // replacing them: replacing meant a single --exclude dropped the
+        // node_modules/dist/venv defaults and those trees were scanned and
+        // transformed.
+        let exclude_patterns: Option<Vec<String>> = if self.exclude.is_empty() {
+            None
+        } else {
+            let mut patterns = crate::config::default_exclude_patterns();
+            patterns.extend(self.exclude.iter().cloned());
+            Some(patterns)
+        };
+
+        let scanner = FileScanner::new(&root_path, exclude_patterns.clone())?;
 
         if let Some(git_root) = scanner.find_git_root() {
             Output::step(&format!(
@@ -276,11 +281,9 @@ impl InitCommand {
             let mut config =
                 PromptGuardConfig::new(api_key, self.base_url.clone(), providers_list)?;
 
-            config.exclude_patterns = if self.exclude.is_empty() {
-                crate::config::default_exclude_patterns()
-            } else {
-                self.exclude.clone()
-            };
+            // Persist defaults + user patterns (mirrors the scanner above).
+            config.exclude_patterns =
+                exclude_patterns.unwrap_or_else(crate::config::default_exclude_patterns);
 
             config.env_file = self.env_file.clone();
             config.framework = framework;
