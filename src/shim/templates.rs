@@ -241,6 +241,40 @@ def _shim_cohere() -> None:
 
             cohere.AsyncClient = PatchedAsyncCohereClient
 
+        # v2 clients (cohere 5.x+). ClientV2 subclasses Client, but
+        # reassigning cohere.Client does NOT re-base an already-defined
+        # ClientV2, so it must be subclassed and patched explicitly or
+        # ClientV2() traffic silently bypasses the proxy.
+        if hasattr(cohere, "ClientV2"):
+            if "CohereClientV2" not in _original_classes:
+                _original_classes["CohereClientV2"] = cohere.ClientV2
+
+            original_cohere_v2 = _original_classes["CohereClientV2"]
+
+            class PatchedCohereClientV2(original_cohere_v2):
+                """PromptGuard-wrapped Cohere v2 client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "CohereV2", "base_url")
+                    super().__init__(**kwargs)
+
+            cohere.ClientV2 = PatchedCohereClientV2
+
+        if hasattr(cohere, "AsyncClientV2"):
+            if "CohereAsyncClientV2" not in _original_classes:
+                _original_classes["CohereAsyncClientV2"] = cohere.AsyncClientV2
+
+            original_async_cohere_v2 = _original_classes["CohereAsyncClientV2"]
+
+            class PatchedAsyncCohereClientV2(original_async_cohere_v2):
+                """PromptGuard-wrapped Cohere v2 async client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "CohereAsyncV2", "base_url")
+                    super().__init__(**kwargs)
+
+            cohere.AsyncClientV2 = PatchedAsyncCohereClientV2
+
         _shimmed_providers.add("cohere")
         _debug("Cohere SDK shimmed successfully")
 
@@ -500,7 +534,12 @@ pub fn get_python_patched_classes(provider: Provider) -> &'static [&'static str]
     match provider {
         Provider::OpenAI => &["openai.OpenAI", "openai.AsyncOpenAI"],
         Provider::Anthropic => &["anthropic.Anthropic", "anthropic.AsyncAnthropic"],
-        Provider::Cohere => &["cohere.Client", "cohere.AsyncClient"],
+        Provider::Cohere => &[
+            "cohere.Client",
+            "cohere.AsyncClient",
+            "cohere.ClientV2",
+            "cohere.AsyncClientV2",
+        ],
         Provider::HuggingFace => &[
             "huggingface_hub.InferenceClient",
             "huggingface_hub.AsyncInferenceClient",

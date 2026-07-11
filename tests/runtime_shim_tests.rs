@@ -243,6 +243,33 @@ fn test_generated_python_shims_are_syntactically_valid() {
     }
 }
 
+/// The Cohere runtime shim must patch the v2 clients too. `ClientV2` subclasses
+/// `Client`, but reassigning `cohere.Client` does not re-base an already-defined
+/// `ClientV2`, so a `ClientV2` instance would silently bypass the proxy unless
+/// it is patched explicitly. Regression for the static-vs-runtime coverage split.
+#[test]
+fn test_cohere_shim_patches_v2_clients() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let generator = ShimGenerator::new(
+        temp_dir.path(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec![Provider::Cohere],
+    );
+    let shim_path = generator
+        .generate_python_shim()
+        .expect("Failed to generate Python shim");
+    let content = fs::read_to_string(&shim_path).expect("Failed to read shim");
+
+    assert!(
+        content.contains("cohere.ClientV2 = PatchedCohereClientV2"),
+        "Cohere shim must patch ClientV2"
+    );
+    assert!(
+        content.contains("cohere.AsyncClientV2 = PatchedAsyncCohereClientV2"),
+        "Cohere shim must patch AsyncClientV2"
+    );
+}
+
 /// Test that multiple shims are generated for multi-language projects
 #[test]
 fn test_multi_language_shim_generation() {
