@@ -40,7 +40,8 @@ impl EnvManager {
         }
 
         let new_content = lines.join("\n");
-        fs::write(env_path, new_content)?;
+        // .env files hold secrets: write with owner-only permissions.
+        crate::config::write_private_file(env_path, &new_content)?;
 
         Ok(())
     }

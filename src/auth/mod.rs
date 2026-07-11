@@ -68,19 +68,20 @@ pub fn save_credentials(creds: &GlobalCredentials) -> Result<()> {
     let dir = credentials_dir()?;
     fs::create_dir_all(&dir)?;
 
+    // Owner-only directory: the credentials file lives here.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
+    }
+
     let path = dir.join("credentials.json");
     let content = serde_json::to_string_pretty(creds)
         .map_err(|e| PromptGuardError::Config(format!("Failed to serialize credentials: {e}")))?;
 
-    fs::write(&path, &content)?;
-
-    // Restrict permissions on Unix
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let perms = fs::Permissions::from_mode(0o600);
-        fs::set_permissions(&path, perms)?;
-    }
+    // Created with mode 0600 atomically — no write-then-chmod window where
+    // the key is world-readable.
+    crate::config::write_private_file(&path, &content)?;
 
     Ok(())
 }

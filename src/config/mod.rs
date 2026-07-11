@@ -4,6 +4,37 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Write a file containing secrets with owner-only permissions (0600).
+///
+/// On Unix the file is created with mode 0600 (and re-chmodded if it already
+/// existed with looser permissions, so there is no window where the secret is
+/// world-readable). On other platforms this falls back to a plain write.
+pub fn write_private_file(path: &Path, content: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // mode() only applies at creation; tighten pre-existing files too.
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(content.as_bytes())?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, content)?;
+    }
+
+    Ok(())
+}
+
 /// Validate a `PromptGuard` API key's format.
 ///
 /// Production keys use the canonical `pg_live_` prefix. The check is kept
@@ -186,7 +217,8 @@ impl ConfigManager {
         let content = serde_json::to_string_pretty(&config)
             .map_err(|e| PromptGuardError::Config(format!("Failed to serialize config: {e}")))?;
 
-        fs::write(&self.config_path, content)?;
+        // The config contains the API key: owner-only permissions.
+        write_private_file(&self.config_path, &content)?;
 
         Ok(())
     }

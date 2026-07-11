@@ -271,6 +271,22 @@ impl InitCommand {
 
             config_manager.save(&config)?;
             Output::step(".promptguard.json (created)");
+
+            // Both files contain the API key in plaintext — keep them out
+            // of version control.
+            match Self::ensure_gitignored(&root_path, &[".promptguard.json", &self.env_file]) {
+                Ok(added) if !added.is_empty() => {
+                    Output::step(&format!(".gitignore (added {})", added.join(", ")));
+                },
+                Ok(_) => {},
+                Err(e) => {
+                    Output::warning(&format!(
+                        "Could not update .gitignore ({e}). Add .promptguard.json and {} \
+                         to it manually — both contain your API key.",
+                        self.env_file
+                    ));
+                },
+            }
         } else {
             Output::step(".promptguard.json (would be created)");
         }
@@ -293,6 +309,54 @@ impl InitCommand {
         println!("\nNeed help? https://docs.promptguard.co/cli");
 
         Ok(())
+    }
+
+    /// Ensure the given entries are listed in the project's .gitignore.
+    ///
+    /// Creates .gitignore when the project is a git repository and it does
+    /// not exist yet. Returns the entries that were newly added. Outside a
+    /// git repository this is a no-op (nothing to protect from committing).
+    fn ensure_gitignored(root_path: &Path, entries: &[&str]) -> Result<Vec<String>> {
+        let gitignore_path = root_path.join(".gitignore");
+
+        if !gitignore_path.exists() && !root_path.join(".git").exists() {
+            return Ok(Vec::new());
+        }
+
+        let existing = if gitignore_path.exists() {
+            std::fs::read_to_string(&gitignore_path)?
+        } else {
+            String::new()
+        };
+
+        let existing_lines: Vec<&str> = existing
+            .lines()
+            .map(|l| l.trim().trim_start_matches('/'))
+            .collect();
+
+        let mut added = Vec::new();
+        let mut new_content = existing.clone();
+
+        for entry in entries {
+            if existing_lines.contains(&entry.trim_start_matches('/')) {
+                continue;
+            }
+            if !new_content.is_empty() && !new_content.ends_with('\n') {
+                new_content.push('\n');
+            }
+            if added.is_empty() {
+                new_content.push_str("\n# PromptGuard (contains API key)\n");
+            }
+            new_content.push_str(entry);
+            new_content.push('\n');
+            added.push((*entry).to_string());
+        }
+
+        if !added.is_empty() {
+            std::fs::write(&gitignore_path, new_content)?;
+        }
+
+        Ok(added)
     }
 
     fn check_version_control(&self, root_path: &Path) -> Result<bool> {
