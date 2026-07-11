@@ -265,7 +265,10 @@ enum Commands {
     /// Uses `PromptGuard`'s Red Team API to evaluate security posture
     /// by testing with known attack patterns and jailbreak attempts.
     Redteam {
-        /// Target API URL to test against
+        /// `PromptGuard` API base URL to run the tests against. Must be
+        /// HTTPS and point at the `PromptGuard` API host (or localhost for
+        /// development) — the API key is sent with every request and is
+        /// never sent to other hosts.
         #[arg(long)]
         target_url: Option<String>,
 

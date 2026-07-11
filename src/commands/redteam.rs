@@ -102,6 +102,16 @@ impl RedTeamCommand {
                 })?
         };
 
+        // --target-url is used as the API base URL, and every request
+        // attaches the PromptGuard API key. Never send that key to an
+        // arbitrary host: require HTTPS (or loopback) and refuse hosts other
+        // than the configured/default PromptGuard API host. The red team
+        // endpoints are authenticated PromptGuard endpoints, so a keyless
+        // request to a foreign host could not work anyway.
+        if let Some(ref target) = self.target_url {
+            Self::validate_target_url(target)?;
+        }
+
         let base_url = self.target_url.clone();
         let client = PromptGuardClient::new(api_key, base_url)
             .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
@@ -114,6 +124,58 @@ impl RedTeamCommand {
             self.run_single_test(&client, test_name)?;
         } else {
             self.run_all_tests(&client)?;
+        }
+
+        Ok(())
+    }
+
+    /// Refuse `--target-url` values that would leak the `PromptGuard` API
+    /// key: non-HTTPS transports (except loopback) and hosts other than the
+    /// configured or default `PromptGuard` API host.
+    fn validate_target_url(target: &str) -> Result<()> {
+        let parsed = url::Url::parse(target).map_err(|e| {
+            PromptGuardError::Config(format!("Invalid --target-url '{target}': {e}"))
+        })?;
+
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| {
+                PromptGuardError::Config(format!("Invalid --target-url '{target}': missing host"))
+            })?
+            .to_string();
+
+        let is_loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+
+        if parsed.scheme() != "https" && !is_loopback {
+            return Err(PromptGuardError::Config(format!(
+                "--target-url must use HTTPS (got '{target}'). The PromptGuard API key \
+                 is sent with every request and must not travel over plaintext HTTP."
+            )));
+        }
+
+        if is_loopback {
+            return Ok(());
+        }
+
+        // Allowed remote hosts: the default API host and, if configured, the
+        // host of this project's proxy_url.
+        let mut allowed: Vec<String> = vec!["api.promptguard.co".to_string()];
+        if let Ok(cfg) = ConfigManager::new(None).and_then(|cm| cm.load()) {
+            if let Ok(proxy) = url::Url::parse(&cfg.proxy_url) {
+                if let Some(h) = proxy.host_str() {
+                    allowed.push(h.to_string());
+                }
+            }
+        }
+
+        if !allowed.iter().any(|h| h == &host) {
+            return Err(PromptGuardError::Config(format!(
+                "Refusing to send the PromptGuard API key to '{host}'. \
+                 --target-url must point at the PromptGuard API ({}); the red team \
+                 endpoints are authenticated PromptGuard endpoints and cannot be \
+                 used against arbitrary hosts.",
+                allowed.join(" or ")
+            )));
         }
 
         Ok(())
@@ -342,5 +404,24 @@ impl RedTeamCommand {
         }
 
         println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_url_allows_promptguard_and_loopback() {
+        assert!(RedTeamCommand::validate_target_url("https://api.promptguard.co/api/v1").is_ok());
+        assert!(RedTeamCommand::validate_target_url("http://localhost:8080/api/v1").is_ok());
+        assert!(RedTeamCommand::validate_target_url("http://127.0.0.1:3000").is_ok());
+    }
+
+    #[test]
+    fn target_url_refuses_plain_http_and_foreign_hosts() {
+        assert!(RedTeamCommand::validate_target_url("http://api.promptguard.co/api/v1").is_err());
+        assert!(RedTeamCommand::validate_target_url("https://evil.example.com/api/v1").is_err());
+        assert!(RedTeamCommand::validate_target_url("not a url").is_err());
     }
 }
