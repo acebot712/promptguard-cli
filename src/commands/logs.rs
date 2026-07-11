@@ -66,13 +66,22 @@ impl LogsCommand {
             Output::info("Fetching logs from PromptGuard API...");
         }
 
-        // Build query parameters
+        // Build query parameters (user/config-provided values are
+        // percent-encoded so they cannot smuggle extra parameters)
         let mut endpoint = format!("/logs?limit={}", self.limit);
         if let Some(ref log_type) = self.log_type {
-            let _ = write!(endpoint, "&type={log_type}");
+            let _ = write!(
+                endpoint,
+                "&type={}",
+                crate::api::encode_query_param(log_type)
+            );
         }
         if let Some(ref project_id) = config.project_id {
-            let _ = write!(endpoint, "&project_id={project_id}");
+            let _ = write!(
+                endpoint,
+                "&project_id={}",
+                crate::api::encode_query_param(project_id)
+            );
         }
 
         // Try to fetch logs from the API

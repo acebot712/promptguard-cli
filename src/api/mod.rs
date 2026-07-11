@@ -33,6 +33,11 @@ struct ErrorDetail {
     requests_limit: Option<u64>,
 }
 
+/// Percent-encode a value for safe use in a URL query string.
+pub fn encode_query_param(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
 pub struct PromptGuardClient {
     client: Client,
     base_url: String,

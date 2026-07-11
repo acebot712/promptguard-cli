@@ -18,7 +18,7 @@ impl EventsCommand {
 
         let mut endpoint = format!("/events?limit={}", self.limit);
         if let Some(ref t) = self.event_type {
-            let _ = write!(endpoint, "&type={t}");
+            let _ = write!(endpoint, "&type={}", crate::api::encode_query_param(t));
         }
 
         let events: serde_json::Value = client.get(&endpoint)?;
