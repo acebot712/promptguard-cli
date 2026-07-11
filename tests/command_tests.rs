@@ -128,6 +128,36 @@ async function main() {
     );
 }
 
+/// Test that scan correctly detects SDK usage in .tsx files containing JSX
+/// (which the plain TypeScript grammar cannot parse - requires TSX grammar)
+#[test]
+fn test_scan_detects_openai_tsx() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let tsx_file = temp_dir.path().join("Chat.tsx");
+    fs::write(
+        &tsx_file,
+        r"
+import OpenAI from 'openai';
+import React from 'react';
+
+const client = new OpenAI();
+
+export function Chat() {
+    return <div className='chat'>Hello <b>world</b></div>;
+}
+",
+    )
+    .expect("Failed to write test file");
+
+    let results = detect_all_providers(&tsx_file).expect("Detection should succeed");
+
+    assert!(
+        has_provider_instances(&results, Provider::OpenAI),
+        "Should detect OpenAI provider in .tsx file with JSX"
+    );
+}
+
 /// Test that scan detects multiple providers in one file
 #[test]
 fn test_scan_detects_multiple_providers() {

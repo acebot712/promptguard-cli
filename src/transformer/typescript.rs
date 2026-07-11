@@ -78,8 +78,15 @@ impl Transformer for TypeScriptTransformer {
         proxy_url: &str,
         api_key_env_var: &str,
     ) -> crate::error::Result<TransformResult> {
+        // .tsx/.jsx need the TSX grammar: JSX syntax does not parse under
+        // the plain TypeScript grammar (and .ts must not use TSX, where
+        // generics are ambiguous with JSX).
+        let parser_language = match file_path.extension().and_then(|e| e.to_str()) {
+            Some("tsx" | "jsx") => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            _ => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+        };
         let config = TransformConfig {
-            parser_language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            parser_language,
             language_name: "TypeScript",
         };
         let query_str = get_typescript_query(provider);

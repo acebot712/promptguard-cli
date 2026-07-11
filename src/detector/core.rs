@@ -1,75 +1,220 @@
-/// Core detection logic shared across all language detectors.
+/// Core detection logic shared across all languages.
 ///
-/// This module eliminates the massive duplication between Python and TypeScript detectors
-/// by extracting common tree-sitter parsing and query logic.
+/// Parses each file once and runs every provider's pre-compiled query
+/// against the shared tree (previously each of the 7 providers re-read,
+/// re-parsed, and re-compiled its query per file).
+use crate::detector::queries::{get_python_detection_query, get_typescript_query};
+use crate::detector::registry::PROVIDERS;
 use crate::error::{PromptGuardError, Result};
-use crate::types::{DetectionInstance, DetectionResult, Language, Provider};
+use crate::types::{DetectionInstance, DetectionResult, Provider};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use std::sync::LazyLock;
 use streaming_iterator::StreamingIterator;
-use tree_sitter::{Language as TSLanguage, Parser, Query, QueryCursor};
+use tree_sitter::{Language as TSLanguage, Parser, Query, QueryCursor, Tree};
 
-pub struct DetectorConfig {
-    pub parser_language: TSLanguage,
-    pub language: Language,
-    pub capture_name: &'static str,
+/// Concrete tree-sitter grammar used to parse a file.
+///
+/// Distinct from [`crate::types::Language`]: `.tsx`/`.jsx` files need the
+/// TSX grammar (JSX syntax is not valid under the plain TypeScript grammar),
+/// while `.ts` must NOT use TSX (generic syntax is ambiguous with JSX).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Grammar {
+    TypeScript,
+    Tsx,
+    Python,
 }
 
-/// Generic tree-sitter based detection implementation.
-///
-/// This function encapsulates the common pattern:
-/// 1. Parse source file with tree-sitter
-/// 2. Execute provider-specific query
-/// 3. Extract detection instances from matches
-/// 4. Check for `base_url` configuration
-pub fn detect_in_file_generic(
-    file_path: &Path,
+impl Grammar {
+    pub fn for_extension(ext: &str) -> Option<Self> {
+        match ext {
+            "ts" | "js" => Some(Self::TypeScript),
+            "tsx" | "jsx" => Some(Self::Tsx),
+            "py" => Some(Self::Python),
+            _ => None,
+        }
+    }
+
+    pub fn ts_language(self) -> TSLanguage {
+        match self {
+            Self::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            Self::Tsx => tree_sitter_typescript::LANGUAGE_TSX.into(),
+            Self::Python => tree_sitter_python::LANGUAGE.into(),
+        }
+    }
+
+    fn capture_name(self) -> &'static str {
+        match self {
+            Self::Python => "call_expr",
+            Self::TypeScript | Self::Tsx => "new_expr",
+        }
+    }
+
+    fn is_python(self) -> bool {
+        matches!(self, Self::Python)
+    }
+}
+
+const ALL_GRAMMARS: [Grammar; 3] = [Grammar::TypeScript, Grammar::Tsx, Grammar::Python];
+
+/// Compiled queries for every (grammar, provider) pair, built once.
+static QUERY_CACHE: LazyLock<HashMap<(Grammar, Provider), Query>> = LazyLock::new(|| {
+    let mut cache = HashMap::new();
+    for info in PROVIDERS {
+        let provider = info.provider;
+        for grammar in ALL_GRAMMARS {
+            let query_str = if grammar.is_python() {
+                get_python_detection_query(provider)
+            } else {
+                get_typescript_query(provider)
+            };
+            // Query templates are static; a compile failure is a programming
+            // error surfaced by `query_cache_is_complete` in tests.
+            if let Ok(query) = Query::new(&grammar.ts_language(), &query_str) {
+                cache.insert((grammar, provider), query);
+            }
+        }
+    }
+    cache
+});
+
+fn python_check_base_url(source: &str, args_node: tree_sitter::Node) -> (bool, Option<String>) {
+    let args_text = &source[args_node.start_byte()..args_node.end_byte()];
+    let has_base_url = args_text.contains("base_url=") || args_text.contains("base_url =");
+    let current = has_base_url.then(|| "(configured)".to_string());
+    (has_base_url, current)
+}
+
+fn typescript_check_base_url(
+    source: &str,
+    args_node: tree_sitter::Node,
     provider: Provider,
-    config: &DetectorConfig,
-    query_str: &str,
-    check_base_url: impl Fn(&str, tree_sitter::Node, Provider) -> (bool, Option<String>),
-) -> Result<DetectionResult> {
-    let source = fs::read_to_string(file_path)?;
+) -> (bool, Option<String>) {
+    let info = crate::detector::registry::ProviderInfo::get(provider);
+    let args_text = &source[args_node.start_byte()..args_node.end_byte()];
 
-    let mut parser = Parser::new();
-    parser
-        .set_language(&config.parser_language)
-        .map_err(|_| PromptGuardError::Parse("Failed to set language".to_string()))?;
+    let has_base_url = args_text.contains(&format!("{}:", info.ts_base_url_param))
+        || args_text.contains(&format!("\"{}\": ", info.ts_base_url_param))
+        || args_text.contains(&format!("'{}': ", info.ts_base_url_param))
+        || args_text.contains("base_url:");
 
-    let tree = parser.parse(&source, None).ok_or_else(|| {
-        PromptGuardError::Parse(format!("Failed to parse {} file", config.language.as_str()))
-    })?;
+    let current = has_base_url.then(|| "(configured)".to_string());
+    (has_base_url, current)
+}
 
-    let query = Query::new(&config.parser_language, query_str)
-        .map_err(|e| PromptGuardError::Parse(format!("Query error: {e}")))?;
-
+/// Run one provider's cached query against an already-parsed tree.
+fn detect_in_tree(
+    file_path: &Path,
+    source: &str,
+    tree: &Tree,
+    grammar: Grammar,
+    provider: Provider,
+    query: &Query,
+) -> DetectionResult {
     let mut cursor = QueryCursor::new();
-    let mut matches = cursor.matches(&query, tree.root_node(), source.as_bytes());
+    let mut matches = cursor.matches(query, tree.root_node(), source.as_bytes());
 
+    let capture_name = grammar.capture_name();
     let mut instances = Vec::new();
 
     while let Some(match_) = matches.next() {
         for capture in match_.captures {
-            if query.capture_names()[capture.index as usize] == config.capture_name {
-                let node = capture.node;
-                let start_position = node.start_position();
+            if query.capture_names()[capture.index as usize] != capture_name {
+                continue;
+            }
+            let node = capture.node;
+            let start_position = node.start_position();
 
-                let has_base_url = match_
-                    .captures
-                    .iter()
-                    .find(|c| query.capture_names()[c.index as usize] == "args")
-                    .map_or((false, None), |c| check_base_url(&source, c.node, provider));
-
-                instances.push(DetectionInstance {
-                    file_path: file_path.to_path_buf(),
-                    line: start_position.row + 1,
-                    column: start_position.column + 1,
-                    has_base_url: has_base_url.0,
-                    current_base_url: has_base_url.1,
+            let (has_base_url, current_base_url) = match_
+                .captures
+                .iter()
+                .find(|c| query.capture_names()[c.index as usize] == "args")
+                .map_or((false, None), |c| {
+                    if grammar.is_python() {
+                        python_check_base_url(source, c.node)
+                    } else {
+                        typescript_check_base_url(source, c.node, provider)
+                    }
                 });
+
+            instances.push(DetectionInstance {
+                file_path: file_path.to_path_buf(),
+                line: start_position.row + 1,
+                column: start_position.column + 1,
+                has_base_url,
+                current_base_url,
+            });
+        }
+    }
+
+    DetectionResult { instances }
+}
+
+/// Detect all providers' SDK usage in a single file.
+///
+/// The file is read and parsed exactly once; each provider's pre-compiled
+/// query runs against the shared tree.
+pub fn detect_all_providers_in_file(file_path: &Path) -> Result<Vec<(Provider, DetectionResult)>> {
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let Some(grammar) = Grammar::for_extension(ext) else {
+        return Ok(Vec::new());
+    };
+
+    let source = fs::read_to_string(file_path)?;
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&grammar.ts_language())
+        .map_err(|_| PromptGuardError::Parse("Failed to set language".to_string()))?;
+
+    let tree = parser.parse(&source, None).ok_or_else(|| {
+        PromptGuardError::Parse(format!("Failed to parse {}", file_path.display()))
+    })?;
+
+    let mut results = Vec::new();
+    for info in PROVIDERS {
+        let provider = info.provider;
+        let Some(query) = QUERY_CACHE.get(&(grammar, provider)) else {
+            continue;
+        };
+        let result = detect_in_tree(file_path, &source, &tree, grammar, provider, query);
+        if !result.instances.is_empty() {
+            results.push((provider, result));
+        }
+    }
+
+    Ok(results)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// Every (grammar, provider) pair must have a compiled query — a missing
+    /// entry means a query template failed to compile for that grammar.
+    #[test]
+    fn query_cache_is_complete() {
+        for info in PROVIDERS {
+            for grammar in ALL_GRAMMARS {
+                assert!(
+                    QUERY_CACHE.contains_key(&(grammar, info.provider)),
+                    "no compiled query for {:?} / {:?}",
+                    grammar,
+                    info.provider
+                );
             }
         }
     }
 
-    Ok(DetectionResult { instances })
+    #[test]
+    fn grammar_selection_by_extension() {
+        assert_eq!(Grammar::for_extension("ts"), Some(Grammar::TypeScript));
+        assert_eq!(Grammar::for_extension("js"), Some(Grammar::TypeScript));
+        assert_eq!(Grammar::for_extension("tsx"), Some(Grammar::Tsx));
+        assert_eq!(Grammar::for_extension("jsx"), Some(Grammar::Tsx));
+        assert_eq!(Grammar::for_extension("py"), Some(Grammar::Python));
+        assert_eq!(Grammar::for_extension("rs"), None);
+    }
 }
