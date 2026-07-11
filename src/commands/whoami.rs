@@ -1,5 +1,5 @@
 use crate::api::PromptGuardClient;
-use crate::auth::{load_credentials, resolve_api_key, resolve_base_url};
+use crate::auth::{load_credentials, resolve_api_key, resolve_session};
 use crate::error::Result;
 use crate::output::Output;
 
@@ -9,9 +9,9 @@ pub struct WhoamiCommand {
 
 impl WhoamiCommand {
     pub fn execute(&self) -> Result<()> {
-        let api_key = if let Ok(key) = resolve_api_key() {
-            key
-        } else {
+        // Not logged in at all: report gracefully. Any other resolve_session
+        // error (e.g. refusing a repo-configured custom proxy) propagates.
+        if resolve_api_key().is_err() {
             if self.json {
                 let result = serde_json::json!({
                     "authenticated": false,
@@ -25,9 +25,9 @@ impl WhoamiCommand {
                 Output::error("Not logged in. Run 'promptguard login' to authenticate.");
             }
             return Ok(());
-        };
+        }
 
-        let base_url = resolve_base_url();
+        let (api_key, base_url) = resolve_session()?;
         let masked_key = Output::mask_api_key(&api_key);
 
         // Determine the source of the key, mirroring resolve_api_key's

@@ -4,7 +4,7 @@
 //! sensitive information like emails, phone numbers, SSNs, etc.
 
 use crate::api::PromptGuardClient;
-use crate::auth::{resolve_api_key, resolve_base_url};
+use crate::auth::resolve_session;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use serde::{Deserialize, Serialize};
@@ -52,8 +52,7 @@ impl RedactCommand {
 
         // Resolve credentials from env var, project config, or global login —
         // this command works without a project being initialized.
-        let api_key = resolve_api_key()?;
-        let base_url = resolve_base_url();
+        let (api_key, base_url) = resolve_session()?;
 
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
 

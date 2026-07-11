@@ -49,6 +49,12 @@ struct Cli {
     #[arg(long, global = true)]
     no_color: bool,
 
+    /// Allow sending an API key resolved from the environment or global
+    /// credentials to a custom proxy host configured in this repository's
+    /// .promptguard.json (refused by default to prevent key exfiltration)
+    #[arg(long, global = true)]
+    allow_custom_proxy: bool,
+
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -446,6 +452,8 @@ fn main() {
         cli.quiet,
         cli.no_color || std::env::var("NO_COLOR").is_ok(),
     );
+
+    auth::set_allow_custom_proxy(cli.allow_custom_proxy);
 
     let Some(command) = cli.command else {
         print_welcome();
