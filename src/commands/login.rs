@@ -53,7 +53,10 @@ impl LoginCommand {
                         "Check your API key at https://app.promptguard.co/settings/api-keys",
                     );
                 }
-                return Err(PromptGuardError::Auth(msg));
+                // The styled error above is the user-facing report; return the
+                // sentinel so main() exits non-zero without re-printing it
+                // (matches the init key-rejection path).
+                return Err(PromptGuardError::AlreadyReported);
             },
             // Network/other failure: the key may be fine but we can't reach the
             // API. Offer to save with an explicit warning; don't claim "Logged in".
