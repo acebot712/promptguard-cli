@@ -50,6 +50,17 @@ case "$ARCH" in
     ;;
 esac
 
+# The release matrix builds macOS (x86_64 + arm64) and Linux x86_64 only;
+# there is no aarch64-linux binary, so downloading would always fail.
+if [ "$OS_TYPE" = "linux" ] && [ "$ARCH_TYPE" = "arm64" ]; then
+  echo "${RED}Error: No prebuilt binary is available for Linux arm64${NC}"
+  echo "Supported prebuilt targets: macOS (x86_64, arm64) and Linux (x86_64)."
+  echo ""
+  echo "You can build from source instead:"
+  echo "  cargo install promptguard"
+  exit 1
+fi
+
 # Construct binary name
 BINARY="promptguard-${OS_TYPE}-${ARCH_TYPE}"
 
