@@ -94,6 +94,24 @@ fn transform_args(
     Some(new_args)
 }
 
+/// Whether the argument list forwards dynamic arguments via a splat
+/// (`OpenAI(**cfg)` / `OpenAI(*args)`).
+///
+/// Appending `base_url=...` after `**cfg` raises `TypeError: got multiple
+/// values for keyword argument 'base_url'` at runtime when `cfg` already
+/// carries a `base_url` — the transformer cannot know what the splat expands
+/// to, so these calls must be left untouched (mirroring the TypeScript
+/// identifier-argument skip) and reported as needing manual routing.
+fn args_have_splat(args_node: tree_sitter::Node) -> bool {
+    let mut cursor = args_node.walk();
+    for child in args_node.named_children(&mut cursor) {
+        if matches!(child.kind(), "dictionary_splat" | "list_splat") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Byte offset just past the last named child of `node` that is not a
 /// comment, or `None` when there is no such child.
 fn last_non_comment_child_end(node: tree_sitter::Node) -> Option<usize> {
@@ -172,17 +190,26 @@ impl Transformer for PythonTransformer {
         api_key_env_var: &str,
         dry_run: bool,
     ) -> crate::error::Result<TransformResult> {
-        transform_file_generic(
+        // Counted from inside the Fn closure, so interior mutability.
+        let manual_skips = std::cell::Cell::new(0usize);
+
+        let mut result = transform_file_generic(
             file_path,
             Grammar::Python,
             provider,
             |source, args_node| {
+                if !has_base_url(source, args_node) && args_have_splat(args_node) {
+                    manual_skips.set(manual_skips.get() + 1);
+                    return None;
+                }
                 transform_args(source, args_node, proxy_url, api_key_env_var)
                     .map(|new_args| (args_node.start_byte(), args_node.end_byte(), new_args))
             },
             ensure_os_import,
             dry_run,
-        )
+        )?;
+        result.needs_manual_routing = manual_skips.get();
+        Ok(result)
     }
 }
 
@@ -250,6 +277,73 @@ mod tests {
         let out = transform_python(input);
         assert!(out.contains("base_url="));
         assert_reparses_clean(&out);
+    }
+
+    /// Transform `input` with the `OpenAI` provider and return the result plus
+    /// the (possibly rewritten) file contents.
+    fn transform_python_result(input: &str) -> (TransformResult, String) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("client.py");
+        fs::write(&path, input).unwrap();
+        let result = PythonTransformer::new()
+            .transform_file(
+                &path,
+                Provider::OpenAI,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+                false,
+            )
+            .unwrap();
+        (result, fs::read_to_string(&path).unwrap())
+    }
+
+    /// Regression: `OpenAI(**cfg)` became `OpenAI(**cfg, base_url=...)`,
+    /// which raises `TypeError: got multiple values for keyword argument
+    /// 'base_url'` at runtime whenever `cfg` carries a `base_url`. Splatted
+    /// argument lists must be left untouched and reported as needing manual
+    /// routing.
+    #[test]
+    fn dict_splat_args_left_untouched_and_reported() {
+        let input = "from openai import OpenAI\nclient = OpenAI(**cfg)\n";
+        let (result, out) = transform_python_result(input);
+        assert!(!result.modified, "**cfg call must not be rewritten");
+        assert_eq!(result.needs_manual_routing, 1, "skip must be reported");
+        assert_eq!(out, input, "file must be byte-for-byte untouched");
+    }
+
+    /// Splats mixed with explicit keywords are just as dangerous.
+    #[test]
+    fn mixed_keyword_and_dict_splat_args_left_untouched() {
+        let input = "from openai import OpenAI\nclient = OpenAI(api_key=key, **cfg)\n";
+        let (result, out) = transform_python_result(input);
+        assert!(!result.modified);
+        assert_eq!(result.needs_manual_routing, 1);
+        assert_eq!(out, input);
+    }
+
+    /// `*args` forwarding is also dynamic — leave it alone.
+    #[test]
+    fn list_splat_args_left_untouched_and_reported() {
+        let input = "from openai import OpenAI\nclient = OpenAI(*args)\n";
+        let (result, out) = transform_python_result(input);
+        assert!(!result.modified);
+        assert_eq!(result.needs_manual_routing, 1);
+        assert_eq!(out, input);
+    }
+
+    /// A splat NEXT TO an explicit `base_url=` is already configured: nothing
+    /// to do, and it must NOT be counted as needing manual routing.
+    #[test]
+    fn dict_splat_with_explicit_base_url_not_counted_as_manual() {
+        let input =
+            "from openai import OpenAI\nclient = OpenAI(**cfg, base_url=\"https://x.example\")\n";
+        let (result, out) = transform_python_result(input);
+        assert!(!result.modified);
+        assert_eq!(
+            result.needs_manual_routing, 0,
+            "already-configured calls are not manual-routing work"
+        );
+        assert_eq!(out, input);
     }
 
     /// Regression: appending the comma to the raw argument text swallowed it

@@ -187,7 +187,10 @@ impl Transformer for TypeScriptTransformer {
             _ => Grammar::TypeScript,
         };
 
-        transform_file_generic(
+        // Counted from inside the Fn closure, so interior mutability.
+        let manual_skips = std::cell::Cell::new(0usize);
+
+        let mut result = transform_file_generic(
             file_path,
             grammar,
             provider,
@@ -208,12 +211,28 @@ impl Transformer for TypeScriptTransformer {
                 // No object literal argument: synthesize an options object
                 // for empty argument lists (`new OpenAI()`), which were
                 // previously detected but never transformed.
-                synthesize_ts_options(source, args_node, provider, proxy_url, api_key_env_var)
-                    .map(|new_args| (args_node.start_byte(), args_node.end_byte(), new_args))
+                if let Some(new_args) =
+                    synthesize_ts_options(source, args_node, provider, proxy_url, api_key_env_var)
+                {
+                    return Some((args_node.start_byte(), args_node.end_byte(), new_args));
+                }
+                // Synthesis declined. For a transformable provider that means
+                // the options come from a dynamic argument (identifier,
+                // spread, call, …) — the call needs manual routing; report
+                // that instead of silently claiming "no changes needed".
+                let transformable = ProviderInfo::get(provider).is_some_and(|i| {
+                    !i.ts_base_url_param.is_empty() && !i.ts_api_key_param.is_empty()
+                });
+                if transformable && last_non_comment_child_end(args_node).is_some() {
+                    manual_skips.set(manual_skips.get() + 1);
+                }
+                None
             },
             |s| s,
             dry_run,
-        )
+        )?;
+        result.needs_manual_routing = manual_skips.get();
+        Ok(result)
     }
 }
 
@@ -377,6 +396,10 @@ mod tests {
             )
             .unwrap();
         assert!(!result.modified, "identifier args must not be rewritten");
+        assert_eq!(
+            result.needs_manual_routing, 1,
+            "the skip must be reported as needing manual routing"
+        );
         assert_eq!(fs::read_to_string(&path).unwrap(), input);
     }
 

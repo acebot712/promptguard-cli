@@ -196,10 +196,10 @@ impl InitCommand {
             mode,
             &self.base_url,
             &env_var_name,
-            |provider, file_path, modified| {
+            |provider, file_path, result| {
                 let rel_path = file_path.strip_prefix(&root_path).unwrap_or(file_path);
 
-                if modified {
+                if result.modified {
                     let base_url_param = ProviderInfo::get(provider)
                         .map_or("base_url", |info| info.ts_base_url_param);
                     let verb = if self.dry_run { "would add" } else { "added" };
@@ -209,6 +209,16 @@ impl InitCommand {
                         verb,
                         base_url_param,
                         provider.display_name()
+                    ));
+                } else if result.needs_manual_routing > 0 {
+                    // Be honest: these call sites pass dynamic arguments
+                    // (`**cfg`, an identifier options object, ...) that could
+                    // already carry a base_url — injecting one could raise a
+                    // TypeError at runtime, so they were left untouched.
+                    Output::excluded(&format!(
+                        "{} (skipped: {} call site(s) pass dynamic arguments — route through PromptGuard manually)",
+                        rel_path.display(),
+                        result.needs_manual_routing
                     ));
                 } else {
                     Output::excluded(&format!("{} (no changes needed)", rel_path.display()));

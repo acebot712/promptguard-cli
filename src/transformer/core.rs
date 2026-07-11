@@ -93,7 +93,10 @@ where
     }
 
     if modifications.is_empty() {
-        return Ok(TransformResult { modified: false });
+        return Ok(TransformResult {
+            modified: false,
+            needs_manual_routing: 0,
+        });
     }
 
     modifications.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
@@ -114,7 +117,10 @@ where
         fs::write(file_path, &new_source)?;
     }
 
-    Ok(TransformResult { modified: true })
+    Ok(TransformResult {
+        modified: true,
+        needs_manual_routing: 0,
+    })
 }
 
 #[cfg(test)]

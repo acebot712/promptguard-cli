@@ -90,7 +90,7 @@ pub fn run_transform_pipeline(
     mode: TransformMode<'_>,
     proxy_url: &str,
     env_var_name: &str,
-    mut on_result: impl FnMut(Provider, &Path, bool),
+    mut on_result: impl FnMut(Provider, &Path, &crate::types::TransformResult),
 ) -> TransformOutcome {
     let (backup_manager, dry_run) = match mode {
         TransformMode::Apply(bm) => (bm, false),
@@ -130,7 +130,7 @@ pub fn run_transform_pipeline(
                     if result.modified {
                         outcome.files_modified.push(file_path.clone());
                     }
-                    on_result(*provider, &file_path, result.modified);
+                    on_result(*provider, &file_path, &result);
                 },
                 Err(e) => {
                     crate::output::Output::warning(&format!(

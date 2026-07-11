@@ -33,7 +33,10 @@ pub fn transform_file(
 
     let language = Language::from_extension(ext);
     let Some(language) = language else {
-        return Ok(TransformResult { modified: false });
+        return Ok(TransformResult {
+            modified: false,
+            needs_manual_routing: 0,
+        });
     };
 
     let transformer: Box<dyn Transformer> = match language {

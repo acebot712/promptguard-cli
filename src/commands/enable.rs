@@ -250,10 +250,16 @@ impl EnableCommand {
             super::TransformMode::Apply(backup_manager.as_ref()),
             &config.proxy_url,
             &config.env_var_name,
-            |_provider, file_path, modified| {
-                if modified {
-                    let rel_path = file_path.strip_prefix(root_path).unwrap_or(file_path);
+            |_provider, file_path, result| {
+                let rel_path = file_path.strip_prefix(root_path).unwrap_or(file_path);
+                if result.modified {
                     Output::step(&format!("✓ {}", rel_path.display()));
+                } else if result.needs_manual_routing > 0 {
+                    Output::excluded(&format!(
+                        "{} (skipped: {} call site(s) pass dynamic arguments — route through PromptGuard manually)",
+                        rel_path.display(),
+                        result.needs_manual_routing
+                    ));
                 }
             },
         );

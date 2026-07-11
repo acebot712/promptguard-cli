@@ -123,4 +123,12 @@ impl DetectionResult {
 #[derive(Debug, Clone)]
 pub struct TransformResult {
     pub modified: bool,
+    /// Detected call sites deliberately left untouched because their
+    /// arguments are dynamic (`**cfg` / `*args` in Python, an identifier or
+    /// spread options argument in TypeScript): injecting `base_url` there
+    /// could conflict with what the dynamic arguments already carry (a
+    /// runtime `TypeError`). Routing these calls through the proxy needs a
+    /// manual edit, and callers must report that instead of implying the
+    /// file was fully handled.
+    pub needs_manual_routing: usize,
 }
