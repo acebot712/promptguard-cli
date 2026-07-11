@@ -10,8 +10,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const PYTHON_SHIM_IMPORT: &str = "\n# PromptGuard runtime shim - auto-injected\nimport sys\nimport os\nsys.path.insert(0, os.path.join(os.path.dirname(__file__), '.promptguard'))\nimport promptguard_shim\n# PromptGuard runtime shim - end\n";
-
 const PYTHON_SHIM_IMPORT_MARKER: &str = "# PromptGuard runtime shim - auto-injected";
 
 const PYTHON_SHIM_END_MARKER: &str = "# PromptGuard runtime shim - end";
@@ -24,6 +22,25 @@ const PYTHON_SHIM_LEGACY_LINES: &[&str] = &[
     "sys.path.insert(0, os.path.join(os.path.dirname(__file__), '.promptguard'))",
     "import promptguard_shim",
 ];
+
+/// Build the Python shim import block for an entry file `depth` directories
+/// below the project root.
+///
+/// The shim directory (`.promptguard`) is generated only at the project
+/// root, but entry points can be nested (e.g. `src/main.py`). The injected
+/// `sys.path` entry must therefore climb from the *entry file's* directory
+/// back up to the project root — one `'..'` component per directory level —
+/// or the import fails with `ModuleNotFoundError` and the user's app crashes
+/// at startup.
+fn python_shim_import_block(depth: usize) -> String {
+    let mut components = String::new();
+    for _ in 0..depth {
+        components.push_str("'..', ");
+    }
+    format!(
+        "\n{PYTHON_SHIM_IMPORT_MARKER}\nimport sys\nimport os\nsys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), {components}'.promptguard'))\nimport promptguard_shim\n{PYTHON_SHIM_END_MARKER}\n"
+    )
+}
 
 /// Compute the line index at which new top-level Python code (imports,
 /// shim blocks) can be safely inserted.
@@ -262,6 +279,29 @@ impl ShimInjector {
         Ok(entry_points.into_iter().collect())
     }
 
+    /// Number of directory levels between the project root and the entry
+    /// file's directory, i.e. how many `'..'` components the injected
+    /// `sys.path` entry needs to reach the root-level shim directory.
+    fn shim_path_depth(&self, file_path: &Path) -> usize {
+        let Some(parent) = file_path.parent() else {
+            return 0;
+        };
+
+        if let Ok(rel) = parent.strip_prefix(&self.project_root) {
+            return rel.components().count();
+        }
+
+        // Fall back to canonicalized paths (relative inputs, symlinked
+        // temp/project directories).
+        if let (Ok(parent), Ok(root)) = (parent.canonicalize(), self.project_root.canonicalize()) {
+            if let Ok(rel) = parent.strip_prefix(&root) {
+                return rel.components().count();
+            }
+        }
+
+        0
+    }
+
     /// Inject Python shim import into a file
     pub fn inject_python_shim(&self, file_path: &Path) -> Result<bool> {
         let content = fs::read_to_string(file_path)?;
@@ -277,12 +317,10 @@ impl ShimInjector {
 
         // Insert the shim block as individual lines so the file's dominant
         // line ending (CRLF or LF) and trailing-newline state are preserved.
-        // The const's leading "" yields the blank line before the marker;
+        // The block's leading "" yields the blank line before the marker;
         // trim its trailing newline so we don't add a stray blank line.
-        let shim_lines: Vec<&str> = PYTHON_SHIM_IMPORT
-            .trim_end_matches('\n')
-            .split('\n')
-            .collect();
+        let shim_block = python_shim_import_block(self.shim_path_depth(file_path));
+        let shim_lines: Vec<&str> = shim_block.trim_end_matches('\n').split('\n').collect();
 
         let mut out: Vec<String> = Vec::with_capacity(lines.len() + shim_lines.len());
         for (i, line) in lines.iter().enumerate() {
@@ -548,6 +586,70 @@ mod tests {
         injector.remove_python_shim(&test_file).unwrap();
         let after = fs::read_to_string(&test_file).unwrap();
         assert_eq!(after, original, "CRLF file must round-trip exactly");
+    }
+
+    /// Resolve the `sys.path` entry injected into `entry`: extract the quoted
+    /// components of the generated `os.path.join(...)` call and apply them to
+    /// the entry file's directory, mirroring what Python does at runtime.
+    fn resolve_injected_sys_path(entry: &Path) -> PathBuf {
+        let content = fs::read_to_string(entry).unwrap();
+        let line = content
+            .lines()
+            .find(|l| l.contains("sys.path.insert"))
+            .expect("injected sys.path line");
+
+        let mut resolved = entry.parent().unwrap().to_path_buf();
+        for (i, part) in line.split('\'').enumerate() {
+            // Odd split indices are the quoted join components ('..', '.promptguard')
+            if i % 2 == 1 {
+                resolved.push(part);
+            }
+        }
+        resolved.canonicalize().expect("sys.path entry must exist")
+    }
+
+    /// HIGH regression: shims are generated only at the project root, but a
+    /// nested entry point (e.g. src/app/main.py) used to get a sys.path entry
+    /// pointing at `<entry dir>/.promptguard`, which does not exist — the
+    /// user's app then crashed at startup with `ModuleNotFoundError`.
+    #[test]
+    fn test_nested_entry_point_sys_path_resolves_to_root_shim_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+        let shim_dir = root.join(".promptguard");
+        fs::create_dir_all(&shim_dir).unwrap();
+        fs::create_dir_all(root.join("src/app")).unwrap();
+
+        let injector = ShimInjector::new(root);
+
+        // Depth 0 (project root), depth 1, and depth 2 entry points must all
+        // resolve back to the root-level shim directory.
+        let entries = [
+            root.join("main.py"),
+            root.join("src/server.py"),
+            root.join("src/app/main.py"),
+        ];
+
+        for entry in &entries {
+            fs::write(entry, "print('hello')\n").unwrap();
+            assert!(injector.inject_python_shim(entry).unwrap());
+
+            let resolved = resolve_injected_sys_path(entry);
+            assert_eq!(
+                resolved,
+                shim_dir.canonicalize().unwrap(),
+                "sys.path entry injected into {} must resolve to the root shim dir",
+                entry.display()
+            );
+        }
+
+        // Round-trip: removal must still work on nested blocks.
+        for entry in &entries {
+            assert!(injector.remove_python_shim(entry).unwrap());
+            let after = fs::read_to_string(entry).unwrap();
+            assert!(!after.contains("promptguard_shim"));
+            assert!(after.contains("print('hello')"));
+        }
     }
 
     /// Legacy blocks (injected by older versions without an end-marker) must
