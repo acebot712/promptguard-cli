@@ -265,6 +265,11 @@ only routing logic to ensure API calls use the PromptGuard proxy.
     }
 
     /// Check if shims are currently installed
+    ///
+    /// (Used by the library API and tests; the CLI binary itself now checks
+    /// `shim_dir().exists()` so it also cleans up partially-generated
+    /// directories, hence the allow.)
+    #[allow(dead_code)]
     pub fn shims_installed(&self) -> bool {
         let shim_dir = self.shim_dir();
         shim_dir.exists()

@@ -948,3 +948,82 @@ fn test_enable_yes_flag_does_not_block_on_stdin() {
     let status = run_with_open_stdin(temp_dir.path(), &["enable", "--yes"]);
     assert!(status.success(), "enable --yes must exit successfully");
 }
+
+/// `revert --yes` must fully undo `PromptGuard`: restore recorded backups
+/// (deleting them afterwards), remove injected shim imports and the
+/// .promptguard/ directory, and only then remove the env entry and config.
+/// Regression: revert used to delete `PROMPTGUARD_API_KEY` and the config
+/// while leaving transformed files routed at the proxy — a broken app.
+#[test]
+fn test_revert_restores_backups_and_removes_shims() {
+    use promptguard::shim::{ShimGenerator, ShimInjector};
+
+    let temp_dir = TempDir::new().unwrap();
+    let dir = temp_dir.path();
+
+    // Transformed file with its PromptGuard-recorded backup.
+    fs::write(dir.join("app.py"), "transformed-by-promptguard").unwrap();
+    fs::write(dir.join("app.py.bak"), "original-user-code").unwrap();
+
+    // Runtime shim artifacts: generated .promptguard/ + injected entry point.
+    let generator = ShimGenerator::new(
+        dir,
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec![Provider::OpenAI],
+    );
+    generator.generate_python_shim().unwrap();
+    let entry = dir.join("main.py");
+    fs::write(&entry, "print('hi')\n").unwrap();
+    assert!(ShimInjector::new(dir).inject_python_shim(&entry).unwrap());
+
+    // Env file with the PromptGuard key plus an unrelated entry.
+    fs::write(
+        dir.join(".env"),
+        "PROMPTGUARD_API_KEY=pg_live_test_key_1234567890\nOTHER_VAR=keep-me\n",
+    )
+    .unwrap();
+
+    // Config recording the backup and the managed file.
+    let mut config = PromptGuardConfig::new(
+        "pg_live_test_key_1234567890".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec!["openai".to_string()],
+    )
+    .unwrap();
+    config.metadata.backups = vec!["app.py.bak".to_string()];
+    config.metadata.files_managed = vec!["app.py".to_string()];
+    ConfigManager::new(Some(dir.join(".promptguard.json")))
+        .unwrap()
+        .save(&config)
+        .unwrap();
+
+    let status = run_with_open_stdin(dir, &["revert", "--yes"]);
+    assert!(status.success(), "revert --yes must exit successfully");
+
+    // Transformed file restored from its backup, backup cleaned up.
+    assert_eq!(
+        fs::read_to_string(dir.join("app.py")).unwrap(),
+        "original-user-code",
+        "revert must restore the recorded backup"
+    );
+    assert!(
+        !dir.join("app.py.bak").exists(),
+        "revert must delete the backup it restored from"
+    );
+
+    // Shim artifacts removed.
+    assert!(
+        !dir.join(".promptguard").exists(),
+        "revert must delete the .promptguard/ shim directory"
+    );
+    assert!(
+        !fs::read_to_string(&entry).unwrap().contains("promptguard"),
+        "revert must remove the injected shim import"
+    );
+
+    // Env entry removed, unrelated entries kept; config deleted.
+    let env = fs::read_to_string(dir.join(".env")).unwrap();
+    assert!(!env.contains("PROMPTGUARD_API_KEY"));
+    assert!(env.contains("OTHER_VAR=keep-me"));
+    assert!(!dir.join(".promptguard.json").exists());
+}
