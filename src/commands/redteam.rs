@@ -7,6 +7,13 @@ use crate::api::PromptGuardClient;
 use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// The autonomous agent runs an LLM-powered mutation loop server-side and
+/// routinely takes minutes; the default 30s request timeout all but
+/// guaranteed a client-side timeout (and, before retries were restricted to
+/// connect errors, a timeout-retry storm of duplicate agent runs).
+const AUTONOMOUS_TIMEOUT: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RedTeamTestResult {
@@ -319,12 +326,13 @@ impl RedTeamCommand {
         println!("This may take a while - the agent uses LLM-powered mutation\n");
 
         let report: AutonomousReport = client
-            .post(
+            .post_with_timeout(
                 "/internal/redteam/autonomous",
                 &AutonomousRequest {
                     budget: self.budget,
                     target_preset: self.preset.clone(),
                 },
+                AUTONOMOUS_TIMEOUT,
             )
             .map_err(|e| PromptGuardError::Api(format!("Autonomous agent failed: {e}")))?;
 
