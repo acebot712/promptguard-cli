@@ -23,6 +23,24 @@ pub mod update;
 pub mod verify;
 pub mod whoami;
 
+/// Resolve an `--api-key` flag value, supporting `-` to read the key from
+/// stdin (avoids exposing the key in shell history and process listings).
+pub fn resolve_api_key_flag(value: &str) -> crate::error::Result<String> {
+    if value != "-" {
+        return Ok(value.to_string());
+    }
+
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let key = line.trim().to_string();
+    if key.is_empty() {
+        return Err(crate::error::PromptGuardError::Custom(
+            "No API key received on stdin (expected the key on the first line)".to_string(),
+        ));
+    }
+    Ok(key)
+}
+
 pub use apply::ApplyCommand;
 pub use config::ConfigCommand;
 pub use dashboard::DashboardCommand;

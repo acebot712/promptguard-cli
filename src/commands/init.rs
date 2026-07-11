@@ -429,7 +429,8 @@ impl InitCommand {
 
     fn get_api_key(&self) -> Result<String> {
         let api_key = if let Some(ref key) = self.api_key {
-            key.clone()
+            // `--api-key -` reads the key from stdin
+            super::resolve_api_key_flag(key)?
         } else if let Ok(key) = std::env::var("PROMPTGUARD_API_KEY") {
             key
         } else if !self.auto && !self.dry_run {

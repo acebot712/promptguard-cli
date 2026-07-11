@@ -41,7 +41,10 @@ impl KeyCommand {
 
         match input.trim() {
             "1" => {
-                // Update API key
+                // Update API key. Terminal echo is not disabled (no raw-mode
+                // dependency); warn so the user can clear their screen or use
+                // a non-observed terminal.
+                Output::warning("Input is not hidden — the key will be visible on screen.");
                 print!("Enter new API key: ");
                 io::stdout().flush()?;
 

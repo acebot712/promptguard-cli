@@ -70,7 +70,9 @@ enum Commands {
         #[arg(long)]
         provider: Vec<String>,
 
-        /// `PromptGuard` API key (or set `PROMPTGUARD_API_KEY` env var)
+        /// `PromptGuard` API key (or set `PROMPTGUARD_API_KEY` env var).
+        /// Use '-' to read the key from stdin — passing it as an argument
+        /// exposes it in shell history and process listings.
         #[arg(long)]
         api_key: Option<String>,
 
@@ -345,7 +347,9 @@ enum Commands {
     /// Saves your API key to `~/.promptguard/credentials.json` so all
     /// commands and projects can use it without per-project setup.
     Login {
-        /// API key to authenticate with (or enter interactively)
+        /// API key to authenticate with (or enter interactively).
+        /// Use '-' to read the key from stdin — passing it as an argument
+        /// exposes it in shell history and process listings.
         #[arg(long)]
         api_key: Option<String>,
 
