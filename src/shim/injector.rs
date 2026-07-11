@@ -25,6 +25,76 @@ const PYTHON_SHIM_LEGACY_LINES: &[&str] = &[
     "import promptguard_shim",
 ];
 
+/// Compute the line index at which new top-level Python code (imports,
+/// shim blocks) can be safely inserted.
+///
+/// Skips, in order: a shebang line, encoding declaration comments, the
+/// module docstring (single- or multi-line), and any `from __future__
+/// import` statements (which Python requires to precede all other code).
+pub fn python_insertion_line(lines: &[&str]) -> usize {
+    let mut idx = 0;
+
+    // Shebang
+    if !lines.is_empty() && lines[0].starts_with("#!") {
+        idx = 1;
+    }
+
+    // Encoding declaration (PEP 263), only valid on line 1 or 2
+    while idx < lines.len().min(2) {
+        let trimmed = lines[idx].trim_start();
+        if trimmed.starts_with('#') && trimmed.contains("coding") {
+            idx += 1;
+        } else {
+            break;
+        }
+    }
+
+    // Module docstring
+    if idx < lines.len() {
+        let trimmed = lines[idx].trim_start();
+        let quote = if trimmed.starts_with("\"\"\"") {
+            Some("\"\"\"")
+        } else if trimmed.starts_with("'''") {
+            Some("'''")
+        } else {
+            None
+        };
+
+        if let Some(quote) = quote {
+            let rest = &trimmed[quote.len()..];
+            if rest.contains(quote) {
+                // Single-line docstring: """text"""
+                idx += 1;
+            } else {
+                // Multi-line: scan for the closing quote
+                let mut k = idx + 1;
+                while k < lines.len() {
+                    if lines[k].contains(quote) {
+                        idx = k + 1;
+                        break;
+                    }
+                    k += 1;
+                }
+            }
+        }
+    }
+
+    // `from __future__ import ...` lines (possibly separated by blanks)
+    loop {
+        let mut j = idx;
+        while j < lines.len() && lines[j].trim().is_empty() {
+            j += 1;
+        }
+        if j < lines.len() && lines[j].trim_start().starts_with("from __future__ import") {
+            idx = j + 1;
+        } else {
+            break;
+        }
+    }
+
+    idx
+}
+
 /// Entry point detector and injector
 pub struct ShimInjector {
     project_root: PathBuf,
@@ -201,40 +271,9 @@ impl ShimInjector {
             return Ok(false); // Already injected
         }
 
-        // Inject at the top, after shebang and docstring if present
+        // Inject at the top, after shebang, docstring, and __future__ imports
         let lines: Vec<&str> = content.lines().collect();
-        let mut inject_pos = 0;
-
-        // Skip shebang
-        if !lines.is_empty() && lines[0].starts_with("#!") {
-            inject_pos = 1;
-        }
-
-        // Skip module docstring
-        if inject_pos < lines.len() {
-            let remaining = &lines[inject_pos..].join("\n");
-            if remaining.trim_start().starts_with("\"\"\"")
-                || remaining.trim_start().starts_with("'''")
-            {
-                // Find end of docstring
-                let quote = if remaining.trim_start().starts_with("\"\"\"") {
-                    "\"\"\""
-                } else {
-                    "'''"
-                };
-
-                let mut in_docstring = false;
-                for (i, line) in lines[inject_pos..].iter().enumerate() {
-                    if line.trim().starts_with(quote) {
-                        if in_docstring {
-                            inject_pos += i + 1;
-                            break;
-                        }
-                        in_docstring = true;
-                    }
-                }
-            }
-        }
+        let inject_pos = python_insertion_line(&lines);
 
         // Insert shim import
         let mut new_content = String::new();
