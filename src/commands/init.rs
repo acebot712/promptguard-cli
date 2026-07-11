@@ -222,11 +222,12 @@ impl InitCommand {
                         let rel_path = file_path.strip_prefix(&root_path).unwrap_or(&file_path);
 
                         if result.modified {
-                            let info = ProviderInfo::get(*provider);
+                            let base_url_param = ProviderInfo::get(*provider)
+                                .map_or("base_url", |info| info.ts_base_url_param);
                             Output::step(&format!(
                                 "{} (added {} for {})",
                                 rel_path.display(),
-                                info.ts_base_url_param,
+                                base_url_param,
                                 provider.display_name()
                             ));
                         } else {

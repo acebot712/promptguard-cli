@@ -7,7 +7,11 @@ use crate::detector::registry::ProviderInfo;
 use crate::types::Provider;
 
 pub fn get_typescript_query(provider: Provider) -> String {
-    let info = ProviderInfo::get(provider);
+    // An unregistered provider yields an empty query (matches nothing)
+    // rather than silently borrowing another provider's class name.
+    let Some(info) = ProviderInfo::get(provider) else {
+        return String::new();
+    };
     format!(
         r#"
             (new_expression
@@ -55,7 +59,6 @@ fn standard_python_transform_query(class_name: &str) -> String {
 }
 
 pub fn get_python_detection_query(provider: Provider) -> String {
-    let info = ProviderInfo::get(provider);
     match provider {
         Provider::Gemini => r#"
             [
@@ -91,12 +94,13 @@ pub fn get_python_detection_query(provider: Provider) -> String {
             ]
         "#
         .to_string(),
-        _ => standard_python_detection_query(info.py_class_name),
+        _ => ProviderInfo::get(provider)
+            .map(|info| standard_python_detection_query(info.py_class_name))
+            .unwrap_or_default(),
     }
 }
 
 pub fn get_python_transform_query(provider: Provider) -> String {
-    let info = ProviderInfo::get(provider);
     match provider {
         Provider::Gemini => r#"
             (call
@@ -122,6 +126,8 @@ pub fn get_python_transform_query(provider: Provider) -> String {
             ) @call_expr
         "#
         .to_string(),
-        _ => standard_python_transform_query(info.py_class_name),
+        _ => ProviderInfo::get(provider)
+            .map(|info| standard_python_transform_query(info.py_class_name))
+            .unwrap_or_default(),
     }
 }

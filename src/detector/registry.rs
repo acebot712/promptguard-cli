@@ -67,13 +67,16 @@ pub const PROVIDERS: &[ProviderInfo] = &[
 ];
 
 impl ProviderInfo {
-    pub fn get(provider: Provider) -> &'static ProviderInfo {
-        for info in PROVIDERS {
-            if info.provider == provider {
-                return info;
-            }
-        }
-        &PROVIDERS[0]
+    /// Look up a provider's registry entry.
+    ///
+    /// Returns `None` when the provider is missing from the registry
+    /// (previously this silently fell back to the `OpenAI` entry, producing
+    /// wrong parameter names instead of an explicit failure). The registry
+    /// is exhaustive over `Provider` — enforced by
+    /// `test_all_providers_in_registry` — so callers may treat `None` as
+    /// "no metadata available" and skip gracefully.
+    pub fn get(provider: Provider) -> Option<&'static ProviderInfo> {
+        PROVIDERS.iter().find(|info| info.provider == provider)
     }
 }
 
@@ -93,9 +96,10 @@ mod tests {
             Provider::Bedrock,
         ];
         for p in all {
+            let info = ProviderInfo::get(p);
             assert_eq!(
-                ProviderInfo::get(p).provider,
-                p,
+                info.map(|i| i.provider),
+                Some(p),
                 "Provider {p:?} not found or mismatched in registry"
             );
         }

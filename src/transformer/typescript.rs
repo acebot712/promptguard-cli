@@ -20,7 +20,9 @@ impl TypeScriptTransformer {
 }
 
 fn ts_has_base_url(source: &str, object_node: tree_sitter::Node, provider: Provider) -> bool {
-    let info = ProviderInfo::get(provider);
+    let Some(info) = ProviderInfo::get(provider) else {
+        return false;
+    };
     let object_text = &source[object_node.start_byte()..object_node.end_byte()];
 
     object_text.contains(&format!("{}:", info.ts_base_url_param))
@@ -39,7 +41,9 @@ fn transform_ts_object(
         return None;
     }
 
-    let info = ProviderInfo::get(provider);
+    // No registry metadata: skip the transform rather than guessing
+    // another provider's parameter names.
+    let info = ProviderInfo::get(provider)?;
     let object_text = &source[object_node.start_byte()..object_node.end_byte()];
     let inner = object_text
         .trim_start_matches('{')

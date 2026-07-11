@@ -304,7 +304,7 @@ enum Commands {
         autonomous: bool,
 
         /// Max iterations for autonomous mode (1-1000)
-        #[arg(long, default_value = "100")]
+        #[arg(long, default_value = "100", value_parser = clap::value_parser!(u32).range(1..=1000))]
         budget: u32,
     },
 

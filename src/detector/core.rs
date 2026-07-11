@@ -91,7 +91,9 @@ fn typescript_check_base_url(
     args_node: tree_sitter::Node,
     provider: Provider,
 ) -> (bool, Option<String>) {
-    let info = crate::detector::registry::ProviderInfo::get(provider);
+    let Some(info) = crate::detector::registry::ProviderInfo::get(provider) else {
+        return (false, None);
+    };
     let args_text = &source[args_node.start_byte()..args_node.end_byte()];
 
     let has_base_url = args_text.contains(&format!("{}:", info.ts_base_url_param))
