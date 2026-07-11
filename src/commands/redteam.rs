@@ -106,10 +106,11 @@ impl RedTeamCommand {
 
         // Resolve credentials through the shared precedence (env > project >
         // global) and the key-exfiltration guard, unless the caller passed an
-        // explicit --api-key. --target-url always overrides the resolved base
-        // URL (and is separately restricted by validate_target_url above).
+        // explicit --api-key ('-' reads the key from stdin, like init/login).
+        // --target-url always overrides the resolved base URL (and is
+        // separately restricted by validate_target_url above).
         let (api_key, base_url) = if let Some(key) = &self.api_key {
-            (key.clone(), self.target_url.clone())
+            (super::resolve_api_key_flag(key)?, self.target_url.clone())
         } else {
             let (key, resolved_base) = crate::auth::resolve_session()?;
             (key, self.target_url.clone().or(Some(resolved_base)))

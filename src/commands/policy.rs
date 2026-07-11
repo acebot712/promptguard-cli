@@ -42,10 +42,10 @@ impl PolicyCommand {
     pub fn execute(self) -> Result<()> {
         // Resolve credentials through the shared precedence (env > project >
         // global) and the key-exfiltration guard, unless the caller passed an
-        // explicit --api-key. An explicit --base-url always wins over the
-        // resolved base URL.
+        // explicit --api-key ('-' reads the key from stdin, like init/login).
+        // An explicit --base-url always wins over the resolved base URL.
         let (api_key, base_url) = if let Some(key) = &self.api_key {
-            (key.clone(), self.base_url.clone())
+            (super::resolve_api_key_flag(key)?, self.base_url.clone())
         } else {
             let (key, resolved_base) = crate::auth::resolve_session()?;
             (key, self.base_url.clone().or(Some(resolved_base)))

@@ -291,7 +291,9 @@ enum Commands {
         #[arg(long)]
         target_url: Option<String>,
 
-        /// `PromptGuard` API key (or uses configured key)
+        /// `PromptGuard` API key (or uses configured key).
+        /// Use '-' to read the key from stdin — passing it as an argument
+        /// exposes it in shell history and process listings.
         #[arg(long)]
         api_key: Option<String>,
 
@@ -299,10 +301,10 @@ enum Commands {
         #[arg(long, default_value = "human")]
         format: String,
 
-        /// Show detailed output for each test
-        #[arg(short, long)]
-        verbose: bool,
-
+        // NOTE: detailed per-test output comes from the GLOBAL -v/--verbose
+        // flag. A subcommand-local `verbose: bool` clashed with the global
+        // count-typed `verbose` arg and made clap panic on every `redteam`
+        // invocation ("Mismatch between definition and access of `verbose`").
         /// Run a specific test by name
         #[arg(long)]
         test: Option<String>,
@@ -333,11 +335,16 @@ enum Commands {
         #[command(subcommand)]
         action: PolicySubcommand,
 
-        /// Project ID to manage policies for
+        /// Project ID to manage policies for (required).
+        /// Optional in the parser because clap forbids required global
+        /// arguments (a required+global arg panics clap's debug assertions
+        /// on every `policy` invocation); enforced before execution instead.
         #[arg(long, global = true)]
-        project_id: String,
+        project_id: Option<String>,
 
-        /// `PromptGuard` API key (or uses configured key)
+        /// `PromptGuard` API key (or uses configured key).
+        /// Use '-' to read the key from stdin — passing it as an argument
+        /// exposes it in shell history and process listings.
         #[arg(long, global = true)]
         api_key: Option<String>,
 
@@ -578,7 +585,6 @@ fn main() {
             target_url,
             api_key,
             format,
-            verbose,
             test,
             prompt,
             preset,
@@ -588,7 +594,8 @@ fn main() {
             target_url,
             api_key,
             output_format: format,
-            verbose,
+            // Detailed per-test output rides on the global -v/--verbose.
+            verbose: cli.verbose > 0,
             test_name: test,
             custom_prompt: prompt,
             preset,
@@ -602,19 +609,26 @@ fn main() {
             project_id,
             api_key,
             base_url,
-        } => {
-            let policy_action = match action {
-                PolicySubcommand::Apply { file, dry_run } => PolicyAction::Apply { file, dry_run },
-                PolicySubcommand::Diff { file } => PolicyAction::Diff { file },
-                PolicySubcommand::Export => PolicyAction::Export,
-            };
-            PolicyCommand {
-                action: policy_action,
-                project_id,
-                api_key,
-                base_url,
-            }
-            .execute()
+        } => match project_id {
+            Some(project_id) => {
+                let policy_action = match action {
+                    PolicySubcommand::Apply { file, dry_run } => {
+                        PolicyAction::Apply { file, dry_run }
+                    },
+                    PolicySubcommand::Diff { file } => PolicyAction::Diff { file },
+                    PolicySubcommand::Export => PolicyAction::Export,
+                };
+                PolicyCommand {
+                    action: policy_action,
+                    project_id,
+                    api_key,
+                    base_url,
+                }
+                .execute()
+            },
+            None => Err(error::PromptGuardError::Config(
+                "--project-id is required for policy commands".to_string(),
+            )),
         },
 
         Commands::Mcp { transport } => McpCommand { transport }.execute(),
@@ -696,7 +710,7 @@ fn print_welcome() {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
@@ -758,5 +772,80 @@ mod tests {
                 yes: false
             })
         ));
+    }
+
+    /// `redteam --api-key -` must parse ('-' is resolved to a stdin read by
+    /// `resolve_api_key_flag` at execution time, matching init/login).
+    ///
+    /// Also a regression test for the clap id clash: a redteam-local
+    /// `verbose: bool` conflicted with the global count-typed `-v/--verbose`
+    /// and made EVERY `redteam` invocation panic at parse time.
+    #[test]
+    fn redteam_api_key_accepts_stdin_sentinel() {
+        let cli = Cli::try_parse_from(["promptguard", "redteam", "--api-key", "-"]).unwrap();
+        match cli.command {
+            Some(Commands::Redteam { api_key, .. }) => {
+                assert_eq!(api_key.as_deref(), Some("-"));
+            },
+            _ => panic!("expected Redteam command"),
+        }
+
+        // Global -v still parses alongside redteam (drives per-test detail).
+        let cli = Cli::try_parse_from(["promptguard", "redteam", "-v"]).unwrap();
+        assert_eq!(cli.verbose, 1);
+        assert!(matches!(cli.command, Some(Commands::Redteam { .. })));
+    }
+
+    /// `policy --api-key -` must parse the same way.
+    ///
+    /// Also a regression test for a clap debug-assert panic: `project_id`
+    /// was marked required AND global, which clap forbids — every `policy`
+    /// invocation panicked in debug builds.
+    #[test]
+    fn policy_api_key_accepts_stdin_sentinel() {
+        let cli = Cli::try_parse_from([
+            "promptguard",
+            "policy",
+            "--project-id",
+            "proj_123",
+            "--api-key",
+            "-",
+            "export",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Policy {
+                api_key,
+                project_id,
+                ..
+            }) => {
+                assert_eq!(api_key.as_deref(), Some("-"));
+                assert_eq!(project_id.as_deref(), Some("proj_123"));
+            },
+            _ => panic!("expected Policy command"),
+        }
+
+        // Global placement after the subcommand still works.
+        let cli = Cli::try_parse_from([
+            "promptguard",
+            "policy",
+            "export",
+            "--project-id",
+            "proj_123",
+            "--api-key",
+            "-",
+        ])
+        .unwrap();
+        match cli.command {
+            Some(Commands::Policy {
+                api_key,
+                project_id,
+                ..
+            }) => {
+                assert_eq!(api_key.as_deref(), Some("-"));
+                assert_eq!(project_id.as_deref(), Some("proj_123"));
+            },
+            _ => panic!("expected Policy command"),
+        }
     }
 }
