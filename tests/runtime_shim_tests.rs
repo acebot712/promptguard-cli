@@ -85,9 +85,13 @@ fn test_typescript_shim_generation() {
     // Verify content
     let content = fs::read_to_string(&shim_path).expect("Failed to read shim file");
 
-    // Should contain OpenAI wrapper
+    // Should contain OpenAI wrapper and export it via CommonJS
     assert!(
-        content.contains("export class OpenAI"),
+        content.contains("class OpenAI"),
+        "Shim should define OpenAI wrapper"
+    );
+    assert!(
+        content.contains("module.exports = { OpenAI }"),
         "Shim should export OpenAI wrapper"
     );
 
@@ -106,6 +110,78 @@ fn test_typescript_shim_generation() {
     // Verify package.json was created
     let package_json = temp_dir.path().join(".promptguard").join("package.json");
     assert!(package_json.exists(), "package.json should exist");
+}
+
+/// Gate: the generated JS/TS shims must be syntactically valid.
+///
+/// Generates both shim variants (with every provider, including the
+/// comment-only ones) and validates them with `node --check` (JS syntax)
+/// and, when a `tsc` binary is available, `tsc --noEmit` for the .ts file.
+/// Skips silently if node is not installed (e.g. minimal build machines).
+#[test]
+fn test_generated_shims_are_syntactically_valid() {
+    use std::process::Command;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let generator = ShimGenerator::new(
+        temp_dir.path(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        "PROMPTGUARD_API_KEY".to_string(),
+        vec![
+            Provider::OpenAI,
+            Provider::Anthropic,
+            Provider::Cohere,
+            Provider::HuggingFace,
+            Provider::Gemini,
+            Provider::Groq,
+            Provider::Bedrock,
+        ],
+    );
+
+    generator
+        .generate_typescript_shim()
+        .expect("Failed to generate TS/JS shims");
+
+    let js_path = temp_dir
+        .path()
+        .join(".promptguard")
+        .join("promptguard-shim.js");
+    let ts_path = temp_dir
+        .path()
+        .join(".promptguard")
+        .join("promptguard-shim.ts");
+    assert!(js_path.exists(), "JS shim should exist");
+    assert!(ts_path.exists(), "TS shim should exist");
+
+    // node --check: parses the file as a CommonJS script without executing it
+    match Command::new("node").arg("--check").arg(&js_path).output() {
+        Ok(out) => {
+            assert!(
+                out.status.success(),
+                "node --check rejected generated JS shim:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        },
+        Err(_) => {
+            eprintln!("node not found; skipping JS syntax validation");
+        },
+    }
+
+    // tsc --noEmit for the TypeScript variant (optional, when available)
+    match Command::new("tsc").arg("--noEmit").arg(&ts_path).output() {
+        Ok(out) => {
+            assert!(
+                out.status.success(),
+                "tsc --noEmit rejected generated TS shim:\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        },
+        Err(_) => {
+            eprintln!("tsc not found; skipping TS validation");
+        },
+    }
 }
 
 /// Test that multiple shims are generated for multi-language projects

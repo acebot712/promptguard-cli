@@ -109,24 +109,36 @@ impl ShimGenerator {
         self.ensure_shim_dir()?;
 
         let mut provider_exports = String::new();
+        let mut export_names: Vec<&'static str> = Vec::new();
 
         for provider in &self.providers {
             provider_exports.push_str(templates::get_typescript_provider_export(*provider));
             provider_exports.push('\n');
+
+            if let Some(name) = templates::get_typescript_export_name(*provider) {
+                export_names.push(name);
+            }
         }
+
+        // Single CommonJS export at the top level. The provider blocks only
+        // assign local `let` bindings, so the file stays valid JavaScript
+        // (`export class` inside `try {}` is a syntax error).
+        let module_exports = format!("module.exports = {{ {} }};", export_names.join(", "));
 
         // Generate shim content from template
         let content = templates::TYPESCRIPT_SHIM_TEMPLATE
             .replace("{{PROXY_URL}}", &self.proxy_url)
             .replace("{{API_KEY_VAR}}", &self.api_key_var)
-            .replace("{{PROVIDER_EXPORTS}}", &provider_exports);
+            .replace("{{PROVIDER_EXPORTS}}", &provider_exports)
+            .replace("{{MODULE_EXPORTS}}", &module_exports);
 
         // Write TypeScript shim file
         let ts_shim_path = self.typescript_shim_path();
         fs::write(&ts_shim_path, &content)?;
 
-        // Also create JavaScript version (same content, just .js extension)
-        // TypeScript can be used as JavaScript
+        // Also create the JavaScript version. The template is annotation-free
+        // CommonJS JavaScript (valid TypeScript too), so the same content
+        // works for both extensions.
         let js_shim_path = self.javascript_shim_path();
         fs::write(&js_shim_path, &content)?;
 
@@ -306,7 +318,8 @@ mod tests {
         assert!(shim_path.exists());
 
         let content = fs::read_to_string(&shim_path).unwrap();
-        assert!(content.contains("export class OpenAI"));
+        assert!(content.contains("class OpenAI"));
+        assert!(content.contains("module.exports = { OpenAI }"));
         assert!(content.contains("https://api.promptguard.co/api/v1"));
     }
 
