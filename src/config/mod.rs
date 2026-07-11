@@ -46,6 +46,63 @@ pub fn is_valid_api_key(key: &str) -> bool {
     key.starts_with("pg_") && key.len() >= 16 && !key.chars().any(char::is_whitespace)
 }
 
+/// Validate a proxy URL for use in config and generated source code.
+///
+/// The value is interpolated into generated Python/TypeScript shims and
+/// transformed source files, so beyond requiring a well-formed HTTPS URL
+/// (or localhost HTTP for development), it must not contain quotes,
+/// whitespace, control characters, or backslashes that could escape the
+/// string literal it is embedded in.
+pub fn validate_proxy_url(url_str: &str) -> Result<()> {
+    if url_str.chars().any(|c| {
+        c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '`' | '\\' | '{' | '}')
+    }) {
+        return Err(PromptGuardError::Config(
+            "Invalid proxy_url: must not contain whitespace, quotes, braces, backslashes, \
+             or control characters"
+                .to_string(),
+        ));
+    }
+
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| PromptGuardError::Config(format!("Invalid proxy_url '{url_str}': {e}")))?;
+
+    let host = parsed.host_str().unwrap_or("");
+    let is_loopback = host == "localhost" || host == "127.0.0.1" || host == "::1";
+
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if is_loopback => Ok(()),
+        _ => Err(PromptGuardError::Config(
+            "Invalid proxy_url: must use HTTPS (or http://localhost for development)".to_string(),
+        )),
+    }
+}
+
+/// Validate an environment variable name for use in generated source code.
+///
+/// Strict allowlist (`^[A-Z_][A-Z0-9_]*$`): the value is interpolated into
+/// generated Python/TypeScript code, so anything else is rejected.
+pub fn validate_env_var_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let valid = match chars.next() {
+        Some(first) => {
+            (first.is_ascii_uppercase() || first == '_')
+                && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        },
+        None => false,
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(PromptGuardError::Config(format!(
+            "Invalid env_var_name '{name}': must match [A-Z_][A-Z0-9_]* \
+             (uppercase letters, digits, underscores)"
+        )))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +190,9 @@ impl PromptGuardConfig {
             return Err(PromptGuardError::InvalidApiKey);
         }
 
+        // proxy_url ends up in generated source code: strict validation
+        validate_proxy_url(&proxy_url)?;
+
         Ok(Self {
             version: "1.0".to_string(),
             api_key,
@@ -200,15 +260,10 @@ impl ConfigManager {
             ));
         }
 
-        // Security: Validate proxy_url is a valid HTTPS URL (unless localhost for development)
-        if !config.proxy_url.starts_with("https://")
-            && !config.proxy_url.starts_with("http://localhost")
-            && !config.proxy_url.starts_with("http://127.0.0.1")
-        {
-            return Err(PromptGuardError::Config(
-                "Invalid proxy_url: must use HTTPS (or localhost for development)".to_string(),
-            ));
-        }
+        // Security: proxy_url and env_var_name are interpolated into
+        // generated source code — validate with strict allowlists.
+        validate_proxy_url(&config.proxy_url)?;
+        validate_env_var_name(&config.env_var_name)?;
 
         Ok(config)
     }
@@ -236,5 +291,42 @@ impl ConfigManager {
 
     pub fn config_path(&self) -> &Path {
         &self.config_path
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_url_accepts_https_and_localhost() {
+        assert!(validate_proxy_url("https://api.promptguard.co/api/v1").is_ok());
+        assert!(validate_proxy_url("https://proxy.example.com:8443/v1").is_ok());
+        assert!(validate_proxy_url("http://localhost:8080/api/v1").is_ok());
+        assert!(validate_proxy_url("http://127.0.0.1:3000").is_ok());
+    }
+
+    #[test]
+    fn proxy_url_rejects_injection_and_plain_http() {
+        assert!(validate_proxy_url("http://example.com/api").is_err());
+        assert!(validate_proxy_url("https://x.com/\"; import os; #").is_err());
+        assert!(validate_proxy_url("https://x.com/a b").is_err());
+        assert!(validate_proxy_url("https://x.com/`rm -rf`").is_err());
+        assert!(validate_proxy_url("https://x.com/\\n").is_err());
+        assert!(validate_proxy_url("ftp://x.com").is_err());
+        assert!(validate_proxy_url("not a url").is_err());
+        assert!(validate_proxy_url("").is_err());
+    }
+
+    #[test]
+    fn env_var_name_allowlist() {
+        assert!(validate_env_var_name("PROMPTGUARD_API_KEY").is_ok());
+        assert!(validate_env_var_name("_KEY2").is_ok());
+        assert!(validate_env_var_name("").is_err());
+        assert!(validate_env_var_name("lowercase").is_err());
+        assert!(validate_env_var_name("2STARTS_WITH_DIGIT").is_err());
+        assert!(validate_env_var_name("HAS SPACE").is_err());
+        assert!(validate_env_var_name("HAS\"QUOTE").is_err());
+        assert!(validate_env_var_name("HAS-DASH").is_err());
     }
 }

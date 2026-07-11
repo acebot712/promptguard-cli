@@ -33,6 +33,10 @@ impl InitCommand {
             ));
         }
 
+        // --base-url is interpolated into transformed source files and
+        // generated shims before the config is saved: validate up front.
+        crate::config::validate_proxy_url(&self.base_url)?;
+
         // Check for git repository (Linus-approved safety)
         let root_path = std::env::current_dir()?;
         if !self.check_version_control(&root_path)? {
