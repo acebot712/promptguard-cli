@@ -41,6 +41,13 @@ fn transform_ts_object(
     // No registry metadata: skip the transform rather than guessing
     // another provider's parameter names.
     let info = ProviderInfo::get(provider)?;
+
+    // Detect-only providers (e.g. Bedrock) have empty parameter names in
+    // the registry. Skip entirely: interpolating empty names produced
+    // `{ : ..., : "..." }`, a guaranteed syntax error.
+    if info.ts_base_url_param.is_empty() || info.ts_api_key_param.is_empty() {
+        return None;
+    }
     let object_text = &source[object_node.start_byte()..object_node.end_byte()];
     // Strip exactly ONE outer `{` / `}` — the delimiters of this `object`
     // node. `trim_end_matches('}')` stripped *every* trailing brace, so a
@@ -173,6 +180,30 @@ mod tests {
         let out = transform_ts(input);
         assert!(out.contains("baseURL:"));
         assert_reparses_clean(&out);
+    }
+
+    /// Bedrock has empty parameter names in the registry (detect-only).
+    /// Interpolating them produced `{ : ..., : "..." }` — a syntax error —
+    /// so the transformer must leave `BedrockRuntimeClient` untouched.
+    #[test]
+    fn bedrock_runtime_client_is_left_untouched() {
+        let input = "import { BedrockRuntimeClient } from \"@aws-sdk/client-bedrock-runtime\";\nconst client = new BedrockRuntimeClient({ region: \"us-east-1\" });\n";
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bedrock.ts");
+        fs::write(&path, input).unwrap();
+        let result = TypeScriptTransformer::new()
+            .transform_file(
+                &path,
+                Provider::Bedrock,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+            )
+            .unwrap();
+
+        assert!(!result.modified, "bedrock must be detect-only");
+        let out = fs::read_to_string(&path).unwrap();
+        assert_eq!(out, input, "BedrockRuntimeClient must be untouched");
     }
 
     #[test]

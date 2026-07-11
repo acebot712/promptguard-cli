@@ -221,6 +221,34 @@ mod tests {
         assert_reparses_clean(&out);
     }
 
+    /// Bedrock is detect-only: `boto3.client()` accepts neither `api_key=`
+    /// nor `base_url=`, so the transformer must leave every boto3 call
+    /// untouched (previously it rewrote ALL `boto3.client(...)` calls — S3,
+    /// `DynamoDB`, and bedrock-runtime alike — into `TypeError`-raising
+    /// constructor calls).
+    #[test]
+    fn bedrock_transform_is_a_noop_for_all_boto3_clients() {
+        let input = "import boto3\n\
+                     s3 = boto3.client(\"s3\")\n\
+                     br = boto3.client(\"bedrock-runtime\")\n";
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("aws.py");
+        fs::write(&path, input).unwrap();
+        let result = PythonTransformer::new()
+            .transform_file(
+                &path,
+                Provider::Bedrock,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+            )
+            .unwrap();
+
+        assert!(!result.modified, "bedrock must be detect-only");
+        let out = fs::read_to_string(&path).unwrap();
+        assert_eq!(out, input, "boto3 calls must be byte-for-byte untouched");
+    }
+
     #[test]
     fn os_import_detection_true_positives() {
         assert!(has_os_import("import os\n"));

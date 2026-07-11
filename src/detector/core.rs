@@ -237,6 +237,35 @@ mod tests {
         }
     }
 
+    /// Bedrock detection must only fire for "bedrock-runtime" boto3 clients:
+    /// boto3.client(...) constructs clients for every AWS service.
+    #[test]
+    fn bedrock_detects_only_bedrock_runtime_clients() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("aws.py");
+        std::fs::write(
+            &path,
+            "import boto3\n\
+             s3 = boto3.client(\"s3\")\n\
+             dynamo = boto3.client(\"dynamodb\", region_name=\"us-east-1\")\n\
+             br1 = boto3.client(\"bedrock-runtime\")\n\
+             br2 = boto3.client(service_name=\"bedrock-runtime\", region_name=\"us-east-1\")\n",
+        )
+        .unwrap();
+
+        let results = detect_all_providers_in_file(&path).unwrap();
+        let bedrock = results
+            .iter()
+            .find(|(p, _)| *p == Provider::Bedrock)
+            .map(|(_, r)| r);
+
+        let instances = bedrock.map_or(0, |r| r.instances.len());
+        assert_eq!(
+            instances, 2,
+            "only the two bedrock-runtime clients must be detected"
+        );
+    }
+
     #[test]
     fn grammar_selection_by_extension() {
         assert_eq!(Grammar::for_extension("ts"), Some(Grammar::TypeScript));
