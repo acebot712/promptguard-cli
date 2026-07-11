@@ -4,6 +4,15 @@ use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use crate::shim::{ShimGenerator, ShimInjector};
 
+/// Outcome of restoring one recorded backup: only `Restored` counts toward
+/// the "Restored N files" summary.
+enum RestoreOutcome {
+    Restored,
+    /// The backup file no longer exists — nothing was restored.
+    MissingBackup(std::path::PathBuf),
+    Failed,
+}
+
 pub struct DisableCommand;
 
 impl DisableCommand {
@@ -84,10 +93,11 @@ impl DisableCommand {
             // the user created for their own reasons and destroy their work.
             let backup_manager = BackupManager::new(Some(config.backup_extension.clone()));
             let mut restored_count = 0;
+            let mut missing_backups: Vec<std::path::PathBuf> = Vec::new();
 
             Output::section("Restoring original files...", "📦");
 
-            let restore_one = |rel_or_abs: &std::path::Path| -> bool {
+            let restore_one = |rel_or_abs: &std::path::Path| -> RestoreOutcome {
                 let backup_path = if rel_or_abs.is_absolute() {
                     rel_or_abs.to_path_buf()
                 } else {
@@ -97,17 +107,19 @@ impl DisableCommand {
                     .to_str()
                     .and_then(|s| s.strip_suffix(&config.backup_extension))
                 else {
-                    return false;
+                    return RestoreOutcome::Failed;
                 };
                 let original_path = std::path::PathBuf::from(original_str);
-                if backup_manager.restore_backup(&original_path).is_ok() {
-                    let rel_path = original_path
-                        .strip_prefix(&root_path)
-                        .unwrap_or(&original_path);
-                    Output::step(&format!("✓ {}", rel_path.display()));
-                    true
-                } else {
-                    false
+                match backup_manager.restore_backup(&original_path) {
+                    Ok(true) => {
+                        let rel_path = original_path
+                            .strip_prefix(&root_path)
+                            .unwrap_or(&original_path);
+                        Output::step(&format!("✓ {}", rel_path.display()));
+                        RestoreOutcome::Restored
+                    },
+                    Ok(false) => RestoreOutcome::MissingBackup(backup_path),
+                    Err(_) => RestoreOutcome::Failed,
                 }
             };
 
@@ -132,16 +144,33 @@ impl DisableCommand {
                     )?
                 {
                     for backup_path in &discovered {
-                        if restore_one(backup_path) {
-                            restored_count += 1;
+                        match restore_one(backup_path) {
+                            RestoreOutcome::Restored => restored_count += 1,
+                            RestoreOutcome::MissingBackup(p) => missing_backups.push(p),
+                            RestoreOutcome::Failed => {},
                         }
                     }
                 }
             } else {
                 for rel_backup in &config.metadata.backups {
-                    if restore_one(std::path::Path::new(rel_backup)) {
-                        restored_count += 1;
+                    match restore_one(std::path::Path::new(rel_backup)) {
+                        RestoreOutcome::Restored => restored_count += 1,
+                        RestoreOutcome::MissingBackup(p) => missing_backups.push(p),
+                        RestoreOutcome::Failed => {},
                     }
+                }
+            }
+
+            // Be honest about recorded backups that no longer exist: those
+            // files were NOT restored and keep their transformations.
+            if !missing_backups.is_empty() {
+                Output::warning(&format!(
+                    "{} recorded backup file(s) are missing and could not be restored:",
+                    missing_backups.len()
+                ));
+                for backup_path in &missing_backups {
+                    let rel = backup_path.strip_prefix(&root_path).unwrap_or(backup_path);
+                    Output::step(&format!("missing: {}", rel.display()));
                 }
             }
 
