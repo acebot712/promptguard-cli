@@ -20,7 +20,13 @@ pub struct VerifyCommand {
 }
 
 impl VerifyCommand {
-    pub fn execute(&self) -> Result<()> {
+    /// Run the verification checks.
+    ///
+    /// Returns the process exit code (scan-style, so CI can gate on it):
+    /// 0 = all checks passed, 2 = one or more checks failed (including
+    /// connectivity failures). Errors (missing credentials, etc.) bubble up
+    /// as `Err` and exit 1 in `main`.
+    pub fn execute(&self) -> Result<i32> {
         if !self.json {
             Output::header("Verify PromptGuard Integration");
         }
@@ -125,7 +131,9 @@ impl VerifyCommand {
         self.report(passed, failed)
     }
 
-    fn report(&self, passed: u32, failed: u32) -> Result<()> {
+    /// Print the summary and map the check results to an exit code:
+    /// 0 when everything passed, 2 when any check failed.
+    fn report(&self, passed: u32, failed: u32) -> Result<i32> {
         if self.json {
             // Pure JSON on stdout — no headers or human-readable chrome,
             // so the output is machine-parseable in CI.
@@ -152,6 +160,31 @@ impl VerifyCommand {
                 "All {passed} checks passed — PromptGuard is fully operational"
             ));
         }
-        Ok(())
+        // Nonzero exit when any check failed so `verify` is usable as a CI
+        // gate (previously it always exited 0, even on failure). 2 mirrors
+        // the `scan` convention: 1 = error, 2 = negative finding.
+        Ok(if failed > 0 { 2 } else { 0 })
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// CI-gate regression: verify used to exit 0 even when checks failed.
+    #[test]
+    fn report_returns_exit_code_2_when_checks_fail() {
+        let cmd = VerifyCommand { json: true };
+        assert_eq!(cmd.report(2, 1).unwrap(), 2);
+        assert_eq!(cmd.report(0, 3).unwrap(), 2);
+        // The early-return connectivity-failure path reports (passed=0, failed=1).
+        assert_eq!(cmd.report(0, 1).unwrap(), 2);
+    }
+
+    #[test]
+    fn report_returns_exit_code_0_when_all_checks_pass() {
+        let cmd = VerifyCommand { json: true };
+        assert_eq!(cmd.report(4, 0).unwrap(), 0);
     }
 }

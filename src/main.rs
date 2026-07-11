@@ -232,6 +232,10 @@ enum Commands {
     /// Runs connectivity, authentication, threat detection, and PII
     /// redaction checks against the live API. Use after setup to
     /// confirm everything works, or in CI to validate the integration.
+    ///
+    /// Exit codes: 0 = all checks passed, 2 = one or more checks failed
+    /// (including API connectivity failures), 1 = error (e.g. missing
+    /// credentials).
     Verify {
         /// Output results as JSON (for CI/scripting)
         #[arg(long)]
@@ -538,7 +542,14 @@ fn main() {
         }
         .execute(),
         Commands::Test => TestCommand::execute(),
-        Commands::Verify { json } => VerifyCommand { json }.execute(),
+        Commands::Verify { json } => VerifyCommand { json }.execute().map(|exit_code| {
+            // Same differentiated exit codes as `scan`, so `verify` can gate
+            // CI: 0 = all checks passed, 2 = checks failed (errors exit 1
+            // below).
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+        }),
         Commands::Update => UpdateCommand.execute(),
 
         Commands::Redact {
