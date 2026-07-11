@@ -425,10 +425,17 @@ impl ShimInjector {
     pub fn remove_all_injections(&self) -> Result<usize> {
         let mut removed_count = 0;
 
-        // Find all Python files with injections
+        // Find all Python files with injections. Prune skip directories at
+        // the walker level (node_modules/.git/.venv would otherwise be
+        // fully enumerated).
         for entry in WalkDir::new(&self.project_root)
             .max_depth(5)
             .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                e.depth() == 0
+                    || !(e.file_type().is_dir() && e.file_name().to_str().is_some_and(is_skip_dir))
+            })
         {
             let entry = entry.map_err(std::io::Error::other)?;
             let path = entry.path();

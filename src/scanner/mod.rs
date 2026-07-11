@@ -157,9 +157,18 @@ impl FileScanner {
 
         let mut files = Vec::new();
 
+        // Prune skip directories at the walker level: without filter_entry,
+        // node_modules/.git/.venv were fully enumerated (tens of thousands
+        // of entries) only to be discarded one path at a time by the
+        // exclude patterns. Exclude patterns still apply below for
+        // file-level filtering.
         for entry in WalkDir::new(&self.root_path)
             .follow_links(false)
             .into_iter()
+            .filter_entry(|e| {
+                e.depth() == 0
+                    || !(e.file_type().is_dir() && e.file_name().to_str().is_some_and(is_skip_dir))
+            })
             .filter_map(std::result::Result::ok)
         {
             let path = entry.path();
@@ -197,5 +206,47 @@ impl FileScanner {
         });
 
         Ok(files)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    /// Skip directories must be pruned by the walker itself, independent of
+    /// the exclude patterns (here: an explicitly empty pattern list).
+    #[test]
+    fn skip_dirs_pruned_even_without_exclude_patterns() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        for dir in ["node_modules/pkg", ".git/objects", ".venv/lib", "src"] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        fs::write(root.join("node_modules/pkg/index.js"), "x").unwrap();
+        fs::write(root.join(".git/objects/blob.py"), "x").unwrap();
+        fs::write(root.join(".venv/lib/site.py"), "x").unwrap();
+        fs::write(root.join("src/app.py"), "x").unwrap();
+
+        let scanner = FileScanner::new(root, Some(Vec::new())).unwrap();
+        let files = scanner.scan_files(None).unwrap();
+
+        assert_eq!(files.len(), 1, "only src/app.py should survive: {files:?}");
+        assert!(files[0].ends_with("src/app.py"));
+    }
+
+    /// A project root that itself has a skip-dir name must still be scanned.
+    #[test]
+    fn root_named_like_skip_dir_is_still_scanned() {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path().join("build");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("app.py"), "x").unwrap();
+
+        let scanner = FileScanner::new(&root, Some(Vec::new())).unwrap();
+        let files = scanner.scan_files(None).unwrap();
+        assert_eq!(files.len(), 1);
     }
 }
