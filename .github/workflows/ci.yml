@@ -44,18 +44,19 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 release tag
         with:
+          toolchain: stable
           components: rustfmt, clippy
 
       # Swatinem/rust-cache is the SOTA Rust cache action: it keys on
       # rustc version + Cargo.lock, prunes target/ to keep the cache
       # small, and is ~2x faster than hand-rolled actions/cache for
       # the three cargo dirs.
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: quality
 
@@ -96,18 +97,17 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.set-matrix.outputs.matrix) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-      # Pinned to a tag, not @master. @master is whatever the
-      # maintainer pushed last and is non-deterministic.
+      # Pinned to the immutable SHA of the v1 release tag; the toolchain
+      # is selected via the `toolchain` input (the @stable/@beta refs are
+      # moving branches, not immutable tags).
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        if: matrix.rust == 'stable'
-      - name: Install Rust toolchain (beta)
-        uses: dtolnay/rust-toolchain@beta
-        if: matrix.rust == 'beta'
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 release tag
+        with:
+          toolchain: ${{ matrix.rust }}
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
           shared-key: test-${{ matrix.os }}-${{ matrix.rust }}
 
@@ -144,9 +144,16 @@ jobs:
       issues: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Run cargo audit
-        uses: rustsec/audit-check@v2
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # cargo-deny: advisories, license allowlist, bans, and source checks
+      # as configured in deny.toml.
+      - name: Run cargo deny
+        uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
+        with:
+          command: check
