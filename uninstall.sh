@@ -37,10 +37,24 @@ if command -v promptguard >/dev/null 2>&1; then
   echo ""
 fi
 
+# Read a confirmation from the controlling terminal. Under `curl | sh`,
+# stdin is the script pipe, so a plain `read` would consume script text
+# instead of user input. Falls back to abort when no TTY is available.
+prompt_tty() {
+  prompt_message="$1"
+  printf "%s" "$prompt_message"
+  if ! read -r tty_response < /dev/tty 2>/dev/null; then
+    echo ""
+    echo "${YELLOW}No terminal available for confirmation; aborting.${NC}"
+    echo "Re-run with --yes to skip confirmation."
+    exit 1
+  fi
+}
+
 # Confirm uninstallation (unless --yes flag is passed)
 if [ "$1" != "--yes" ] && [ "$1" != "-y" ]; then
-  printf "Do you want to uninstall PromptGuard CLI? [y/N] "
-  read -r response
+  prompt_tty "Do you want to uninstall PromptGuard CLI? [y/N] "
+  response="$tty_response"
   case "$response" in
     [yY][eE][sS]|[yY])
       ;;
@@ -76,8 +90,8 @@ if [ -d "$CONFIG_DIR" ]; then
   echo "Configuration directory found: $CONFIG_DIR"
 
   if [ "$1" != "--yes" ] && [ "$1" != "-y" ]; then
-    printf "Do you want to remove configuration files? [y/N] "
-    read -r config_response
+    prompt_tty "Do you want to remove configuration files? [y/N] "
+    config_response="$tty_response"
     case "$config_response" in
       [yY][eE][sS]|[yY])
         rm -rf "$CONFIG_DIR"
