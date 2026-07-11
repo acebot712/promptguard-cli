@@ -81,7 +81,7 @@ fn tool_definitions() -> serde_json::Value {
             },
             {
                 "name": "promptguard_logout",
-                "description": "Log out of PromptGuard by removing the locally stored API key and configuration.\nWhen to use: When the user wants to switch PromptGuard accounts, clear credentials, or ensure a clean state by removing existing authentication.",
+                "description": "Log out of PromptGuard by removing the project-local configuration (.promptguard.json) and the globally stored API key (~/.promptguard/credentials.json).\nWhen to use: When the user wants to switch PromptGuard accounts, clear credentials, or ensure a clean state by removing existing authentication.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -391,6 +391,17 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
                 });
             }
 
+            // Validate against an authenticated endpoint before saving —
+            // don't claim "Authenticated successfully" for an unverified key.
+            let validation = PromptGuardClient::new(key.to_string(), None)
+                .and_then(|client| client.validate_credentials());
+            if let Err(e) = validation {
+                return serde_json::json!({
+                    "content": [{"type": "text", "text": format!("API key validation failed: {e}. The key was NOT saved.")}],
+                    "isError": true
+                });
+            }
+
             let result = (|| -> Result<()> {
                 let config_manager = ConfigManager::new(None)?;
 
@@ -426,14 +437,17 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
 
 fn handle_logout(_params: &serde_json::Value) -> serde_json::Value {
     let result = (|| -> Result<()> {
+        // Remove both credential stores, matching the tool description:
+        // the project-local config AND the global credentials file.
         let config_manager = ConfigManager::new(None)?;
         config_manager.delete()?;
+        crate::auth::delete_credentials()?;
         Ok(())
     })();
 
     match result {
         Ok(()) => serde_json::json!({
-            "content": [{"type": "text", "text": "Logged out. Local PromptGuard configuration and API key have been removed."}]
+            "content": [{"type": "text", "text": "Logged out. Removed the project-local PromptGuard configuration (.promptguard.json) and the globally stored API key (~/.promptguard/credentials.json)."}]
         }),
         Err(e) => serde_json::json!({
             "content": [{"type": "text", "text": format!("Logout failed: {e}")}],
@@ -465,15 +479,9 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
             }),
         ),
 
-        "notifications/initialized"
-        | "notifications/cancelled"
-        | "notifications/roots/list_changed" => {
-            if request.id.is_none() {
-                return JsonRpcResponse::success(serde_json::Value::Null, serde_json::json!(null));
-            }
-            JsonRpcResponse::success(id, serde_json::json!(null))
-        },
-
+        // Notifications (requests without an id) never reach this function:
+        // `execute` drops them before dispatch, as JSON-RPC notifications
+        // expect no response.
         "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
 
         "tools/list" => JsonRpcResponse::success(id, tool_definitions()),
