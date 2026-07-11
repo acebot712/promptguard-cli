@@ -23,6 +23,106 @@ pub mod update;
 pub mod verify;
 pub mod whoami;
 
+use crate::backup::BackupManager;
+use crate::types::Provider;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+/// Result of running the shared transform pipeline.
+pub struct TransformOutcome {
+    /// Files whose contents were actually modified.
+    pub files_modified: Vec<PathBuf>,
+    /// Backups created, as root-relative path strings for
+    /// `metadata.backups` (consulted by `disable` to restore exactly what
+    /// `PromptGuard` created).
+    pub backups_created: Vec<String>,
+}
+
+/// Shared detection loop: map each provider to the files where its SDK
+/// usage was detected. Used by `init`, `apply`, and `enable`.
+pub fn detect_providers_in_files(
+    files: &[PathBuf],
+    providers_to_check: &[Provider],
+) -> HashMap<Provider, Vec<PathBuf>> {
+    let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
+
+    for file_path in files {
+        if let Ok(results) = crate::detector::detect_all_providers(file_path) {
+            for (provider, result) in results {
+                if providers_to_check.contains(&provider) && !result.instances.is_empty() {
+                    detection_results
+                        .entry(provider)
+                        .or_default()
+                        .push(file_path.clone());
+                }
+            }
+        }
+    }
+
+    detection_results
+}
+
+/// Shared dedup → backup → transform → record pipeline used by `init`,
+/// `apply`, and `enable`.
+///
+/// For each provider the detected files are deduped and sorted, backed up
+/// BEFORE transformation (when a [`BackupManager`] is provided), then
+/// transformed. `on_result` receives each successfully processed file so
+/// callers can print their command-specific output; transform failures are
+/// reported as warnings and skipped.
+pub fn run_transform_pipeline(
+    detection_results: &HashMap<Provider, Vec<PathBuf>>,
+    root_path: &Path,
+    backup_manager: Option<&BackupManager>,
+    proxy_url: &str,
+    env_var_name: &str,
+    mut on_result: impl FnMut(Provider, &Path, bool),
+) -> TransformOutcome {
+    let mut outcome = TransformOutcome {
+        files_modified: Vec::new(),
+        backups_created: Vec::new(),
+    };
+
+    for (provider, files) in detection_results {
+        let mut unique_files = files.clone();
+        unique_files.sort();
+        unique_files.dedup();
+
+        for file_path in unique_files {
+            if let Some(bm) = backup_manager {
+                if let Ok(backup_path) = bm.create_backup(&file_path) {
+                    outcome.backups_created.push(
+                        backup_path
+                            .strip_prefix(root_path)
+                            .unwrap_or(&backup_path)
+                            .to_string_lossy()
+                            .to_string(),
+                    );
+                }
+            }
+
+            match crate::transformer::transform_file(&file_path, *provider, proxy_url, env_var_name)
+            {
+                Ok(result) => {
+                    if result.modified {
+                        outcome.files_modified.push(file_path.clone());
+                    }
+                    on_result(*provider, &file_path, result.modified);
+                },
+                Err(e) => {
+                    crate::output::Output::warning(&format!(
+                        "Failed to transform {}: {}",
+                        file_path.display(),
+                        e
+                    ));
+                },
+            }
+        }
+    }
+
+    outcome
+}
+
 /// Resolve an `--api-key` flag value, supporting `-` to read the key from
 /// stdin (avoids exposing the key in shell history and process listings).
 pub fn resolve_api_key_flag(value: &str) -> crate::error::Result<String> {

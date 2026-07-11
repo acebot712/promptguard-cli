@@ -1,14 +1,12 @@
 use crate::analyzer::EnvScanner;
 use crate::backup::BackupManager;
 use crate::config::ConfigManager;
-use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use crate::scanner::FileScanner;
 use crate::shim::{ShimGenerator, ShimInjector};
-use crate::transformer;
 use crate::types::{Language, Provider};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub struct EnableCommand {
@@ -128,12 +126,7 @@ impl EnableCommand {
             ));
         }
 
-        let generator = ShimGenerator::new(
-            root_path,
-            config.proxy_url.clone(),
-            config.env_var_name.clone(),
-            providers.clone(),
-        );
+        let generator = ShimGenerator::new(root_path, config.proxy_url.clone(), providers.clone());
 
         let languages: Vec<Language> = detected_languages.into_iter().collect();
         let shim_files = generator.generate_shims(&languages)?;
@@ -228,20 +221,7 @@ impl EnableCommand {
             .filter_map(|p| Provider::parse(p))
             .collect();
 
-        let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
-
-        for file_path in &files {
-            if let Ok(results) = detect_all_providers(file_path) {
-                for (provider, result) in results {
-                    if providers_to_check.contains(&provider) && !result.instances.is_empty() {
-                        detection_results
-                            .entry(provider)
-                            .or_default()
-                            .push(file_path.clone());
-                    }
-                }
-            }
-        }
+        let detection_results = super::detect_providers_in_files(&files, &providers_to_check);
 
         if detection_results.is_empty() {
             Output::warning("No SDK instances found to transform.");
@@ -259,56 +239,25 @@ impl EnableCommand {
         } else {
             None
         };
-        let mut backups_created: Vec<String> = Vec::new();
 
-        let mut files_modified = 0;
-
-        for (provider, files) in &detection_results {
-            let mut unique_files = files.clone();
-            unique_files.sort();
-            unique_files.dedup();
-
-            for file_path in unique_files {
-                if let Some(ref bm) = backup_manager {
-                    if let Ok(backup_path) = bm.create_backup(&file_path) {
-                        backups_created.push(
-                            backup_path
-                                .strip_prefix(root_path)
-                                .unwrap_or(&backup_path)
-                                .to_string_lossy()
-                                .to_string(),
-                        );
-                    }
+        let outcome = super::run_transform_pipeline(
+            &detection_results,
+            root_path,
+            backup_manager.as_ref(),
+            &config.proxy_url,
+            &config.env_var_name,
+            |_provider, file_path, modified| {
+                if modified {
+                    let rel_path = file_path.strip_prefix(root_path).unwrap_or(file_path);
+                    Output::step(&format!("✓ {}", rel_path.display()));
                 }
-
-                match transformer::transform_file(
-                    &file_path,
-                    *provider,
-                    &config.proxy_url,
-                    &config.env_var_name,
-                ) {
-                    Ok(result) => {
-                        if result.modified {
-                            files_modified += 1;
-                            let rel_path = file_path.strip_prefix(root_path).unwrap_or(&file_path);
-                            Output::step(&format!("✓ {}", rel_path.display()));
-                        }
-                    },
-                    Err(e) => {
-                        Output::warning(&format!(
-                            "Failed to transform {}: {}",
-                            file_path.display(),
-                            e
-                        ));
-                    },
-                }
-            }
-        }
+            },
+        );
 
         // Update config
         config.enabled = true;
         config.runtime_mode = false;
-        for backup in backups_created {
+        for backup in outcome.backups_created {
             if !config.metadata.backups.contains(&backup) {
                 config.metadata.backups.push(backup);
             }
@@ -319,7 +268,7 @@ impl EnableCommand {
 
         println!();
         Output::success("PromptGuard enabled!");
-        println!("\n  • {files_modified} files modified");
+        println!("\n  • {} files modified", outcome.files_modified.len());
         println!("\nYour LLM requests will now go through PromptGuard.");
 
         Ok(())

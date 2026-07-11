@@ -32,7 +32,6 @@ _shimmed_providers: set = set()
 
 # Configuration
 PROXY_URL = os.environ.get("PROMPTGUARD_PROXY_URL", "{{PROXY_URL}}")
-API_KEY_VAR = os.environ.get("PROMPTGUARD_API_KEY_VAR", "{{API_KEY_VAR}}")
 ENABLED = os.environ.get("PROMPTGUARD_ENABLED", "true").lower() in ("true", "1", "yes")
 
 # Debug mode for troubleshooting
@@ -247,7 +246,6 @@ pub const TYPESCRIPT_SHIM_TEMPLATE: &str = r#"/**
 "use strict";
 
 const PROXY_URL = process.env.PROMPTGUARD_PROXY_URL || "{{PROXY_URL}}";
-const API_KEY_VAR = process.env.PROMPTGUARD_API_KEY_VAR || "{{API_KEY_VAR}}";
 const ENABLED = (process.env.PROMPTGUARD_ENABLED || "true").toLowerCase() !== "false";
 const DEBUG = (process.env.PROMPTGUARD_DEBUG || "false").toLowerCase() === "true";
 

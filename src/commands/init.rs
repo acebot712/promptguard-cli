@@ -1,16 +1,13 @@
 use crate::api::PromptGuardClient;
 use crate::config::{ConfigManager, PromptGuardConfig};
-use crate::detector::detect_all_providers;
 use crate::detector::ProviderInfo;
 use crate::env::EnvManager;
 use crate::error::Result;
 use crate::output::Output;
 use crate::scanner::FileScanner;
-use crate::transformer;
 use crate::types::Provider;
-use std::collections::HashMap;
 use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub struct InitCommand {
     pub provider: Vec<String>,
@@ -93,14 +90,15 @@ impl InitCommand {
         // Detect SDK usage
         Output::section("Detected LLM SDKs:", "🔍");
 
+        // --help documents the default as "all detected", so check the full
+        // provider registry (previously only 4 of the 7 providers were
+        // checked when no --provider was given).
         let providers_to_check: Vec<Provider> =
             if self.provider.is_empty() || self.provider.contains(&"all".to_string()) {
-                vec![
-                    Provider::OpenAI,
-                    Provider::Anthropic,
-                    Provider::Cohere,
-                    Provider::HuggingFace,
-                ]
+                crate::detector::registry::PROVIDERS
+                    .iter()
+                    .map(|info| info.provider)
+                    .collect()
             } else {
                 self.provider
                     .iter()
@@ -108,20 +106,7 @@ impl InitCommand {
                     .collect()
             };
 
-        let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
-
-        for file_path in &files {
-            if let Ok(results) = detect_all_providers(file_path) {
-                for (provider, result) in results {
-                    if providers_to_check.contains(&provider) && !result.instances.is_empty() {
-                        detection_results
-                            .entry(provider)
-                            .or_default()
-                            .push(file_path.clone());
-                    }
-                }
-            }
-        }
+        let detection_results = super::detect_providers_in_files(&files, &providers_to_check);
 
         if detection_results.is_empty() {
             Output::error("No LLM SDKs detected in this project.");
@@ -130,6 +115,9 @@ impl InitCommand {
             println!("  • Anthropic SDK (@anthropic-ai/sdk)");
             println!("  • Cohere SDK (cohere-ai)");
             println!("  • HuggingFace SDK (@huggingface/inference)");
+            println!("  • Google Gemini SDK (google-genai)");
+            println!("  • Groq SDK (groq)");
+            println!("  • AWS Bedrock (boto3 / @aws-sdk/client-bedrock-runtime)");
             println!("\nMake sure you've installed one of these SDKs.");
             return Ok(());
         }
@@ -184,9 +172,6 @@ impl InitCommand {
             "🔧",
         );
 
-        let mut files_modified = Vec::new();
-        let mut backups_created: Vec<String> = Vec::new();
-
         // Same backup strategy as `apply`: copy each file to <file>.bak
         // before transforming it, so `disable` has something to restore.
         let backup_manager = if self.dry_run {
@@ -195,63 +180,36 @@ impl InitCommand {
             Some(crate::backup::BackupManager::new(None))
         };
 
-        for (provider, files) in &detection_results {
-            let mut unique_files = files.clone();
-            unique_files.sort();
-            unique_files.dedup();
+        // Use the same env var name the config will be created with, so the
+        // transformed source and the .env entry can never drift apart.
+        let env_var_name = crate::config::default_env_var_name();
 
-            for file_path in unique_files {
-                if let Some(ref bm) = backup_manager {
-                    if let Ok(backup_path) = bm.create_backup(&file_path) {
-                        backups_created.push(
-                            backup_path
-                                .strip_prefix(&root_path)
-                                .unwrap_or(&backup_path)
-                                .to_string_lossy()
-                                .to_string(),
-                        );
-                    }
+        let outcome = super::run_transform_pipeline(
+            &detection_results,
+            &root_path,
+            backup_manager.as_ref(),
+            &self.base_url,
+            &env_var_name,
+            |provider, file_path, modified| {
+                let rel_path = file_path.strip_prefix(&root_path).unwrap_or(file_path);
+
+                if modified {
+                    let base_url_param = ProviderInfo::get(provider)
+                        .map_or("base_url", |info| info.ts_base_url_param);
+                    Output::step(&format!(
+                        "{} (added {} for {})",
+                        rel_path.display(),
+                        base_url_param,
+                        provider.display_name()
+                    ));
+                } else {
+                    Output::excluded(&format!("{} (no changes needed)", rel_path.display()));
                 }
+            },
+        );
 
-                match transformer::transform_file(
-                    &file_path,
-                    *provider,
-                    &self.base_url,
-                    "PROMPTGUARD_API_KEY",
-                ) {
-                    Ok(result) => {
-                        if result.modified && !self.dry_run {
-                            files_modified.push(file_path.clone());
-                        }
-
-                        let rel_path = file_path.strip_prefix(&root_path).unwrap_or(&file_path);
-
-                        if result.modified {
-                            let base_url_param = ProviderInfo::get(*provider)
-                                .map_or("base_url", |info| info.ts_base_url_param);
-                            Output::step(&format!(
-                                "{} (added {} for {})",
-                                rel_path.display(),
-                                base_url_param,
-                                provider.display_name()
-                            ));
-                        } else {
-                            Output::excluded(&format!(
-                                "{} (no changes needed)",
-                                rel_path.display()
-                            ));
-                        }
-                    },
-                    Err(e) => {
-                        Output::warning(&format!(
-                            "Failed to transform {}: {}",
-                            file_path.display(),
-                            e
-                        ));
-                    },
-                }
-            }
-        }
+        let files_modified = outcome.files_modified;
+        let backups_created = outcome.backups_created;
 
         // Update .env file
         // Security: Validate env_file doesn't escape project directory
@@ -259,13 +217,10 @@ impl InitCommand {
         crate::config::validate_env_file_path(&self.env_file)?;
         let env_path = root_path.join(&self.env_file);
         if !self.dry_run {
-            EnvManager::add_or_update_key(&env_path, "PROMPTGUARD_API_KEY", &api_key)?;
-            Output::step(&format!("{} (added PROMPTGUARD_API_KEY)", self.env_file));
+            EnvManager::add_or_update_key(&env_path, &env_var_name, &api_key)?;
+            Output::step(&format!("{} (added {env_var_name})", self.env_file));
         } else {
-            Output::step(&format!(
-                "{} (would add PROMPTGUARD_API_KEY)",
-                self.env_file
-            ));
+            Output::step(&format!("{} (would add {env_var_name})", self.env_file));
         }
 
         // Save configuration
@@ -410,7 +365,11 @@ impl InitCommand {
                 return Ok(false);
             }
 
-            println!("⚠️  Proceeding with --force (no backups will be created)");
+            // Note: .bak backups ARE still created (same strategy as
+            // `apply`); what is missing without git is the ability to review
+            // and revert arbitrary changes with git diff/checkout.
+            println!("⚠️  Proceeding with --force (.bak file backups will be created,");
+            println!("   but without git you cannot review or revert other changes)");
             println!();
 
             if !self.auto

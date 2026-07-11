@@ -70,7 +70,6 @@ impl DisableCommand {
             let generator = ShimGenerator::new(
                 &root_path,
                 String::new(), // Unused for cleanup
-                String::new(), // Unused for cleanup
                 vec![],        // Unused for cleanup
             );
 

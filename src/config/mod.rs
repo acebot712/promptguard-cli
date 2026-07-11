@@ -262,7 +262,10 @@ fn default_env_file() -> String {
     ".env".to_string()
 }
 
-fn default_env_var_name() -> String {
+/// Default environment variable that holds the `PromptGuard` API key.
+/// Public so commands that run before a config exists (init) use the same
+/// name that the config will be created with, instead of hardcoding it.
+pub fn default_env_var_name() -> String {
     "PROMPTGUARD_API_KEY".to_string()
 }
 

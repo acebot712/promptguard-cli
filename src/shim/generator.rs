@@ -17,7 +17,6 @@ const JAVASCRIPT_SHIM_FILENAME: &str = "promptguard-shim.js";
 pub struct ShimGenerator {
     project_root: PathBuf,
     proxy_url: String,
-    api_key_var: String,
     providers: Vec<Provider>,
 }
 
@@ -26,13 +25,11 @@ impl ShimGenerator {
     pub fn new(
         project_root: impl AsRef<Path>,
         proxy_url: String,
-        api_key_var: String,
         providers: Vec<Provider>,
     ) -> Self {
         Self {
             project_root: project_root.as_ref().to_path_buf(),
             proxy_url,
-            api_key_var,
             providers,
         }
     }
@@ -86,7 +83,6 @@ impl ShimGenerator {
         // Generate shim content from template
         let content = templates::PYTHON_SHIM_TEMPLATE
             .replace("{{PROXY_URL}}", &self.proxy_url)
-            .replace("{{API_KEY_VAR}}", &self.api_key_var)
             .replace("{{PROVIDER_PATCHES}}", &provider_patches)
             .replace("{{INSTALL_CALLS}}", &install_calls);
 
@@ -128,7 +124,6 @@ impl ShimGenerator {
         // Generate shim content from template
         let content = templates::TYPESCRIPT_SHIM_TEMPLATE
             .replace("{{PROXY_URL}}", &self.proxy_url)
-            .replace("{{API_KEY_VAR}}", &self.api_key_var)
             .replace("{{PROVIDER_EXPORTS}}", &provider_exports)
             .replace("{{MODULE_EXPORTS}}", &module_exports);
 
@@ -289,7 +284,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
 
@@ -302,7 +296,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI, Provider::Anthropic],
         );
 
@@ -321,7 +314,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
 
@@ -340,7 +332,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
 

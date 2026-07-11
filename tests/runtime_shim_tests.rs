@@ -18,7 +18,6 @@ fn test_python_shim_generation() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI, Provider::Anthropic],
     );
 
@@ -70,7 +69,6 @@ fn test_typescript_shim_generation() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
 
@@ -127,7 +125,6 @@ fn test_generated_shims_are_syntactically_valid() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![
             Provider::OpenAI,
             Provider::Anthropic,
@@ -192,7 +189,6 @@ fn test_multi_language_shim_generation() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI, Provider::Anthropic, Provider::Cohere],
     );
 
@@ -403,7 +399,6 @@ fn test_shim_cleanup() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
 
@@ -493,7 +488,6 @@ fn test_all_providers_in_shim() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         all_providers.clone(),
     );
 
@@ -540,7 +534,6 @@ fn test_custom_proxy_url() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         custom_url.to_string(),
-        "MY_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
 
@@ -553,9 +546,5 @@ fn test_custom_proxy_url() {
     assert!(
         content.contains(custom_url),
         "Shim should use custom proxy URL"
-    );
-    assert!(
-        content.contains("MY_API_KEY"),
-        "Shim should use custom API key var"
     );
 }
