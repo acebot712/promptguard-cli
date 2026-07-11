@@ -60,18 +60,28 @@ fn standard_python_transform_query(class_name: &str) -> String {
 
 pub fn get_python_detection_query(provider: Provider) -> String {
     match provider {
+        // Match genai.Client(...) and google.genai.Client(...) only. A bare
+        // Client(...) alternative used to be included, but "Client" is far
+        // too generic an identifier (database clients, HTTP clients, ...)
+        // and produced false positives on unrelated code.
         Provider::Gemini => r#"
             [
                 (call
-                    function: (identifier) @function
-                    (#eq? @function "Client")
+                    function: (attribute
+                        object: (identifier) @module
+                        (#eq? @module "genai")
+                        attribute: (identifier) @class
+                        (#eq? @class "Client")
+                    )
                     arguments: (argument_list) @args
                 ) @call_expr
 
                 (call
                     function: (attribute
-                        object: (identifier) @module
-                        (#eq? @module "genai")
+                        object: (attribute
+                            attribute: (identifier) @submodule
+                            (#eq? @submodule "genai")
+                        )
                         attribute: (identifier) @class
                         (#eq? @class "Client")
                     )

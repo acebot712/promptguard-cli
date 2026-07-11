@@ -266,6 +266,37 @@ mod tests {
         );
     }
 
+    /// Gemini detection must match genai.Client / google.genai.Client but
+    /// not arbitrary bare Client(...) calls (database clients, HTTP
+    /// clients, ...), which used to be reported as Gemini SDK usage.
+    #[test]
+    fn gemini_ignores_bare_client_calls() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("clients.py");
+        std::fs::write(
+            &path,
+            "from qdrant_client import Client\n\
+             db = Client(host=\"localhost\")\n\
+             import google.genai as genai\n\
+             g1 = genai.Client(api_key=key)\n\
+             import google\n\
+             g2 = google.genai.Client(api_key=key)\n",
+        )
+        .unwrap();
+
+        let results = detect_all_providers_in_file(&path).unwrap();
+        let gemini = results
+            .iter()
+            .find(|(p, _)| *p == Provider::Gemini)
+            .map(|(_, r)| r);
+
+        assert_eq!(
+            gemini.map_or(0, |r| r.instances.len()),
+            2,
+            "only genai.Client and google.genai.Client must match"
+        );
+    }
+
     #[test]
     fn grammar_selection_by_extension() {
         assert_eq!(Grammar::for_extension("ts"), Some(Grammar::TypeScript));
