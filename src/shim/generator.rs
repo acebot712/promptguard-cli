@@ -185,10 +185,21 @@ impl ShimGenerator {
     }
 
     /// Create .gitignore in shim directory
+    ///
+    /// The shim files themselves are safe to commit (routing logic only, no
+    /// secrets); ignore the runtime artifacts Python/Node create inside the
+    /// directory when the shims are imported.
     fn create_gitignore(&self) -> Result<()> {
         let gitignore_path = self.shim_dir().join(".gitignore");
-        let content =
-            "# PromptGuard shim directory\n# This directory is auto-generated - safe to commit\n";
+        let content = "\
+# PromptGuard shim directory
+# The shim files are auto-generated and safe to commit (no secrets).
+# Ignore runtime artifacts created when the shims are imported:
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+";
         fs::write(gitignore_path, content)?;
         Ok(())
     }
