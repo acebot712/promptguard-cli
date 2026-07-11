@@ -255,11 +255,8 @@ impl InitCommand {
 
         // Update .env file
         // Security: Validate env_file doesn't escape project directory
-        if self.env_file.contains("..") || self.env_file.starts_with('/') {
-            return Err(crate::error::PromptGuardError::Custom(
-                "Invalid env file path: must be relative and within project directory".to_string(),
-            ));
-        }
+        // (covers Unix and Windows absolute/UNC/parent-dir forms).
+        crate::config::validate_env_file_path(&self.env_file)?;
         let env_path = root_path.join(&self.env_file);
         if !self.dry_run {
             EnvManager::add_or_update_key(&env_path, "PROMPTGUARD_API_KEY", &api_key)?;
