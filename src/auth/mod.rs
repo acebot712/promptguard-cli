@@ -123,9 +123,7 @@ pub fn resolve_api_key_with_source() -> Result<(String, CredentialSource)> {
         return Ok((creds.api_key, CredentialSource::Global));
     }
 
-    Err(PromptGuardError::Config(
-        "No API key found. Run 'promptguard login' or set PROMPTGUARD_API_KEY".to_string(),
-    ))
+    Err(PromptGuardError::NoCredentials)
 }
 
 /// Resolve base URL with precedence: env var > project-local > global > default

@@ -28,6 +28,18 @@ impl DoctorCommand {
         let mut warnings_count = 0;
         let mut errors_count = 0;
 
+        // Per-check detail for `--json`, so CI can see WHICH check warned/failed
+        // (the human report already enumerates each one). Each entry is
+        // {name, status, message}; status is "ok" | "warning" | "error".
+        let mut checks: Vec<serde_json::Value> = Vec::new();
+        let mut record = |name: &str, status: &str, message: &str| {
+            checks.push(serde_json::json!({
+                "name": name,
+                "status": status,
+                "message": message,
+            }));
+        };
+
         let root_path = std::env::current_dir()?;
 
         // Check CLI version
@@ -43,16 +55,19 @@ impl DoctorCommand {
                     if human {
                         Output::step("Configuration file: .promptguard.json (valid)");
                     }
+                    record("config_file", "ok", ".promptguard.json is valid");
 
                     if crate::config::is_valid_api_key(&config.api_key) {
                         if human {
                             Output::step("API key: valid format");
                         }
+                        record("api_key", "ok", "valid format");
                     } else {
                         if human {
                             Output::warning("API key: invalid format");
                         }
                         errors_count += 1;
+                        record("api_key", "error", "invalid format");
                     }
 
                     // Security check: warn if config contains API key and is not gitignored
@@ -60,6 +75,11 @@ impl DoctorCommand {
                         if human {
                             Output::step("Security: .promptguard.json is in .gitignore");
                         }
+                        record(
+                            "config_gitignore",
+                            "ok",
+                            ".promptguard.json is in .gitignore",
+                        );
                     } else {
                         if human {
                             Output::warning(
@@ -74,6 +94,11 @@ impl DoctorCommand {
                             println!("  Or use environment variables only (PROMPTGUARD_API_KEY)");
                         }
                         warnings_count += 1;
+                        record(
+                            "config_gitignore",
+                            "warning",
+                            ".promptguard.json contains API key but is NOT in .gitignore",
+                        );
                     }
                 },
                 Err(e) => {
@@ -81,6 +106,7 @@ impl DoctorCommand {
                         Output::warning(&format!("Configuration file: invalid ({e})"));
                     }
                     errors_count += 1;
+                    record("config_file", "error", &format!("invalid ({e})"));
                 },
             }
         } else {
@@ -88,6 +114,11 @@ impl DoctorCommand {
                 Output::warning("Configuration file: not found (run 'promptguard init')");
             }
             warnings_count += 1;
+            record(
+                "config_file",
+                "warning",
+                "not found (run 'promptguard init')",
+            );
         }
 
         // Check .env file
@@ -97,12 +128,14 @@ impl DoctorCommand {
                 if human {
                     Output::step("Environment file: .env (found, contains PROMPTGUARD_API_KEY)");
                 }
+                record("env_file", "ok", ".env found, contains PROMPTGUARD_API_KEY");
 
                 // Check if .env is gitignored
                 if Self::check_env_in_gitignore(&root_path) {
                     if human {
                         Output::step("Security: .env is in .gitignore");
                     }
+                    record("env_gitignore", "ok", ".env is in .gitignore");
                 } else {
                     if human {
                         Output::warning("Security: .env is NOT in .gitignore");
@@ -110,6 +143,7 @@ impl DoctorCommand {
                         println!("  Recommendation: Add '.env' to your .gitignore file");
                     }
                     warnings_count += 1;
+                    record("env_gitignore", "warning", ".env is NOT in .gitignore");
                 }
             } else {
                 if human {
@@ -118,12 +152,18 @@ impl DoctorCommand {
                     );
                 }
                 warnings_count += 1;
+                record(
+                    "env_file",
+                    "warning",
+                    ".env found, but missing PROMPTGUARD_API_KEY",
+                );
             }
         } else {
             if human {
                 Output::warning("Environment file: .env (not found)");
             }
             warnings_count += 1;
+            record("env_file", "warning", ".env not found");
         }
 
         // Check for backups
@@ -133,6 +173,7 @@ impl DoctorCommand {
             if human {
                 Output::step("No backup files found");
             }
+            record("backups", "ok", "no backup files found");
         } else {
             if human {
                 Output::warning(&format!(
@@ -144,6 +185,11 @@ impl DoctorCommand {
                 println!("    2. Or add '*.bak' to .gitignore");
             }
             warnings_count += 1;
+            record(
+                "backups",
+                "warning",
+                &format!("{} *.bak files found", backups.len()),
+            );
         }
 
         if self.json {
@@ -159,6 +205,7 @@ impl DoctorCommand {
                 "errors": errors_count,
                 "warnings": warnings_count,
                 "cli_version": env!("CARGO_PKG_VERSION"),
+                "checks": checks,
             });
             println!(
                 "{}",

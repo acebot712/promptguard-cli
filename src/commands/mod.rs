@@ -150,8 +150,11 @@ pub fn run_transform_pipeline(
 ///
 /// The default `std::io::Error` Display leaks the raw errno (e.g.
 /// "No such file or directory (os error 2)"), which is noise for a CLI user.
-/// This maps the common not-found case to "File not found: <path>" and keeps
-/// other IO errors readable (permission denied, etc.) without the errno tail.
+/// This maps the common not-found case to "File not found: <path>", the
+/// "pointed at a directory" case to a clear "Not a file: …", and keeps other
+/// IO errors readable (permission denied, etc.) WITHOUT the "(os error N)"
+/// tail — the fallback interpolates `ErrorKind`'s clean description, never the
+/// error's `Display`, which would re-append the errno.
 pub fn read_file_friendly(file_path: &str) -> crate::error::Result<String> {
     std::fs::read_to_string(file_path).map_err(|e| {
         let msg = match e.kind() {
@@ -159,7 +162,17 @@ pub fn read_file_friendly(file_path: &str) -> crate::error::Result<String> {
             std::io::ErrorKind::PermissionDenied => {
                 format!("Permission denied reading file: {file_path}")
             },
-            _ => format!("Could not read file '{file_path}': {e}"),
+            // A directory read fails with a platform-dependent errno
+            // (EISDIR → "Is a directory (os error 21)"); the kind is
+            // `IsADirectory` on newer toolchains but `Uncategorized`/`Other`
+            // on older ones, so detect it by inspecting the path instead of
+            // relying on `ErrorKind`.
+            _ if std::path::Path::new(file_path).is_dir() => {
+                format!("Not a file: {file_path} (expected a file, found a directory)")
+            },
+            // Interpolate the ErrorKind's clean description (e.g. "invalid
+            // data"), NOT `{e}` — the latter re-appends "(os error N)".
+            kind => format!("Could not read file '{file_path}': {kind}"),
         };
         crate::error::PromptGuardError::Io(std::io::Error::new(e.kind(), msg))
     })
@@ -219,3 +232,32 @@ pub use test::TestCommand;
 pub use update::UpdateCommand;
 pub use verify::VerifyCommand;
 pub use whoami::WhoamiCommand;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::read_file_friendly;
+
+    /// A missing file yields a clean "File not found: …" with NO trailing
+    /// "(os error 2)" errno.
+    #[test]
+    fn read_file_friendly_missing_has_no_errno() {
+        let err = read_file_friendly("/no/such/promptguard/path.txt").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("File not found"), "got: {msg}");
+        assert!(!msg.contains("os error"), "errno leaked: {msg}");
+    }
+
+    /// Pointing the helper at a directory yields a clean "Not a file: …" with
+    /// NO trailing "(os error 21)" errno.
+    #[test]
+    fn read_file_friendly_directory_has_no_errno() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        let err = read_file_friendly(path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Not a file"), "got: {msg}");
+        assert!(msg.contains("directory"), "got: {msg}");
+        assert!(!msg.contains("os error"), "errno leaked: {msg}");
+    }
+}

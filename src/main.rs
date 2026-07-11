@@ -809,6 +809,12 @@ fn main() {
     };
 
     if let Err(e) = result {
+        // The command already rendered a fully-formatted, actionable error
+        // (e.g. init's "✗ API key rejected …" block). Exit non-zero WITHOUT
+        // printing again, so the message is not shown twice.
+        if matches!(e, error::PromptGuardError::AlreadyReported) {
+            std::process::exit(1);
+        }
         if json_mode {
             // --json modes emit a structured error on stdout so a piped
             // consumer (e.g. `... --json | jq`) always parses valid JSON and

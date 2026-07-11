@@ -8,7 +8,6 @@ use crate::api::PromptGuardClient;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs;
 
 /// Wrapper for the guardrails API response.
 #[derive(Debug, Deserialize)]
@@ -62,8 +61,11 @@ impl PolicyCommand {
     }
 
     fn load_yaml(path: &str) -> Result<serde_json::Value> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| PromptGuardError::Config(format!("Failed to read {path}: {e}")))?;
+        // Route through the shared helper so file-read errors read the same as
+        // scan/redact ("File not found: …" / "Not a file: …") with no raw
+        // "(os error N)" tail — instead of the old "Failed to read …: … (os
+        // error 2)".
+        let content = super::read_file_friendly(path)?;
 
         let parsed: serde_yaml::Value = serde_yaml::from_str(&content)
             .map_err(|e| PromptGuardError::Config(format!("YAML parse error: {e}")))?;

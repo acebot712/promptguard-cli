@@ -41,11 +41,25 @@ pub enum PromptGuardError {
     #[error("Not initialized. Run 'promptguard init' first")]
     NotInitialized,
 
+    // Canonical "no credentials" error, shared by every command that resolves
+    // an API key to talk to the API (logs/events/scan/redact/…). One variant =
+    // one code ("no_credentials") and one message that names BOTH remedies, so
+    // sibling commands can never drift to different guidance.
+    #[error("No API key found. Run 'promptguard login' or set PROMPTGUARD_API_KEY")]
+    NoCredentials,
+
     #[error("Invalid API key format. Must start with 'pg_live_'")]
     InvalidApiKey,
 
     #[error("Authentication failed: {0}")]
     Auth(String),
+
+    // Sentinel: the command has ALREADY rendered a fully-formatted, actionable
+    // error to the user. The top-level handler exits non-zero WITHOUT printing
+    // anything further, so the message is not shown twice. Its Display is never
+    // surfaced.
+    #[error("error already reported")]
+    AlreadyReported,
 
     #[error("{0}")]
     Custom(String),
@@ -67,11 +81,36 @@ impl PromptGuardError {
             Self::Api(_) => "api",
             Self::QuotaExceeded(_) => "quota_exceeded",
             Self::NotInitialized => "not_initialized",
+            Self::NoCredentials => "no_credentials",
             Self::InvalidApiKey => "invalid_api_key",
             Self::Auth(_) => "auth",
+            Self::AlreadyReported => "already_reported",
             Self::Custom(_) => "error",
         }
     }
 }
 
 pub type Result<T> = std::result::Result<T, PromptGuardError>;
+
+#[cfg(test)]
+mod tests {
+    use super::PromptGuardError;
+
+    /// The canonical missing-credentials variant carries ONE stable code and a
+    /// message naming both remedies, so sibling commands cannot drift.
+    #[test]
+    fn no_credentials_code_and_message() {
+        let err = PromptGuardError::NoCredentials;
+        assert_eq!(err.code(), "no_credentials");
+        let msg = err.to_string();
+        assert!(msg.contains("promptguard login"), "got: {msg}");
+        assert!(msg.contains("PROMPTGUARD_API_KEY"), "got: {msg}");
+    }
+
+    /// The "already reported" sentinel maps to its own code; the top-level
+    /// handler branches on the variant (not the code) to stay silent.
+    #[test]
+    fn already_reported_has_stable_code() {
+        assert_eq!(PromptGuardError::AlreadyReported.code(), "already_reported");
+    }
+}

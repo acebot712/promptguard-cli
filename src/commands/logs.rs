@@ -53,17 +53,21 @@ impl Default for LogsCommand {
 
 impl LogsCommand {
     pub fn execute(&self) -> Result<()> {
-        let config_manager = ConfigManager::new(None)?;
-        if !config_manager.exists() {
-            return Err(PromptGuardError::NotInitialized);
-        }
-
-        // Still load the project config for project_id, but resolve the
-        // credential + base URL through the shared precedence (env > project >
-        // global) and the key-exfiltration guard, like every other command.
-        let config = config_manager.load()?;
+        // Resolve the credential + base URL through the shared precedence
+        // (env > project > global) and the key-exfiltration guard, exactly
+        // like `events`/`scan`/`redact`. This command does NOT require a
+        // project to be initialized: a missing key yields the canonical
+        // "No API key found …" guidance, not a divergent "Run init first".
         let (api_key, base_url) = crate::auth::resolve_session()?;
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
+
+        // Scope the query to the project when a project config exists; absent
+        // one, fetch account-wide logs rather than erroring.
+        let project_id = ConfigManager::new(None)
+            .ok()
+            .filter(ConfigManager::exists)
+            .and_then(|m| m.load().ok())
+            .and_then(|c| c.project_id);
 
         if !self.json {
             Output::header("Activity Logs");
@@ -80,7 +84,7 @@ impl LogsCommand {
                 crate::api::encode_query_param(log_type)
             );
         }
-        if let Some(ref project_id) = config.project_id {
+        if let Some(ref project_id) = project_id {
             let _ = write!(
                 endpoint,
                 "&project_id={}",
@@ -117,7 +121,7 @@ impl LogsCommand {
                     println!("View your complete activity logs at:");
                     println!("  https://app.promptguard.co/dashboard/activity");
 
-                    if let Some(project_id) = config.project_id {
+                    if let Some(ref project_id) = project_id {
                         println!("\nProject: {project_id}");
                     }
 

@@ -508,7 +508,10 @@ impl InitCommand {
                     Output::error(&format!("API key rejected: {msg}"));
                     println!();
                     println!("Check your key at https://app.promptguard.co/settings/api-keys");
-                    return Err(crate::error::PromptGuardError::Auth(msg));
+                    // Already rendered the actionable block above; hand main()
+                    // a sentinel so it doesn't ALSO print "Authentication
+                    // failed: …" (the double-print this fixes).
+                    return Err(crate::error::PromptGuardError::AlreadyReported);
                 },
                 // Network or server issue: the key may be fine.
                 Err(e) => {
