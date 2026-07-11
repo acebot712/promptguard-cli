@@ -79,26 +79,69 @@ impl DisableCommand {
                 Output::step("✓ Removed .promptguard/ directory");
             }
         } else {
-            // Restore backups (static mode)
+            // Restore backups (static mode). Only restore the backups that
+            // PromptGuard itself created (recorded in metadata.backups) —
+            // never glob the tree for *.bak, which would clobber backup files
+            // the user created for their own reasons and destroy their work.
             let backup_manager = BackupManager::new(Some(config.backup_extension.clone()));
-            let backups = backup_manager.list_backups(&root_path);
             let mut restored_count = 0;
 
             Output::section("Restoring original files...", "📦");
 
-            for backup_path in &backups {
-                if let Some(original_path_str) = backup_path.to_str() {
-                    if let Some(original_str) =
-                        original_path_str.strip_suffix(&config.backup_extension)
-                    {
-                        let original_path = std::path::PathBuf::from(original_str);
-                        if backup_manager.restore_backup(&original_path).is_ok() {
-                            let rel_path = original_path
-                                .strip_prefix(&root_path)
-                                .unwrap_or(&original_path);
-                            Output::step(&format!("✓ {}", rel_path.display()));
+            let restore_one = |rel_or_abs: &std::path::Path| -> bool {
+                let backup_path = if rel_or_abs.is_absolute() {
+                    rel_or_abs.to_path_buf()
+                } else {
+                    root_path.join(rel_or_abs)
+                };
+                let Some(original_str) = backup_path
+                    .to_str()
+                    .and_then(|s| s.strip_suffix(&config.backup_extension))
+                else {
+                    return false;
+                };
+                let original_path = std::path::PathBuf::from(original_str);
+                if backup_manager.restore_backup(&original_path).is_ok() {
+                    let rel_path = original_path
+                        .strip_prefix(&root_path)
+                        .unwrap_or(&original_path);
+                    Output::step(&format!("✓ {}", rel_path.display()));
+                    true
+                } else {
+                    false
+                }
+            };
+
+            if config.metadata.backups.is_empty() {
+                // Nothing recorded. Do NOT auto-restore every *.bak in the
+                // tree; offer an explicit, clearly-labelled opt-in instead.
+                Output::warning(
+                    "No PromptGuard-created backups are recorded in .promptguard.json — \
+                     nothing to restore automatically.",
+                );
+
+                let discovered = backup_manager.list_backups(&root_path);
+                if !discovered.is_empty()
+                    && Output::confirm(
+                        &format!(
+                            "Found {} '{}' file(s) in the tree that PromptGuard did not track. \
+                             Restore them anyway? This may overwrite files PromptGuard never created.",
+                            discovered.len(),
+                            config.backup_extension
+                        ),
+                        false,
+                    )?
+                {
+                    for backup_path in &discovered {
+                        if restore_one(backup_path) {
                             restored_count += 1;
                         }
+                    }
+                }
+            } else {
+                for rel_backup in &config.metadata.backups {
+                    if restore_one(std::path::Path::new(rel_backup)) {
+                        restored_count += 1;
                     }
                 }
             }
@@ -110,7 +153,7 @@ impl DisableCommand {
                 // initialized before backups existed (or with backups
                 // deleted) still have the transformations in place.
                 Output::warning(
-                    "No backup files (.bak) found — no files were restored. \
+                    "No files were restored. \
                      Transformed files keep routing through PromptGuard until you \
                      revert them (e.g. 'git checkout -- .' or 'promptguard revert').",
                 );

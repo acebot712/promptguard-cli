@@ -1,4 +1,5 @@
 use crate::analyzer::EnvScanner;
+use crate::backup::BackupManager;
 use crate::config::ConfigManager;
 use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
@@ -249,6 +250,17 @@ impl EnableCommand {
 
         Output::section("Applying transformations...", "🔧");
 
+        // Mirror `apply`/`init`: back up each file BEFORE transforming it and
+        // record the backup in metadata.backups, so `disable` can restore
+        // exactly what PromptGuard created (create_backup never overwrites an
+        // existing .bak, so the original state is preserved).
+        let backup_manager = if config.backup_enabled {
+            Some(BackupManager::new(Some(config.backup_extension.clone())))
+        } else {
+            None
+        };
+        let mut backups_created: Vec<String> = Vec::new();
+
         let mut files_modified = 0;
 
         for (provider, files) in &detection_results {
@@ -257,6 +269,18 @@ impl EnableCommand {
             unique_files.dedup();
 
             for file_path in unique_files {
+                if let Some(ref bm) = backup_manager {
+                    if let Ok(backup_path) = bm.create_backup(&file_path) {
+                        backups_created.push(
+                            backup_path
+                                .strip_prefix(root_path)
+                                .unwrap_or(&backup_path)
+                                .to_string_lossy()
+                                .to_string(),
+                        );
+                    }
+                }
+
                 match transformer::transform_file(
                     &file_path,
                     *provider,
@@ -284,6 +308,11 @@ impl EnableCommand {
         // Update config
         config.enabled = true;
         config.runtime_mode = false;
+        for backup in backups_created {
+            if !config.metadata.backups.contains(&backup) {
+                config.metadata.backups.push(backup);
+            }
+        }
         config.metadata.last_applied = Some(chrono::Utc::now());
         config_manager.save(config)?;
         Output::step("Updated configuration");

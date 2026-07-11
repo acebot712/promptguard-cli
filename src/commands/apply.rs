@@ -76,6 +76,7 @@ impl ApplyCommand {
         };
 
         let mut files_modified = 0;
+        let mut backups_created: Vec<String> = Vec::new();
 
         for (provider, files) in &detection_results {
             let mut unique_files = files.clone();
@@ -83,9 +84,18 @@ impl ApplyCommand {
             unique_files.dedup();
 
             for file_path in unique_files {
-                // Create backup BEFORE transformation
+                // Create backup BEFORE transformation, and record it so
+                // `disable` can restore exactly what PromptGuard created.
                 if let Some(ref bm) = backup_manager {
-                    let _ = bm.create_backup(&file_path);
+                    if let Ok(backup_path) = bm.create_backup(&file_path) {
+                        backups_created.push(
+                            backup_path
+                                .strip_prefix(&root_path)
+                                .unwrap_or(&backup_path)
+                                .to_string_lossy()
+                                .to_string(),
+                        );
+                    }
                 }
 
                 match transformer::transform_file(
@@ -113,7 +123,13 @@ impl ApplyCommand {
         }
 
         // Record when transformations were last applied (surfaced by
-        // `promptguard status`).
+        // `promptguard status`) and which backups exist (consulted by
+        // `disable` to restore only PromptGuard-created files).
+        for backup in backups_created {
+            if !config.metadata.backups.contains(&backup) {
+                config.metadata.backups.push(backup);
+            }
+        }
         config.metadata.last_applied = Some(chrono::Utc::now());
         config_manager.save(&config)?;
 
