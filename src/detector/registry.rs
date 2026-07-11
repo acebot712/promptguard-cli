@@ -9,6 +9,10 @@ use crate::types::Provider;
 pub struct ProviderInfo {
     pub provider: Provider,
     pub py_class_name: &'static str,
+    /// Python module the SDK class is imported from, used to match
+    /// module-qualified constructor calls (`openai.OpenAI(...)`). Empty for
+    /// providers whose queries are special-cased (Gemini, Bedrock).
+    pub py_module_name: &'static str,
     pub ts_class_name: &'static str,
     pub ts_base_url_param: &'static str,
     pub ts_api_key_param: &'static str,
@@ -18,6 +22,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::OpenAI,
         py_class_name: "OpenAI",
+        py_module_name: "openai",
         ts_class_name: "OpenAI",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -25,6 +30,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::Anthropic,
         py_class_name: "Anthropic",
+        py_module_name: "anthropic",
         ts_class_name: "Anthropic",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -32,6 +38,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::Cohere,
         py_class_name: "CohereClient",
+        py_module_name: "cohere",
         ts_class_name: "CohereClient",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -39,6 +46,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::HuggingFace,
         py_class_name: "InferenceClient",
+        py_module_name: "huggingface_hub",
         ts_class_name: "HfInference",
         ts_base_url_param: "baseUrl",
         ts_api_key_param: "accessToken",
@@ -46,6 +54,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::Gemini,
         py_class_name: "Client",
+        py_module_name: "",
         ts_class_name: "GoogleGenAI",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -53,6 +62,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::Groq,
         py_class_name: "Groq",
+        py_module_name: "groq",
         ts_class_name: "Groq",
         ts_base_url_param: "baseURL",
         ts_api_key_param: "apiKey",
@@ -60,6 +70,7 @@ pub const PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         provider: Provider::Bedrock,
         py_class_name: "",
+        py_module_name: "",
         ts_class_name: "BedrockRuntimeClient",
         ts_base_url_param: "",
         ts_api_key_param: "",

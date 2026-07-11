@@ -46,15 +46,56 @@ fn standard_python_detection_query(class_name: &str) -> String {
     )
 }
 
-fn standard_python_transform_query(class_name: &str) -> String {
-    format!(
+/// Transform query for the standard providers: bare-identifier calls
+/// (`OpenAI(...)`) plus module-qualified attribute calls constrained to the
+/// SDK's own module (`openai.OpenAI(...)`).
+///
+/// The detection query matches ANY attribute-form call ending in the class
+/// name, but the transformer must only rewrite calls it is sure about:
+/// an unconstrained attribute pattern would rewrite `mymod.OpenAI(...)`
+/// (some unrelated class that happens to share the name). Previously the
+/// transform query had no attribute pattern at all, so detected
+/// `openai.OpenAI(...)` calls were silently reported "(no changes needed)"
+/// and never routed through the proxy.
+fn standard_python_transform_query(info: &ProviderInfo) -> String {
+    let class_name = info.py_class_name;
+    let module_name = info.py_module_name;
+
+    let identifier_pattern = format!(
         r#"
-            (call
-                function: (identifier) @function
-                (#eq? @function "{class_name}")
-                arguments: (argument_list) @args
-            ) @call_expr
+                (call
+                    function: (identifier) @function
+                    (#eq? @function "{class_name}")
+                    arguments: (argument_list) @args
+                ) @call_expr
         "#
+    );
+
+    let attribute_pattern = if module_name.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"
+                (call
+                    function: (attribute
+                        object: (identifier) @module
+                        (#eq? @module "{module_name}")
+                        attribute: (identifier) @class
+                        (#eq? @class "{class_name}")
+                    )
+                    arguments: (argument_list) @args
+                ) @call_expr
+        "#
+        )
+    };
+
+    format!(
+        r"
+            [
+{identifier_pattern}
+{attribute_pattern}
+            ]
+        "
     )
 }
 
@@ -156,7 +197,7 @@ pub fn get_python_transform_query(provider: Provider) -> String {
         // query compiles and matches nothing, so the transformer is a no-op.
         Provider::Bedrock => String::new(),
         _ => ProviderInfo::get(provider)
-            .map(|info| standard_python_transform_query(info.py_class_name))
+            .map(standard_python_transform_query)
             .unwrap_or_default(),
     }
 }

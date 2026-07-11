@@ -327,6 +327,49 @@ mod tests {
         assert_eq!(out, input, "boto3 calls must be byte-for-byte untouched");
     }
 
+    /// Regression: attribute-form calls (`openai.OpenAI(...)`) were detected
+    /// but the transform query matched only bare identifiers, so the file
+    /// was silently reported "(no changes needed)" and never routed through
+    /// the proxy.
+    #[test]
+    fn module_qualified_attribute_call_is_transformed() {
+        let input = "import openai\nclient = openai.OpenAI(api_key=key)\n";
+        let out = transform_python(input);
+        assert!(
+            out.contains("base_url=\"https://api.promptguard.co/api/v1\""),
+            "openai.OpenAI(...) must be transformed:\n{out}"
+        );
+        assert!(
+            out.contains("openai.OpenAI("),
+            "call form preserved:\n{out}"
+        );
+        assert_reparses_clean(&out);
+    }
+
+    /// The attribute pattern is constrained to the SDK module: some other
+    /// module's `OpenAI` attribute must NOT be rewritten.
+    #[test]
+    fn unrelated_module_attribute_call_is_not_transformed() {
+        let input = "import mymod\nclient = mymod.OpenAI(api_key=key)\n";
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("client.py");
+        fs::write(&path, input).unwrap();
+        let result = PythonTransformer::new()
+            .transform_file(
+                &path,
+                Provider::OpenAI,
+                "https://api.promptguard.co/api/v1",
+                "PROMPTGUARD_API_KEY",
+                false,
+            )
+            .unwrap();
+        assert!(
+            !result.modified,
+            "mymod.OpenAI(...) must not be rewritten as if it were the SDK"
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), input);
+    }
+
     #[test]
     fn os_import_detection_true_positives() {
         assert!(has_os_import("import os\n"));
