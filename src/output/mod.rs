@@ -152,6 +152,17 @@ impl Output {
         format!("{prefix}…{suffix}")
     }
 
+    /// Truncate `s` to at most `max_chars` characters, char-boundary safe.
+    ///
+    /// Byte-index slicing (`&s[..n]`) panics on multi-byte UTF-8 content;
+    /// use this for any display truncation of user- or API-provided text.
+    pub fn truncate_chars(s: &str, max_chars: usize) -> &str {
+        match s.char_indices().nth(max_chars) {
+            Some((byte_idx, _)) => &s[..byte_idx],
+            None => s,
+        }
+    }
+
     pub fn confirm(prompt: &str, default: bool) -> Result<bool> {
         let default_str = if default { "Y/n" } else { "y/N" };
         let bold_prompt = Self::colorize(prompt, |s| s.bold());
@@ -231,6 +242,22 @@ mod tests {
         // Emoji (4-byte chars) at the boundary.
         let masked = Output::mask_api_key("pg_live_xxxx🔑🔑🔑🔑");
         assert_eq!(masked, "pg_live_…🔑🔑🔑🔑");
+    }
+
+    #[test]
+    fn truncate_chars_is_char_boundary_safe() {
+        // ASCII: plain prefix
+        assert_eq!(Output::truncate_chars("hello world", 5), "hello");
+        // Shorter than the limit: unchanged
+        assert_eq!(Output::truncate_chars("hi", 60), "hi");
+        // Multi-byte characters at the boundary must not panic
+        assert_eq!(Output::truncate_chars("🚀🚀🚀🚀", 2), "🚀🚀");
+        assert_eq!(Output::truncate_chars("héllo wörld", 4), "héll");
+        // Emoji mixed with ASCII around the cut point
+        let s = "attack 🎯 prompt with émojis 🚀 and more text";
+        let t = Output::truncate_chars(s, 10);
+        assert_eq!(t.chars().count(), 10);
+        assert!(s.starts_with(t));
     }
 
     #[test]

@@ -141,7 +141,9 @@ impl LogsCommand {
                 _ => "📋",
             };
 
-            let timestamp = &log.timestamp[..19.min(log.timestamp.len())]; // Truncate to readable format
+            // Truncate to readable format (char-boundary safe: the API could
+            // return a non-ASCII timestamp string)
+            let timestamp = Output::truncate_chars(&log.timestamp, 19);
 
             print!("{} [{}] {}", icon, timestamp, log.log_type.to_uppercase());
 

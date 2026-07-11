@@ -215,7 +215,7 @@ impl RedTeamCommand {
             if self.verbose {
                 println!(
                     "    Prompt: {}...",
-                    &result.prompt[..result.prompt.len().min(60)]
+                    crate::output::Output::truncate_chars(&result.prompt, 60)
                 );
                 println!("    Reason: {}", result.reason);
                 if let Some(threat) = &result.threat_type {
@@ -281,7 +281,10 @@ impl RedTeamCommand {
             "Running custom adversarial test against preset '{}'...\n",
             self.preset
         );
-        println!("Prompt: {}...\n", &prompt[..prompt.len().min(100)]);
+        println!(
+            "Prompt: {}...\n",
+            crate::output::Output::truncate_chars(prompt, 100)
+        );
 
         let result: RedTeamTestResult = client
             .post(
