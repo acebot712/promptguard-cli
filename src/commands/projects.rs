@@ -1,5 +1,5 @@
 use crate::api::PromptGuardClient;
-use crate::auth::{load_credentials, resolve_api_key, resolve_base_url, save_credentials};
+use crate::auth::{load_credentials, resolve_api_key, resolve_session, save_credentials};
 use crate::error::Result;
 use crate::output::Output;
 
@@ -22,8 +22,7 @@ impl ProjectsCommand {
     }
 
     fn list(&self) -> Result<()> {
-        let api_key = resolve_api_key()?;
-        let base_url = resolve_base_url();
+        let (api_key, base_url) = resolve_session()?;
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let active_project = load_credentials()

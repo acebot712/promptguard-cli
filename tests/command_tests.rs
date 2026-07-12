@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 /// Unit and integration tests for CLI commands
 ///
 /// Tests cover the critical paths:
@@ -125,6 +125,36 @@ async function main() {
     assert!(
         has_provider_instances(&results, Provider::OpenAI),
         "Should detect OpenAI provider in TypeScript"
+    );
+}
+
+/// Test that scan correctly detects SDK usage in .tsx files containing JSX
+/// (which the plain TypeScript grammar cannot parse - requires TSX grammar)
+#[test]
+fn test_scan_detects_openai_tsx() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let tsx_file = temp_dir.path().join("Chat.tsx");
+    fs::write(
+        &tsx_file,
+        r"
+import OpenAI from 'openai';
+import React from 'react';
+
+const client = new OpenAI();
+
+export function Chat() {
+    return <div className='chat'>Hello <b>world</b></div>;
+}
+",
+    )
+    .expect("Failed to write test file");
+
+    let results = detect_all_providers(&tsx_file).expect("Detection should succeed");
+
+    assert!(
+        has_provider_instances(&results, Provider::OpenAI),
+        "Should detect OpenAI provider in .tsx file with JSX"
     );
 }
 
@@ -265,6 +295,38 @@ fn test_scanner_finds_supported_files() {
     );
 }
 
+/// Symlinked files must not be scanned (transforming through a symlink
+/// writes outside the project tree)
+#[cfg(unix)]
+#[test]
+fn test_scanner_skips_symlinked_files() {
+    let outside_dir = TempDir::new().expect("Failed to create outside dir");
+    let project_dir = TempDir::new().expect("Failed to create project dir");
+
+    let real_target = outside_dir.path().join("outside.py");
+    fs::write(
+        &real_target,
+        "from openai import OpenAI\nclient = OpenAI()\n",
+    )
+    .expect("Failed to write target");
+
+    fs::write(project_dir.path().join("inside.py"), "print('ok')\n").expect("write");
+    std::os::unix::fs::symlink(&real_target, project_dir.path().join("linked.py"))
+        .expect("Failed to create symlink");
+
+    let scanner = FileScanner::new(project_dir.path(), None).expect("Failed to create scanner");
+    let files = scanner.scan_files(None).expect("Scan should succeed");
+
+    assert!(
+        files.iter().any(|f| f.ends_with("inside.py")),
+        "regular file should be scanned"
+    );
+    assert!(
+        !files.iter().any(|f| f.ends_with("linked.py")),
+        "symlinked file must be skipped"
+    );
+}
+
 // =============================================================================
 // TRANSFORMER TESTS - Code Modification
 // =============================================================================
@@ -286,6 +348,7 @@ client = OpenAI()
         Provider::OpenAI,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     )
     .expect("Transform should succeed");
 
@@ -306,6 +369,41 @@ client = OpenAI()
     );
 }
 
+/// A dry-run transform must report `modified` accurately while leaving the
+/// file on disk byte-for-byte unchanged (init --dry-run previously rewrote
+/// source files, without backups).
+#[test]
+fn test_transform_dry_run_leaves_file_untouched() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let python_file = temp_dir.path().join("app.py");
+    let original = r"from openai import OpenAI
+
+client = OpenAI()
+";
+    fs::write(&python_file, original).expect("Failed to write");
+
+    let result = transformer::transform_file(
+        &python_file,
+        Provider::OpenAI,
+        "https://api.promptguard.co/api/v1",
+        "PROMPTGUARD_API_KEY",
+        true,
+    )
+    .expect("Dry-run transform should succeed");
+
+    assert!(
+        result.modified,
+        "Dry run must still report the file as would-be modified"
+    );
+
+    let content = fs::read_to_string(&python_file).expect("Failed to read");
+    assert_eq!(
+        content, original,
+        "Dry run must leave the file byte-for-byte unchanged"
+    );
+}
+
 /// Test Python Anthropic transformation
 #[test]
 fn test_transform_python_anthropic_adds_base_url() {
@@ -323,6 +421,7 @@ client = Anthropic()
         Provider::Anthropic,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     )
     .expect("Transform should succeed");
 
@@ -353,6 +452,7 @@ client = OpenAI(base_url="https://api.promptguard.co/api/v1", api_key=os.getenv(
         Provider::OpenAI,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     )
     .expect("Transform should succeed");
 
@@ -385,6 +485,7 @@ const openai = new OpenAI();
         Provider::OpenAI,
         "https://api.promptguard.co/api/v1",
         "PROMPTGUARD_API_KEY",
+        false,
     );
 
     // TypeScript transformation may or may not be supported
@@ -741,4 +842,188 @@ fn test_proxy_url_validation() {
             || url.starts_with("http://127.0.0.1");
         assert!(!is_valid, "Invalid URL should be rejected: {url}");
     }
+}
+
+// =============================================================================
+// NON-INTERACTIVE PROCESS TESTS - disable/enable must never hang on stdin
+// =============================================================================
+//
+// Regression for the VS Code extension hang: it spawns the CLI via execFile
+// with PIPED stdin that it never writes to and never closes, so a blocking
+// `read_line` in `Output::confirm` hung until the extension's timeout. These
+// tests spawn the real binary the same way and require it to exit.
+
+/// Write a minimal valid .promptguard.json (static mode, enabled) into `dir`.
+fn write_minimal_config(dir: &std::path::Path) {
+    let config = PromptGuardConfig::new(
+        "pg_live_test_key_1234567890".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec!["openai".to_string()],
+    )
+    .expect("valid test config");
+    let manager = ConfigManager::new(Some(dir.join(".promptguard.json"))).unwrap();
+    manager.save(&config).unwrap();
+}
+
+/// Poll `child` for up to `secs` seconds; `None` means it never exited.
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    secs: u64,
+) -> Option<std::process::ExitStatus> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    loop {
+        if let Some(status) = child.try_wait().expect("try_wait failed") {
+            return Some(status);
+        }
+        if std::time::Instant::now() > deadline {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
+/// Run the built promptguard binary in `dir` with piped stdin that is kept
+/// open and never written to (exactly how the VS Code extension spawns it).
+fn run_with_open_stdin(dir: &std::path::Path, args: &[&str]) -> std::process::ExitStatus {
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_promptguard"))
+        .args(args)
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn promptguard binary");
+
+    // Deliberately keep child.stdin alive (open, no data, no EOF).
+    let status = wait_with_timeout(&mut child, 30);
+    let Some(status) = status else {
+        let _ = child.kill();
+        panic!("promptguard {args:?} hung waiting on stdin instead of exiting");
+    };
+    status
+}
+
+/// `disable --yes` must skip the confirmation prompt entirely.
+#[test]
+fn test_disable_yes_flag_does_not_block_on_stdin() {
+    let temp_dir = TempDir::new().unwrap();
+    write_minimal_config(temp_dir.path());
+
+    let status = run_with_open_stdin(temp_dir.path(), &["disable", "--yes"]);
+    assert!(status.success(), "disable --yes must exit successfully");
+
+    let manager = ConfigManager::new(Some(temp_dir.path().join(".promptguard.json"))).unwrap();
+    let config = manager.load().unwrap();
+    assert!(!config.enabled, "disable --yes must actually disable");
+}
+
+/// Even WITHOUT --yes, a non-interactive stdin must fall through to the
+/// prompt's default answer instead of blocking forever.
+#[test]
+fn test_disable_without_yes_falls_back_to_default_on_non_tty_stdin() {
+    let temp_dir = TempDir::new().unwrap();
+    write_minimal_config(temp_dir.path());
+
+    let status = run_with_open_stdin(temp_dir.path(), &["disable"]);
+    assert!(
+        status.success(),
+        "disable must exit (default answer) when stdin is not a TTY"
+    );
+}
+
+/// `enable --yes` must skip the confirmation prompt entirely.
+#[test]
+fn test_enable_yes_flag_does_not_block_on_stdin() {
+    let temp_dir = TempDir::new().unwrap();
+    write_minimal_config(temp_dir.path());
+
+    // Start disabled so `enable` has work to do (and reaches its prompt).
+    let manager = ConfigManager::new(Some(temp_dir.path().join(".promptguard.json"))).unwrap();
+    let mut config = manager.load().unwrap();
+    config.enabled = false;
+    manager.save(&config).unwrap();
+
+    let status = run_with_open_stdin(temp_dir.path(), &["enable", "--yes"]);
+    assert!(status.success(), "enable --yes must exit successfully");
+}
+
+/// `revert --yes` must fully undo `PromptGuard`: restore recorded backups
+/// (deleting them afterwards), remove injected shim imports and the
+/// .promptguard/ directory, and only then remove the env entry and config.
+/// Regression: revert used to delete `PROMPTGUARD_API_KEY` and the config
+/// while leaving transformed files routed at the proxy — a broken app.
+#[test]
+fn test_revert_restores_backups_and_removes_shims() {
+    use promptguard::shim::{ShimGenerator, ShimInjector};
+
+    let temp_dir = TempDir::new().unwrap();
+    let dir = temp_dir.path();
+
+    // Transformed file with its PromptGuard-recorded backup.
+    fs::write(dir.join("app.py"), "transformed-by-promptguard").unwrap();
+    fs::write(dir.join("app.py.bak"), "original-user-code").unwrap();
+
+    // Runtime shim artifacts: generated .promptguard/ + injected entry point.
+    let generator = ShimGenerator::new(
+        dir,
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec![Provider::OpenAI],
+    );
+    generator.generate_python_shim().unwrap();
+    let entry = dir.join("main.py");
+    fs::write(&entry, "print('hi')\n").unwrap();
+    assert!(ShimInjector::new(dir).inject_python_shim(&entry).unwrap());
+
+    // Env file with the PromptGuard key plus an unrelated entry.
+    fs::write(
+        dir.join(".env"),
+        "PROMPTGUARD_API_KEY=pg_live_test_key_1234567890\nOTHER_VAR=keep-me\n",
+    )
+    .unwrap();
+
+    // Config recording the backup and the managed file.
+    let mut config = PromptGuardConfig::new(
+        "pg_live_test_key_1234567890".to_string(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec!["openai".to_string()],
+    )
+    .unwrap();
+    config.metadata.backups = vec!["app.py.bak".to_string()];
+    config.metadata.files_managed = vec!["app.py".to_string()];
+    ConfigManager::new(Some(dir.join(".promptguard.json")))
+        .unwrap()
+        .save(&config)
+        .unwrap();
+
+    let status = run_with_open_stdin(dir, &["revert", "--yes"]);
+    assert!(status.success(), "revert --yes must exit successfully");
+
+    // Transformed file restored from its backup, backup cleaned up.
+    assert_eq!(
+        fs::read_to_string(dir.join("app.py")).unwrap(),
+        "original-user-code",
+        "revert must restore the recorded backup"
+    );
+    assert!(
+        !dir.join("app.py.bak").exists(),
+        "revert must delete the backup it restored from"
+    );
+
+    // Shim artifacts removed.
+    assert!(
+        !dir.join(".promptguard").exists(),
+        "revert must delete the .promptguard/ shim directory"
+    );
+    assert!(
+        !fs::read_to_string(&entry).unwrap().contains("promptguard"),
+        "revert must remove the injected shim import"
+    );
+
+    // Env entry removed, unrelated entries kept; config deleted.
+    let env = fs::read_to_string(dir.join(".env")).unwrap();
+    assert!(!env.contains("PROMPTGUARD_API_KEY"));
+    assert!(env.contains("OTHER_VAR=keep-me"));
+    assert!(!dir.join(".promptguard.json").exists());
 }

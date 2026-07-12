@@ -53,26 +53,43 @@ impl Default for LogsCommand {
 
 impl LogsCommand {
     pub fn execute(&self) -> Result<()> {
-        let config_manager = ConfigManager::new(None)?;
-        if !config_manager.exists() {
-            return Err(PromptGuardError::NotInitialized);
-        }
+        // Resolve the credential + base URL through the shared precedence
+        // (env > project > global) and the key-exfiltration guard, exactly
+        // like `events`/`scan`/`redact`. This command does NOT require a
+        // project to be initialized: a missing key yields the canonical
+        // "No API key found …" guidance, not a divergent "Run init first".
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
-        let config = config_manager.load()?;
-        let client = PromptGuardClient::new(config.api_key, Some(config.proxy_url))?;
+        // Scope the query to the project when a project config exists; absent
+        // one, fetch account-wide logs rather than erroring.
+        let project_id = ConfigManager::new(None)
+            .ok()
+            .filter(ConfigManager::exists)
+            .and_then(|m| m.load().ok())
+            .and_then(|c| c.project_id);
 
         if !self.json {
             Output::header("Activity Logs");
             Output::info("Fetching logs from PromptGuard API...");
         }
 
-        // Build query parameters
+        // Build query parameters (user/config-provided values are
+        // percent-encoded so they cannot smuggle extra parameters)
         let mut endpoint = format!("/logs?limit={}", self.limit);
         if let Some(ref log_type) = self.log_type {
-            let _ = write!(endpoint, "&type={log_type}");
+            let _ = write!(
+                endpoint,
+                "&type={}",
+                crate::api::encode_query_param(log_type)
+            );
         }
-        if let Some(ref project_id) = config.project_id {
-            let _ = write!(endpoint, "&project_id={project_id}");
+        if let Some(ref project_id) = project_id {
+            let _ = write!(
+                endpoint,
+                "&project_id={}",
+                crate::api::encode_query_param(project_id)
+            );
         }
 
         // Try to fetch logs from the API
@@ -104,7 +121,7 @@ impl LogsCommand {
                     println!("View your complete activity logs at:");
                     println!("  https://app.promptguard.co/dashboard/activity");
 
-                    if let Some(project_id) = config.project_id {
+                    if let Some(ref project_id) = project_id {
                         println!("\nProject: {project_id}");
                     }
 
@@ -141,7 +158,9 @@ impl LogsCommand {
                 _ => "📋",
             };
 
-            let timestamp = &log.timestamp[..19.min(log.timestamp.len())]; // Truncate to readable format
+            // Truncate to readable format (char-boundary safe: the API could
+            // return a non-ASCII timestamp string)
+            let timestamp = Output::truncate_chars(&log.timestamp, 19);
 
             print!("{} [{}] {}", icon, timestamp, log.log_type.to_uppercase());
 

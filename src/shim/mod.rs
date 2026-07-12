@@ -1,8 +1,9 @@
 /// Runtime shim generation and injection
 ///
 /// This module provides the core functionality for `PromptGuard`'s runtime
-/// interception system, which ensures 100% coverage of LLM SDK calls by
-/// monkey-patching (Python) or wrapping (TypeScript/JavaScript) SDK constructors.
+/// interception system, which routes calls made through the supported LLM
+/// SDK client classes (sync and async) by monkey-patching (Python) or
+/// wrapping (TypeScript/JavaScript) their constructors.
 ///
 /// ## Architecture
 ///
@@ -22,7 +23,6 @@
 /// let generator = ShimGenerator::new(
 ///     "/path/to/project",
 ///     "https://api.promptguard.co/api/v1".to_string(),
-///     "PROMPTGUARD_API_KEY".to_string(),
 ///     vec![Provider::OpenAI, Provider::Anthropic],
 /// );
 ///
@@ -51,7 +51,8 @@
 ///
 /// ## Benefits
 ///
-/// - **100% Coverage**: Catches all SDK usage, even dynamic initialization
+/// - **Constructor-level Coverage**: Catches usage of the patched SDK client
+///   classes, even dynamic initialization
 /// - **Zero Config**: Works without understanding the codebase
 /// - **Safe**: Can be disabled without breaking the app
 /// - **Transparent**: Developers see exactly what's being intercepted

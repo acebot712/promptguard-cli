@@ -4,6 +4,37 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Write a file containing secrets with owner-only permissions (0600).
+///
+/// On Unix the file is created with mode 0600 (and re-chmodded if it already
+/// existed with looser permissions, so there is no window where the secret is
+/// world-readable). On other platforms this falls back to a plain write.
+pub fn write_private_file(path: &Path, content: &str) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        // mode() only applies at creation; tighten pre-existing files too.
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.write_all(content.as_bytes())?;
+    }
+
+    #[cfg(not(unix))]
+    {
+        fs::write(path, content)?;
+    }
+
+    Ok(())
+}
+
 /// Validate a `PromptGuard` API key's format.
 ///
 /// Production keys use the canonical `pg_live_` prefix. The check is kept
@@ -13,6 +44,146 @@ pub fn is_valid_api_key(key: &str) -> bool {
     // Permissive on prefix (forward-compatible), but reject obviously-malformed
     // input: bare `pg_`, embedded whitespace, or a too-short truncated paste.
     key.starts_with("pg_") && key.len() >= 16 && !key.chars().any(char::is_whitespace)
+}
+
+/// True when `url`'s host is a loopback address: IPv4 `127.0.0.0/8`, IPv6
+/// `::1`, or the literal `localhost`.
+///
+/// A proxy on the user's own machine cannot exfiltrate the API key, so
+/// loopback hosts are trusted. This must go through [`url::Url::host`]: the
+/// `url` crate renders an IPv6 host as the bracketed `"[::1]"` in
+/// [`url::Url::host_str`], so a naive `host == "::1"` string compare never
+/// matches.
+pub fn is_loopback_host(url: &url::Url) -> bool {
+    match url.host() {
+        Some(url::Host::Ipv4(addr)) => addr.is_loopback(),
+        Some(url::Host::Ipv6(addr)) => addr.is_loopback(),
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        None => false,
+    }
+}
+
+/// Validate a proxy URL for use in config and generated source code.
+///
+/// The value is interpolated into generated Python/TypeScript shims and
+/// transformed source files, so beyond requiring a well-formed HTTPS URL
+/// (or localhost HTTP for development), it must not contain quotes,
+/// whitespace, control characters, or backslashes that could escape the
+/// string literal it is embedded in.
+pub fn validate_proxy_url(url_str: &str) -> Result<()> {
+    if url_str.chars().any(|c| {
+        c.is_whitespace() || c.is_control() || matches!(c, '"' | '\'' | '`' | '\\' | '{' | '}')
+    }) {
+        return Err(PromptGuardError::Config(
+            "Invalid proxy_url: must not contain whitespace, quotes, braces, backslashes, \
+             or control characters"
+                .to_string(),
+        ));
+    }
+
+    let parsed = url::Url::parse(url_str)
+        .map_err(|e| PromptGuardError::Config(format!("Invalid proxy_url '{url_str}': {e}")))?;
+
+    let is_loopback = is_loopback_host(&parsed);
+
+    match parsed.scheme() {
+        "https" => Ok(()),
+        "http" if is_loopback => Ok(()),
+        _ => Err(PromptGuardError::Config(
+            "Invalid proxy_url: must use HTTPS (or http://localhost for development)".to_string(),
+        )),
+    }
+}
+
+/// Validate an env-file path from config or CLI input.
+///
+/// Must be a relative path that stays inside the project directory.
+/// Checked structurally via [`Path`] components (absolute paths, `..`
+/// segments, Windows `Prefix` components), plus explicit Windows-style
+/// checks that Unix `Path` parsing does not recognize: drive prefixes
+/// (`C:...`), UNC / rooted backslash paths (`\\server\share`, `\x`), and
+/// `..` segments with backslash separators. The old string check
+/// (`contains("..")` + `starts_with('/')`) missed all Windows forms.
+pub fn validate_env_file_path(path_str: &str) -> Result<()> {
+    use std::path::Component;
+
+    let invalid = || {
+        PromptGuardError::Config(
+            "Invalid env_file: must be a relative path within the project directory".to_string(),
+        )
+    };
+
+    let path = Path::new(path_str);
+    if path.is_absolute() {
+        return Err(invalid());
+    }
+    for component in path.components() {
+        if matches!(
+            component,
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir
+        ) {
+            return Err(invalid());
+        }
+    }
+
+    // Windows-style forms parsed as a single Normal component on Unix.
+    let bytes = path_str.as_bytes();
+    let has_drive_prefix = bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic();
+    if path_str.starts_with('\\')
+        || has_drive_prefix
+        || path_str.split(['/', '\\']).any(|segment| segment == "..")
+    {
+        return Err(invalid());
+    }
+
+    Ok(())
+}
+
+/// Validate a backup extension (e.g. `.bak`).
+///
+/// Must be non-empty, start with a dot, and contain no path separators,
+/// whitespace, or further dots. An empty extension used to panic in
+/// `BackupManager::backup_path` (`self.backup_extension[1..]`), and a
+/// non-dot value silently mangled backup filenames.
+pub fn validate_backup_extension(ext: &str) -> Result<()> {
+    let rest = ext.strip_prefix('.').ok_or_else(|| {
+        PromptGuardError::Config(format!(
+            "Invalid backup_extension '{ext}': must start with '.' (e.g. \".bak\")"
+        ))
+    })?;
+
+    if rest.is_empty() || !rest.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err(PromptGuardError::Config(format!(
+            "Invalid backup_extension '{ext}': must be '.' followed by alphanumerics \
+             (e.g. \".bak\")"
+        )));
+    }
+
+    Ok(())
+}
+
+/// Validate an environment variable name for use in generated source code.
+///
+/// Strict allowlist (`^[A-Z_][A-Z0-9_]*$`): the value is interpolated into
+/// generated Python/TypeScript code, so anything else is rejected.
+pub fn validate_env_var_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let valid = match chars.next() {
+        Some(first) => {
+            (first.is_ascii_uppercase() || first == '_')
+                && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        },
+        None => false,
+    };
+
+    if valid {
+        Ok(())
+    } else {
+        Err(PromptGuardError::Config(format!(
+            "Invalid env_var_name '{name}': must match [A-Z_][A-Z0-9_]* \
+             (uppercase letters, digits, underscores)"
+        )))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,7 +262,10 @@ fn default_env_file() -> String {
     ".env".to_string()
 }
 
-fn default_env_var_name() -> String {
+/// Default environment variable that holds the `PromptGuard` API key.
+/// Public so commands that run before a config exists (init) use the same
+/// name that the config will be created with, instead of hardcoding it.
+pub fn default_env_var_name() -> String {
     "PROMPTGUARD_API_KEY".to_string()
 }
 
@@ -101,6 +275,9 @@ impl PromptGuardConfig {
         if !is_valid_api_key(&api_key) {
             return Err(PromptGuardError::InvalidApiKey);
         }
+
+        // proxy_url ends up in generated source code: strict validation
+        validate_proxy_url(&proxy_url)?;
 
         Ok(Self {
             version: "1.0".to_string(),
@@ -163,21 +340,13 @@ impl ConfigManager {
         }
 
         // Security: Validate paths don't escape project directory
-        if config.env_file.contains("..") || config.env_file.starts_with('/') {
-            return Err(PromptGuardError::Config(
-                "Invalid env_file in config: must be relative path within project".to_string(),
-            ));
-        }
+        validate_env_file_path(&config.env_file)?;
 
-        // Security: Validate proxy_url is a valid HTTPS URL (unless localhost for development)
-        if !config.proxy_url.starts_with("https://")
-            && !config.proxy_url.starts_with("http://localhost")
-            && !config.proxy_url.starts_with("http://127.0.0.1")
-        {
-            return Err(PromptGuardError::Config(
-                "Invalid proxy_url: must use HTTPS (or localhost for development)".to_string(),
-            ));
-        }
+        // Security: proxy_url and env_var_name are interpolated into
+        // generated source code — validate with strict allowlists.
+        validate_proxy_url(&config.proxy_url)?;
+        validate_env_var_name(&config.env_var_name)?;
+        validate_backup_extension(&config.backup_extension)?;
 
         Ok(config)
     }
@@ -186,7 +355,8 @@ impl ConfigManager {
         let content = serde_json::to_string_pretty(&config)
             .map_err(|e| PromptGuardError::Config(format!("Failed to serialize config: {e}")))?;
 
-        fs::write(&self.config_path, content)?;
+        // The config contains the API key: owner-only permissions.
+        write_private_file(&self.config_path, &content)?;
 
         Ok(())
     }
@@ -204,5 +374,94 @@ impl ConfigManager {
 
     pub fn config_path(&self) -> &Path {
         &self.config_path
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn proxy_url_accepts_https_and_localhost() {
+        assert!(validate_proxy_url("https://api.promptguard.co/api/v1").is_ok());
+        assert!(validate_proxy_url("https://proxy.example.com:8443/v1").is_ok());
+        assert!(validate_proxy_url("http://localhost:8080/api/v1").is_ok());
+        assert!(validate_proxy_url("http://127.0.0.1:3000").is_ok());
+        // IPv6 loopback: the url crate renders this host as "[::1]", so a
+        // string compare against "::1" would miss it.
+        assert!(validate_proxy_url("http://[::1]:8080/api/v1").is_ok());
+    }
+
+    #[test]
+    fn loopback_host_matches_all_loopback_forms() {
+        let loopback = [
+            "http://localhost:8080",
+            "http://127.0.0.1:3000",
+            "http://127.0.0.5",
+            "http://[::1]:9000",
+            "http://LOCALHOST/x",
+        ];
+        for url in loopback {
+            let parsed = url::Url::parse(url).unwrap();
+            assert!(is_loopback_host(&parsed), "{url} should be loopback");
+        }
+
+        let remote = ["https://api.promptguard.co", "https://evil.example.com"];
+        for url in remote {
+            let parsed = url::Url::parse(url).unwrap();
+            assert!(!is_loopback_host(&parsed), "{url} should not be loopback");
+        }
+    }
+
+    #[test]
+    fn proxy_url_rejects_injection_and_plain_http() {
+        assert!(validate_proxy_url("http://example.com/api").is_err());
+        assert!(validate_proxy_url("https://x.com/\"; import os; #").is_err());
+        assert!(validate_proxy_url("https://x.com/a b").is_err());
+        assert!(validate_proxy_url("https://x.com/`rm -rf`").is_err());
+        assert!(validate_proxy_url("https://x.com/\\n").is_err());
+        assert!(validate_proxy_url("ftp://x.com").is_err());
+        assert!(validate_proxy_url("not a url").is_err());
+        assert!(validate_proxy_url("").is_err());
+    }
+
+    #[test]
+    fn env_file_path_accepts_relative_project_paths() {
+        assert!(validate_env_file_path(".env").is_ok());
+        assert!(validate_env_file_path(".env.local").is_ok());
+        assert!(validate_env_file_path("config/.env").is_ok());
+        assert!(validate_env_file_path("a/b/.env").is_ok());
+    }
+
+    #[test]
+    fn env_file_path_rejects_escapes_and_absolute_paths() {
+        assert!(validate_env_file_path("/etc/.env").is_err());
+        assert!(validate_env_file_path("../.env").is_err());
+        assert!(validate_env_file_path("a/../../.env").is_err());
+    }
+
+    /// Windows absolute/UNC forms are not recognized by Unix Path parsing
+    /// and slipped through the old string checks.
+    #[test]
+    fn env_file_path_rejects_windows_absolute_and_unc_paths() {
+        assert!(validate_env_file_path("C:\\x\\.env").is_err());
+        assert!(validate_env_file_path("c:.env").is_err());
+        assert!(validate_env_file_path("\\\\share\\.env").is_err());
+        assert!(validate_env_file_path("\\x\\.env").is_err());
+        assert!(validate_env_file_path("..\\.env").is_err());
+        assert!(validate_env_file_path("a\\..\\..\\.env").is_err());
+    }
+
+    #[test]
+    fn env_var_name_allowlist() {
+        assert!(validate_env_var_name("PROMPTGUARD_API_KEY").is_ok());
+        assert!(validate_env_var_name("_KEY2").is_ok());
+        assert!(validate_env_var_name("").is_err());
+        assert!(validate_env_var_name("lowercase").is_err());
+        assert!(validate_env_var_name("2STARTS_WITH_DIGIT").is_err());
+        assert!(validate_env_var_name("HAS SPACE").is_err());
+        assert!(validate_env_var_name("HAS\"QUOTE").is_err());
+        assert!(validate_env_var_name("HAS-DASH").is_err());
     }
 }

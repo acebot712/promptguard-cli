@@ -1,13 +1,9 @@
 use crate::backup::BackupManager;
 use crate::config::ConfigManager;
-use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use crate::scanner::FileScanner;
-use crate::transformer;
 use crate::types::Provider;
-use std::collections::HashMap;
-use std::path::PathBuf;
 
 pub struct ApplyCommand {
     pub yes: bool,
@@ -22,7 +18,7 @@ impl ApplyCommand {
             return Err(PromptGuardError::NotInitialized);
         }
 
-        let config = config_manager.load()?;
+        let mut config = config_manager.load()?;
 
         println!("\nThis will re-apply PromptGuard transformations to:");
         println!("  • Proxy URL: {}", config.proxy_url);
@@ -47,20 +43,7 @@ impl ApplyCommand {
             .filter_map(|p| Provider::parse(p))
             .collect();
 
-        let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
-
-        for file_path in &files {
-            if let Ok(results) = detect_all_providers(file_path) {
-                for (provider, result) in results {
-                    if providers_to_check.contains(&provider) && !result.instances.is_empty() {
-                        detection_results
-                            .entry(provider)
-                            .or_default()
-                            .push(file_path.clone());
-                    }
-                }
-            }
-        }
+        let detection_results = super::detect_providers_in_files(&files, &providers_to_check);
 
         if detection_results.is_empty() {
             Output::warning("No SDK instances found to transform.");
@@ -75,46 +58,44 @@ impl ApplyCommand {
             None
         };
 
-        let mut files_modified = 0;
-
-        for (provider, files) in &detection_results {
-            let mut unique_files = files.clone();
-            unique_files.sort();
-            unique_files.dedup();
-
-            for file_path in unique_files {
-                // Create backup BEFORE transformation
-                if let Some(ref bm) = backup_manager {
-                    let _ = bm.create_backup(&file_path);
+        let outcome = super::run_transform_pipeline(
+            &detection_results,
+            &root_path,
+            super::TransformMode::Apply(backup_manager.as_ref()),
+            &config.proxy_url,
+            &config.env_var_name,
+            |_provider, file_path, result| {
+                let rel_path = file_path.strip_prefix(&root_path).unwrap_or(file_path);
+                if result.modified {
+                    Output::step(&format!("✓ {}", rel_path.display()));
+                } else if result.needs_manual_routing > 0 {
+                    Output::excluded(&format!(
+                        "{} (skipped: {} call site(s) pass dynamic arguments — route through PromptGuard manually)",
+                        rel_path.display(),
+                        result.needs_manual_routing
+                    ));
                 }
+            },
+        );
 
-                match transformer::transform_file(
-                    &file_path,
-                    *provider,
-                    &config.proxy_url,
-                    &config.env_var_name,
-                ) {
-                    Ok(result) => {
-                        if result.modified {
-                            files_modified += 1;
-                            let rel_path = file_path.strip_prefix(&root_path).unwrap_or(&file_path);
-                            Output::step(&format!("✓ {}", rel_path.display()));
-                        }
-                    },
-                    Err(e) => {
-                        Output::warning(&format!(
-                            "Failed to transform {}: {}",
-                            file_path.display(),
-                            e
-                        ));
-                    },
-                }
+        // Record when transformations were last applied (surfaced by
+        // `promptguard status`) and which backups exist (consulted by
+        // `disable` to restore only PromptGuard-created files).
+        for backup in outcome.backups_created {
+            if !config.metadata.backups.contains(&backup) {
+                config.metadata.backups.push(backup);
             }
         }
+        config.metadata.last_applied = Some(chrono::Utc::now());
+        config_manager.save(&config)?;
 
         println!();
         Output::success("Configuration applied!");
-        println!("\n  • {files_modified} files modified");
+        let n = outcome.files_modified.len();
+        println!(
+            "\n  • {n} {} modified",
+            super::pluralize(n, "file", "files")
+        );
 
         Ok(())
     }

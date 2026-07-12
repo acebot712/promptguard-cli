@@ -23,6 +23,191 @@ pub mod update;
 pub mod verify;
 pub mod whoami;
 
+use crate::backup::BackupManager;
+use crate::types::Provider;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+/// Result of running the shared transform pipeline.
+pub struct TransformOutcome {
+    /// Files whose contents were actually modified.
+    pub files_modified: Vec<PathBuf>,
+    /// Backups created, as root-relative path strings for
+    /// `metadata.backups` (consulted by `disable` to restore exactly what
+    /// `PromptGuard` created).
+    pub backups_created: Vec<String>,
+}
+
+/// Shared detection loop: map each provider to the files where its SDK
+/// usage was detected. Used by `init`, `apply`, and `enable`.
+pub fn detect_providers_in_files(
+    files: &[PathBuf],
+    providers_to_check: &[Provider],
+) -> HashMap<Provider, Vec<PathBuf>> {
+    let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
+
+    for file_path in files {
+        if let Ok(results) = crate::detector::detect_all_providers(file_path) {
+            for (provider, result) in results {
+                if providers_to_check.contains(&provider) && !result.instances.is_empty() {
+                    detection_results
+                        .entry(provider)
+                        .or_default()
+                        .push(file_path.clone());
+                }
+            }
+        }
+    }
+
+    detection_results
+}
+
+/// Shared dedup → backup → transform → record pipeline used by `init`,
+/// `apply`, and `enable`.
+///
+/// How [`run_transform_pipeline`] treats the filesystem.
+///
+/// Dry-run implying "no backups" is modeled in the type: there is no way to
+/// combine `DryRun` with a backup manager.
+#[derive(Clone, Copy)]
+pub enum TransformMode<'a> {
+    /// Write transformed files, backing each up first when a
+    /// [`BackupManager`] is provided.
+    Apply(Option<&'a BackupManager>),
+    /// Compute and report every would-be modification but write nothing:
+    /// no backups are created and no file is touched on disk.
+    DryRun,
+}
+
+/// For each provider the detected files are deduped and sorted, backed up
+/// BEFORE transformation (in [`TransformMode::Apply`] with a backup manager),
+/// then transformed. `on_result` receives each successfully processed file so
+/// callers can print their command-specific output; transform failures are
+/// reported as warnings and skipped.
+pub fn run_transform_pipeline(
+    detection_results: &HashMap<Provider, Vec<PathBuf>>,
+    root_path: &Path,
+    mode: TransformMode<'_>,
+    proxy_url: &str,
+    env_var_name: &str,
+    mut on_result: impl FnMut(Provider, &Path, &crate::types::TransformResult),
+) -> TransformOutcome {
+    let (backup_manager, dry_run) = match mode {
+        TransformMode::Apply(bm) => (bm, false),
+        TransformMode::DryRun => (None, true),
+    };
+    let mut outcome = TransformOutcome {
+        files_modified: Vec::new(),
+        backups_created: Vec::new(),
+    };
+
+    for (provider, files) in detection_results {
+        let mut unique_files = files.clone();
+        unique_files.sort();
+        unique_files.dedup();
+
+        for file_path in unique_files {
+            if let Some(bm) = backup_manager {
+                if let Ok(backup_path) = bm.create_backup(&file_path) {
+                    outcome.backups_created.push(
+                        backup_path
+                            .strip_prefix(root_path)
+                            .unwrap_or(&backup_path)
+                            .to_string_lossy()
+                            .to_string(),
+                    );
+                }
+            }
+
+            match crate::transformer::transform_file(
+                &file_path,
+                *provider,
+                proxy_url,
+                env_var_name,
+                dry_run,
+            ) {
+                Ok(result) => {
+                    if result.modified {
+                        outcome.files_modified.push(file_path.clone());
+                    }
+                    on_result(*provider, &file_path, &result);
+                },
+                Err(e) => {
+                    crate::output::Output::warning(&format!(
+                        "Failed to transform {}: {}",
+                        file_path.display(),
+                        e
+                    ));
+                },
+            }
+        }
+    }
+
+    outcome
+}
+
+/// Read a file to a string with terminal-friendly error messages.
+///
+/// The default `std::io::Error` Display leaks the raw errno (e.g.
+/// "No such file or directory (os error 2)"), which is noise for a CLI user.
+/// This maps the common not-found case to "File not found: <path>", the
+/// "pointed at a directory" case to a clear "Not a file: …", and keeps other
+/// IO errors readable (permission denied, etc.) WITHOUT the "(os error N)"
+/// tail — the fallback interpolates `ErrorKind`'s clean description, never the
+/// error's `Display`, which would re-append the errno.
+pub fn read_file_friendly(file_path: &str) -> crate::error::Result<String> {
+    std::fs::read_to_string(file_path).map_err(|e| {
+        let msg = match e.kind() {
+            std::io::ErrorKind::NotFound => format!("File not found: {file_path}"),
+            std::io::ErrorKind::PermissionDenied => {
+                format!("Permission denied reading file: {file_path}")
+            },
+            // A directory read fails with a platform-dependent errno
+            // (EISDIR → "Is a directory (os error 21)"); the kind is
+            // `IsADirectory` on newer toolchains but `Uncategorized`/`Other`
+            // on older ones, so detect it by inspecting the path instead of
+            // relying on `ErrorKind`.
+            _ if std::path::Path::new(file_path).is_dir() => {
+                format!("Not a file: {file_path} (expected a file, found a directory)")
+            },
+            // Interpolate the ErrorKind's clean description (e.g. "invalid
+            // data"), NOT `{e}` — the latter re-appends "(os error N)".
+            kind => format!("Could not read file '{file_path}': {kind}"),
+        };
+        crate::error::PromptGuardError::Io(std::io::Error::new(e.kind(), msg))
+    })
+}
+
+/// Return `singular` when `count == 1`, otherwise `plural`.
+///
+/// Tiny grammar helper so summaries read "1 file" not "1 files".
+#[must_use]
+pub fn pluralize(count: usize, singular: &'static str, plural: &'static str) -> &'static str {
+    if count == 1 {
+        singular
+    } else {
+        plural
+    }
+}
+
+/// Resolve an `--api-key` flag value, supporting `-` to read the key from
+/// stdin (avoids exposing the key in shell history and process listings).
+pub fn resolve_api_key_flag(value: &str) -> crate::error::Result<String> {
+    if value != "-" {
+        return Ok(value.to_string());
+    }
+
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line)?;
+    let key = line.trim().to_string();
+    if key.is_empty() {
+        return Err(crate::error::PromptGuardError::Custom(
+            "No API key received on stdin (expected the key on the first line)".to_string(),
+        ));
+    }
+    Ok(key)
+}
+
 pub use apply::ApplyCommand;
 pub use config::ConfigCommand;
 pub use dashboard::DashboardCommand;
@@ -31,7 +216,7 @@ pub use doctor::DoctorCommand;
 pub use enable::EnableCommand;
 pub use events::EventsCommand;
 pub use init::InitCommand;
-pub use key::KeyCommand;
+pub use key::{KeyAction, KeyCommand};
 pub use login::LoginCommand;
 pub use logout::LogoutCommand;
 pub use logs::LogsCommand;
@@ -47,3 +232,32 @@ pub use test::TestCommand;
 pub use update::UpdateCommand;
 pub use verify::VerifyCommand;
 pub use whoami::WhoamiCommand;
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::read_file_friendly;
+
+    /// A missing file yields a clean "File not found: …" with NO trailing
+    /// "(os error 2)" errno.
+    #[test]
+    fn read_file_friendly_missing_has_no_errno() {
+        let err = read_file_friendly("/no/such/promptguard/path.txt").unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("File not found"), "got: {msg}");
+        assert!(!msg.contains("os error"), "errno leaked: {msg}");
+    }
+
+    /// Pointing the helper at a directory yields a clean "Not a file: …" with
+    /// NO trailing "(os error 21)" errno.
+    #[test]
+    fn read_file_friendly_directory_has_no_errno() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_str().unwrap();
+        let err = read_file_friendly(path).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Not a file"), "got: {msg}");
+        assert!(msg.contains("directory"), "got: {msg}");
+        assert!(!msg.contains("os error"), "errno leaked: {msg}");
+    }
+}

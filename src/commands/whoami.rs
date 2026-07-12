@@ -1,5 +1,5 @@
 use crate::api::PromptGuardClient;
-use crate::auth::{load_credentials, resolve_api_key, resolve_base_url};
+use crate::auth::{load_credentials, resolve_api_key, resolve_session};
 use crate::error::Result;
 use crate::output::Output;
 
@@ -8,10 +8,16 @@ pub struct WhoamiCommand {
 }
 
 impl WhoamiCommand {
+    // Exits the process with code 1 when unauthenticated (see below), so
+    // shell/CI callers can gate on `whoami` succeeding.
+    #[allow(clippy::exit)]
     pub fn execute(&self) -> Result<()> {
-        let api_key = if let Ok(key) = resolve_api_key() {
-            key
-        } else {
+        // Not logged in at all: report gracefully but exit non-zero so
+        // `promptguard whoami` can be used as an "am I authenticated?" gate.
+        // The message uses a neutral ℹ tone (this is a state, not an error).
+        // Any other resolve_session error (e.g. refusing a repo-configured
+        // custom proxy) propagates as a normal error instead.
+        if resolve_api_key().is_err() {
             if self.json {
                 let result = serde_json::json!({
                     "authenticated": false,
@@ -22,12 +28,12 @@ impl WhoamiCommand {
                     serde_json::to_string_pretty(&result).unwrap_or_default()
                 );
             } else {
-                Output::error("Not logged in. Run 'promptguard login' to authenticate.");
+                Output::info("Not logged in. Run 'promptguard login' to authenticate.");
             }
-            return Ok(());
-        };
+            std::process::exit(1);
+        }
 
-        let base_url = resolve_base_url();
+        let (api_key, base_url) = resolve_session()?;
         let masked_key = Output::mask_api_key(&api_key);
 
         // Determine the source of the key, mirroring resolve_api_key's

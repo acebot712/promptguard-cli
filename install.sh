@@ -50,6 +50,17 @@ case "$ARCH" in
     ;;
 esac
 
+# The release matrix builds macOS (x86_64 + arm64) and Linux x86_64 only;
+# there is no aarch64-linux binary, so downloading would always fail.
+if [ "$OS_TYPE" = "linux" ] && [ "$ARCH_TYPE" = "arm64" ]; then
+  echo "${RED}Error: No prebuilt binary is available for Linux arm64${NC}"
+  echo "Supported prebuilt targets: macOS (x86_64, arm64) and Linux (x86_64)."
+  echo ""
+  echo "You can build from source instead:"
+  echo "  cargo install promptguard"
+  exit 1
+fi
+
 # Construct binary name
 BINARY="promptguard-${OS_TYPE}-${ARCH_TYPE}"
 
@@ -69,37 +80,47 @@ trap "rm -rf $TMP_DIR" EXIT
 
 cd "$TMP_DIR"
 
-# Download binary
+# Download binary under its release asset name so the .sha256 file
+# (which references that name) can be verified against it.
 echo "Downloading PromptGuard CLI..."
-if ! curl -fsSL "$RELEASE_URL/$BINARY" -o promptguard; then
+if ! curl -fsSL "$RELEASE_URL/$BINARY" -o "$BINARY"; then
   echo "${RED}Error: Failed to download binary${NC}"
   echo "URL: $RELEASE_URL/$BINARY"
   exit 1
 fi
 
-# Download checksum
+# Download checksum (mandatory - refuse to install an unverified binary)
 echo "Downloading checksum..."
-if ! curl -fsSL "$RELEASE_URL/$BINARY.sha256" -o promptguard.sha256; then
-  echo "${YELLOW}Warning: Could not download checksum file${NC}"
-else
-  # Verify checksum
-  echo "Verifying checksum..."
-  if command -v shasum >/dev/null 2>&1; then
-    if ! shasum -a 256 -c promptguard.sha256 >/dev/null 2>&1; then
-      echo "${RED}Error: Checksum verification failed${NC}"
-      exit 1
-    fi
-  elif command -v sha256sum >/dev/null 2>&1; then
-    if ! sha256sum -c promptguard.sha256 >/dev/null 2>&1; then
-      echo "${RED}Error: Checksum verification failed${NC}"
-      exit 1
-    fi
-  else
-    echo "${YELLOW}Warning: No checksum tool found (shasum or sha256sum)${NC}"
-  fi
+if ! curl -fsSL "$RELEASE_URL/$BINARY.sha256" -o "$BINARY.sha256"; then
+  echo "${RED}Error: Failed to download checksum file${NC}"
+  echo "URL: $RELEASE_URL/$BINARY.sha256"
+  echo "Refusing to install without checksum verification."
+  exit 1
 fi
 
-# Make executable
+# Verify checksum (mandatory)
+echo "Verifying checksum..."
+if command -v shasum >/dev/null 2>&1; then
+  if ! shasum -a 256 -c "$BINARY.sha256" >/dev/null 2>&1; then
+    echo "${RED}Error: Checksum verification failed${NC}"
+    echo "The downloaded binary does not match its published checksum."
+    exit 1
+  fi
+elif command -v sha256sum >/dev/null 2>&1; then
+  if ! sha256sum -c "$BINARY.sha256" >/dev/null 2>&1; then
+    echo "${RED}Error: Checksum verification failed${NC}"
+    echo "The downloaded binary does not match its published checksum."
+    exit 1
+  fi
+else
+  echo "${RED}Error: No checksum tool found (shasum or sha256sum)${NC}"
+  echo "Refusing to install without checksum verification."
+  exit 1
+fi
+echo "${GREEN}Checksum verified${NC}"
+
+# Rename to final binary name and make executable
+mv "$BINARY" promptguard
 chmod +x promptguard
 
 # Install

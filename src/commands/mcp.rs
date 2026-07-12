@@ -81,7 +81,7 @@ fn tool_definitions() -> serde_json::Value {
             },
             {
                 "name": "promptguard_logout",
-                "description": "Log out of PromptGuard by removing the locally stored API key and configuration.\nWhen to use: When the user wants to switch PromptGuard accounts, clear credentials, or ensure a clean state by removing existing authentication.",
+                "description": "Log out of PromptGuard by removing the project-local configuration (.promptguard.json) and the globally stored API key (~/.promptguard/credentials.json).\nWhen to use: When the user wants to switch PromptGuard accounts, clear credentials, or ensure a clean state by removing existing authentication.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {}
@@ -148,8 +148,8 @@ fn tool_definitions() -> serde_json::Value {
 // Tool handlers
 // ---------------------------------------------------------------------------
 
-fn resolve_project_id(config: &crate::config::PromptGuardConfig) -> Option<String> {
-    if let Some(ref pid) = config.project_id {
+fn resolve_project_id(config: Option<&crate::config::PromptGuardConfig>) -> Option<String> {
+    if let Some(pid) = config.and_then(|c| c.project_id.as_ref()) {
         if !pid.is_empty() {
             return Some(pid.clone());
         }
@@ -172,13 +172,17 @@ fn handle_scan_text(params: &serde_json::Value) -> serde_json::Value {
     };
 
     let result = (|| -> Result<serde_json::Value> {
-        let config_manager = ConfigManager::new(None)?;
-        let config = config_manager.load()?;
-        let client =
-            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
+        // Project config is OPTIONAL here: it only contributes a project_id.
+        // Requiring it meant scan_text failed with "not initialized" even
+        // though global credentials were perfectly sufficient.
+        let config = ConfigManager::new(None).ok().and_then(|cm| cm.load().ok());
+        // Resolve via the shared precedence (env > project > global) and the
+        // key-exfiltration guard rather than reading project config directly.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let mut body = serde_json::json!({ "content": text, "type": "prompt" });
-        if let Some(pid) = resolve_project_id(&config) {
+        if let Some(pid) = resolve_project_id(config.as_ref()) {
             body["project_id"] = serde_json::Value::String(pid);
         }
 
@@ -307,13 +311,17 @@ fn handle_redact(params: &serde_json::Value) -> serde_json::Value {
     };
 
     let result = (|| -> Result<serde_json::Value> {
-        let config_manager = ConfigManager::new(None)?;
-        let config = config_manager.load()?;
-        let client =
-            PromptGuardClient::new(config.api_key.clone(), Some(config.proxy_url.clone()))?;
+        // Project config is OPTIONAL here: it only contributes a project_id.
+        // Requiring it meant redact failed with "not initialized" even
+        // though global credentials were perfectly sufficient.
+        let config = ConfigManager::new(None).ok().and_then(|cm| cm.load().ok());
+        // Resolve via the shared precedence (env > project > global) and the
+        // key-exfiltration guard rather than reading project config directly.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         let mut body = serde_json::json!({ "content": text });
-        if let Some(pid) = resolve_project_id(&config) {
+        if let Some(pid) = resolve_project_id(config.as_ref()) {
             body["project_id"] = serde_json::Value::String(pid);
         }
 
@@ -338,7 +346,11 @@ fn handle_status(_params: &serde_json::Value) -> serde_json::Value {
         let config_manager = ConfigManager::new(None)?;
         let config = config_manager.load()?;
 
-        let key_type = if config.api_key.starts_with("pg_live_") {
+        // Report the effective credential/base URL (env > project > global,
+        // with the exfiltration guard) rather than the raw project config.
+        let (api_key, base_url) = crate::auth::resolve_session()?;
+
+        let key_type = if api_key.starts_with("pg_live_") {
             "live"
         } else {
             "unknown"
@@ -347,7 +359,7 @@ fn handle_status(_params: &serde_json::Value) -> serde_json::Value {
         Ok(serde_json::json!({
             "initialized": true,
             "api_key_type": key_type,
-            "proxy_url": config.proxy_url,
+            "proxy_url": base_url,
             "providers": config.providers,
             "version": env!("CARGO_PKG_VERSION"),
         }))
@@ -391,6 +403,17 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
                 });
             }
 
+            // Validate against an authenticated endpoint before saving —
+            // don't claim "Authenticated successfully" for an unverified key.
+            let validation = PromptGuardClient::new(key.to_string(), None)
+                .and_then(|client| client.validate_credentials());
+            if let Err(e) = validation {
+                return serde_json::json!({
+                    "content": [{"type": "text", "text": format!("API key validation failed: {e}. The key was NOT saved.")}],
+                    "isError": true
+                });
+            }
+
             let result = (|| -> Result<()> {
                 let config_manager = ConfigManager::new(None)?;
 
@@ -426,14 +449,17 @@ fn handle_auth(params: &serde_json::Value) -> serde_json::Value {
 
 fn handle_logout(_params: &serde_json::Value) -> serde_json::Value {
     let result = (|| -> Result<()> {
+        // Remove both credential stores, matching the tool description:
+        // the project-local config AND the global credentials file.
         let config_manager = ConfigManager::new(None)?;
         config_manager.delete()?;
+        crate::auth::delete_credentials()?;
         Ok(())
     })();
 
     match result {
         Ok(()) => serde_json::json!({
-            "content": [{"type": "text", "text": "Logged out. Local PromptGuard configuration and API key have been removed."}]
+            "content": [{"type": "text", "text": "Logged out. Removed the project-local PromptGuard configuration (.promptguard.json) and the globally stored API key (~/.promptguard/credentials.json)."}]
         }),
         Err(e) => serde_json::json!({
             "content": [{"type": "text", "text": format!("Logout failed: {e}")}],
@@ -465,15 +491,9 @@ fn handle_request(request: &JsonRpcRequest) -> JsonRpcResponse {
             }),
         ),
 
-        "notifications/initialized"
-        | "notifications/cancelled"
-        | "notifications/roots/list_changed" => {
-            if request.id.is_none() {
-                return JsonRpcResponse::success(serde_json::Value::Null, serde_json::json!(null));
-            }
-            JsonRpcResponse::success(id, serde_json::json!(null))
-        },
-
+        // Notifications (requests without an id) never reach this function:
+        // `execute` drops them before dispatch, as JSON-RPC notifications
+        // expect no response.
         "ping" => JsonRpcResponse::success(id, serde_json::json!({})),
 
         "tools/list" => JsonRpcResponse::success(id, tool_definitions()),

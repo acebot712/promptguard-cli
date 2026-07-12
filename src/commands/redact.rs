@@ -4,7 +4,7 @@
 //! sensitive information like emails, phone numbers, SSNs, etc.
 
 use crate::api::PromptGuardClient;
-use crate::auth::{resolve_api_key, resolve_base_url};
+use crate::auth::resolve_session;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use serde::{Deserialize, Serialize};
@@ -38,12 +38,7 @@ impl RedactCommand {
         let content = if let Some(ref text) = self.text {
             text.clone()
         } else if let Some(ref file_path) = self.file {
-            fs::read_to_string(file_path).map_err(|e| {
-                PromptGuardError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!("Failed to read file '{file_path}': {e}"),
-                ))
-            })?
+            super::read_file_friendly(file_path)?
         } else {
             return Err(PromptGuardError::Custom(
                 "Either --text or --file must be provided".to_string(),
@@ -52,14 +47,13 @@ impl RedactCommand {
 
         // Resolve credentials from env var, project config, or global login —
         // this command works without a project being initialized.
-        let api_key = resolve_api_key()?;
-        let base_url = resolve_base_url();
+        let (api_key, base_url) = resolve_session()?;
 
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         if !self.json {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
             Output::section("PII Redaction", "🔒");

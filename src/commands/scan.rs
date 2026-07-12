@@ -1,5 +1,5 @@
 use crate::api::PromptGuardClient;
-use crate::auth::{resolve_api_key, resolve_base_url};
+use crate::auth::resolve_session;
 use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
@@ -7,7 +7,6 @@ use crate::scanner::FileScanner;
 use crate::types::{DetectionInstance, Provider};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
 
 /// Response from the /security/scan endpoint.
@@ -28,6 +27,11 @@ pub struct SecurityScanResponse {
     pub processing_time_ms: Option<f64>,
 }
 
+/// Exit code for a clean scan (content allowed / no SDK findings).
+pub const EXIT_CLEAN: i32 = 0;
+/// Exit code when content is blocked or SDK usage is found.
+pub const EXIT_FINDINGS: i32 = 2;
+
 pub struct ScanCommand {
     pub provider: Option<String>,
     pub json: bool,
@@ -38,7 +42,9 @@ pub struct ScanCommand {
 }
 
 impl ScanCommand {
-    pub fn execute(&self) -> Result<()> {
+    /// Returns the process exit code: 0 = allow/clean, 2 = block/findings.
+    /// Errors map to exit code 1 in main.
+    pub fn execute(&self) -> Result<i32> {
         // If --text or --file is provided, do an API security scan instead of local SDK detection
         if self.text.is_some() || self.file.is_some() {
             return self.execute_api_scan();
@@ -49,16 +55,11 @@ impl ScanCommand {
     }
 
     /// Scan text or file content for security threats via the backend API
-    fn execute_api_scan(&self) -> Result<()> {
+    fn execute_api_scan(&self) -> Result<i32> {
         let content = if let Some(ref text) = self.text {
             text.clone()
         } else if let Some(ref file_path) = self.file {
-            fs::read_to_string(file_path).map_err(|e| {
-                PromptGuardError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!("Failed to read file '{file_path}': {e}"),
-                ))
-            })?
+            super::read_file_friendly(file_path)?
         } else {
             return Err(PromptGuardError::Custom(
                 "Either --text or --file must be provided".to_string(),
@@ -67,14 +68,13 @@ impl ScanCommand {
 
         // Resolve credentials from env var, project config, or global login —
         // this command works without a project being initialized.
-        let api_key = resolve_api_key()?;
-        let base_url = resolve_base_url();
+        let (api_key, base_url) = resolve_session()?;
 
         let client = PromptGuardClient::new(api_key, Some(base_url))?;
 
         if !self.json {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
             Output::section("Security Threat Scan", "🔍");
@@ -121,14 +121,18 @@ impl ScanCommand {
             }
         }
 
-        Ok(())
+        Ok(if response.blocked || response.decision == "block" {
+            EXIT_FINDINGS
+        } else {
+            EXIT_CLEAN
+        })
     }
 
     /// Local SDK detection scan (original behavior)
-    fn execute_local_scan(&self) -> Result<()> {
+    fn execute_local_scan(&self) -> Result<i32> {
         if !self.json {
             Output::header(&format!(
-                "🛡️  PromptGuard CLI v{}",
+                "🛡️ PromptGuard CLI v{}",
                 env!("CARGO_PKG_VERSION")
             ));
             Output::section("LLM SDK Detection Report", "📊");
@@ -166,7 +170,11 @@ impl ScanCommand {
             self.print_human(&detection_results, &root_path, files.len())?;
         }
 
-        Ok(())
+        Ok(if detection_results.is_empty() {
+            EXIT_CLEAN
+        } else {
+            EXIT_FINDINGS
+        })
     }
 
     fn print_json(

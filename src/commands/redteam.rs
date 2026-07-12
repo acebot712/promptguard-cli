@@ -7,6 +7,13 @@ use crate::api::PromptGuardClient;
 use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+/// The autonomous agent runs an LLM-powered mutation loop server-side and
+/// routinely takes minutes; the default 30s request timeout all but
+/// guaranteed a client-side timeout (and, before retries were restricted to
+/// connect errors, a timeout-retry storm of duplicate agent runs).
+const AUTONOMOUS_TIMEOUT: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RedTeamTestResult {
@@ -87,22 +94,28 @@ impl RedTeamCommand {
     pub fn execute(self) -> Result<()> {
         println!("🔴 PromptGuard Red Team - Adversarial Security Testing\n");
 
-        // Get API key from config or argument
-        let api_key = if let Some(key) = &self.api_key {
-            key.clone()
+        // --target-url is used as the API base URL, and every request
+        // attaches the PromptGuard API key. Never send that key to an
+        // arbitrary host: require HTTPS (or loopback) and refuse hosts other
+        // than the configured/default PromptGuard API host. The red team
+        // endpoints are authenticated PromptGuard endpoints, so a keyless
+        // request to a foreign host could not work anyway.
+        if let Some(ref target) = self.target_url {
+            Self::validate_target_url(target)?;
+        }
+
+        // Resolve credentials through the shared precedence (env > project >
+        // global) and the key-exfiltration guard, unless the caller passed an
+        // explicit --api-key ('-' reads the key from stdin, like init/login).
+        // --target-url always overrides the resolved base URL (and is
+        // separately restricted by validate_target_url above).
+        let (api_key, base_url) = if let Some(key) = &self.api_key {
+            (super::resolve_api_key_flag(key)?, self.target_url.clone())
         } else {
-            ConfigManager::new(None)
-                .ok()
-                .and_then(|cm| cm.load().ok())
-                .map(|c| c.api_key)
-                .ok_or_else(|| {
-                    PromptGuardError::Config(
-                        "API key required. Run 'promptguard init' or pass --api-key".to_string(),
-                    )
-                })?
+            let (key, resolved_base) = crate::auth::resolve_session()?;
+            (key, self.target_url.clone().or(Some(resolved_base)))
         };
 
-        let base_url = self.target_url.clone();
         let client = PromptGuardClient::new(api_key, base_url)
             .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
 
@@ -114,6 +127,58 @@ impl RedTeamCommand {
             self.run_single_test(&client, test_name)?;
         } else {
             self.run_all_tests(&client)?;
+        }
+
+        Ok(())
+    }
+
+    /// Refuse `--target-url` values that would leak the `PromptGuard` API
+    /// key: non-HTTPS transports (except loopback) and hosts other than the
+    /// configured or default `PromptGuard` API host.
+    fn validate_target_url(target: &str) -> Result<()> {
+        let parsed = url::Url::parse(target).map_err(|e| {
+            PromptGuardError::Config(format!("Invalid --target-url '{target}': {e}"))
+        })?;
+
+        let host = parsed
+            .host_str()
+            .ok_or_else(|| {
+                PromptGuardError::Config(format!("Invalid --target-url '{target}': missing host"))
+            })?
+            .to_string();
+
+        let is_loopback = crate::config::is_loopback_host(&parsed);
+
+        if parsed.scheme() != "https" && !is_loopback {
+            return Err(PromptGuardError::Config(format!(
+                "--target-url must use HTTPS (got '{target}'). The PromptGuard API key \
+                 is sent with every request and must not travel over plaintext HTTP."
+            )));
+        }
+
+        if is_loopback {
+            return Ok(());
+        }
+
+        // Allowed remote hosts: the default API host and, if configured, the
+        // host of this project's proxy_url.
+        let mut allowed: Vec<String> = vec!["api.promptguard.co".to_string()];
+        if let Ok(cfg) = ConfigManager::new(None).and_then(|cm| cm.load()) {
+            if let Ok(proxy) = url::Url::parse(&cfg.proxy_url) {
+                if let Some(h) = proxy.host_str() {
+                    allowed.push(h.to_string());
+                }
+            }
+        }
+
+        if !allowed.iter().any(|h| h == &host) {
+            return Err(PromptGuardError::Config(format!(
+                "Refusing to send the PromptGuard API key to '{host}'. \
+                 --target-url must point at the PromptGuard API ({}); the red team \
+                 endpoints are authenticated PromptGuard endpoints and cannot be \
+                 used against arbitrary hosts.",
+                allowed.join(" or ")
+            )));
         }
 
         Ok(())
@@ -153,7 +218,7 @@ impl RedTeamCommand {
             if self.verbose {
                 println!(
                     "    Prompt: {}...",
-                    &result.prompt[..result.prompt.len().min(60)]
+                    crate::output::Output::truncate_chars(&result.prompt, 60)
                 );
                 println!("    Reason: {}", result.reason);
                 if let Some(threat) = &result.threat_type {
@@ -219,7 +284,10 @@ impl RedTeamCommand {
             "Running custom adversarial test against preset '{}'...\n",
             self.preset
         );
-        println!("Prompt: {}...\n", &prompt[..prompt.len().min(100)]);
+        println!(
+            "Prompt: {}...\n",
+            crate::output::Output::truncate_chars(prompt, 100)
+        );
 
         let result: RedTeamTestResult = client
             .post(
@@ -259,12 +327,13 @@ impl RedTeamCommand {
         println!("This may take a while - the agent uses LLM-powered mutation\n");
 
         let report: AutonomousReport = client
-            .post(
+            .post_with_timeout(
                 "/internal/redteam/autonomous",
                 &AutonomousRequest {
                     budget: self.budget,
                     target_preset: self.preset.clone(),
                 },
+                AUTONOMOUS_TIMEOUT,
             )
             .map_err(|e| PromptGuardError::Api(format!("Autonomous agent failed: {e}")))?;
 
@@ -342,5 +411,24 @@ impl RedTeamCommand {
         }
 
         println!("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_url_allows_promptguard_and_loopback() {
+        assert!(RedTeamCommand::validate_target_url("https://api.promptguard.co/api/v1").is_ok());
+        assert!(RedTeamCommand::validate_target_url("http://localhost:8080/api/v1").is_ok());
+        assert!(RedTeamCommand::validate_target_url("http://127.0.0.1:3000").is_ok());
+    }
+
+    #[test]
+    fn target_url_refuses_plain_http_and_foreign_hosts() {
+        assert!(RedTeamCommand::validate_target_url("http://api.promptguard.co/api/v1").is_err());
+        assert!(RedTeamCommand::validate_target_url("https://evil.example.com/api/v1").is_err());
+        assert!(RedTeamCommand::validate_target_url("not a url").is_err());
     }
 }

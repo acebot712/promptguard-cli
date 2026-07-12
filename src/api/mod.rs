@@ -33,6 +33,11 @@ struct ErrorDetail {
     requests_limit: Option<u64>,
 }
 
+/// Percent-encode a value for safe use in a URL query string.
+pub fn encode_query_param(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
 pub struct PromptGuardClient {
     client: Client,
     base_url: String,
@@ -56,9 +61,20 @@ impl PromptGuardClient {
         })
     }
 
-    /// Check if an error is retryable (transient network issues, server errors)
+    /// Check if an error is retryable for an idempotent (GET) request
+    /// (transient network issues, server errors).
     fn is_retryable_error(error: &reqwest::Error) -> bool {
         error.is_timeout() || error.is_connect() || error.is_request()
+    }
+
+    /// Check if an error is retryable for a mutating (POST/PUT) request.
+    ///
+    /// Only connection errors are safe: the request never reached the
+    /// server. Timeouts and mid-request failures may have been processed
+    /// server-side, so retrying delivers the mutation at-least-once
+    /// (duplicated scans, redactions, red-team runs, ...).
+    fn is_retryable_mutation_error(error: &reqwest::Error) -> bool {
+        error.is_connect()
     }
 
     /// Check if an HTTP status code is retryable.
@@ -77,8 +93,22 @@ impl PromptGuardClient {
         endpoint: &str,
         body: Option<serde_json::Value>,
     ) -> Result<T> {
+        self.request_with_timeout(method, endpoint, body, None)
+    }
+
+    #[allow(clippy::needless_pass_by_value)]
+    fn request_with_timeout<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &reqwest::Method,
+        endpoint: &str,
+        body: Option<serde_json::Value>,
+        timeout: Option<Duration>,
+    ) -> Result<T> {
         let url = format!("{}{}", self.base_url, endpoint);
         let mut last_error: Option<PromptGuardError> = None;
+        // Only GETs are idempotent in this API; mutating verbs get the
+        // conservative retry policy (see is_retryable_mutation_error).
+        let idempotent = *method == reqwest::Method::GET;
 
         for attempt in 0..=MAX_RETRIES {
             if attempt > 0 {
@@ -100,6 +130,10 @@ impl PromptGuardClient {
                 request = request.json(body);
             }
 
+            if let Some(timeout) = timeout {
+                request = request.timeout(timeout);
+            }
+
             match request.send() {
                 Ok(response) => {
                     let status = response.status();
@@ -110,8 +144,10 @@ impl PromptGuardClient {
                         });
                     }
 
-                    // Check if we should retry this status code
-                    if Self::is_retryable_status(status) && attempt < MAX_RETRIES {
+                    // Check if we should retry this status code. Retrying a
+                    // status is only safe for idempotent requests: a 502/504
+                    // response does not prove the upstream skipped the work.
+                    if idempotent && Self::is_retryable_status(status) && attempt < MAX_RETRIES {
                         last_error = Some(PromptGuardError::Api(format!(
                             "Server returned {status}, retrying..."
                         )));
@@ -170,7 +206,12 @@ impl PromptGuardClient {
                     )));
                 },
                 Err(e) => {
-                    if Self::is_retryable_error(&e) && attempt < MAX_RETRIES {
+                    let retryable = if idempotent {
+                        Self::is_retryable_error(&e)
+                    } else {
+                        Self::is_retryable_mutation_error(&e)
+                    };
+                    if retryable && attempt < MAX_RETRIES {
                         last_error = Some(PromptGuardError::Api(format!(
                             "Request failed: {e}, retrying..."
                         )));
@@ -230,6 +271,27 @@ impl PromptGuardClient {
                 serde_json::to_value(body)
                     .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
             ),
+        )
+    }
+
+    /// POST with a per-request timeout override, for endpoints whose work
+    /// legitimately exceeds the default request timeout (e.g. the
+    /// autonomous red-team agent, which runs an LLM-powered loop
+    /// server-side).
+    pub fn post_with_timeout<T: serde::de::DeserializeOwned, B: serde::Serialize>(
+        &self,
+        endpoint: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T> {
+        self.request_with_timeout(
+            &reqwest::Method::POST,
+            endpoint,
+            Some(
+                serde_json::to_value(body)
+                    .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
+            ),
+            Some(timeout),
         )
     }
 

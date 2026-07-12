@@ -1,17 +1,20 @@
 use crate::analyzer::EnvScanner;
+use crate::backup::BackupManager;
 use crate::config::ConfigManager;
-use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
 use crate::output::Output;
 use crate::scanner::FileScanner;
 use crate::shim::{ShimGenerator, ShimInjector};
-use crate::transformer;
 use crate::types::{Language, Provider};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 pub struct EnableCommand {
     pub runtime: bool,
+    /// Skip the confirmation prompt. Required for non-interactive callers —
+    /// e.g. the VS Code extension spawns the CLI with piped stdin that never
+    /// delivers input.
+    pub yes: bool,
 }
 
 impl EnableCommand {
@@ -36,7 +39,7 @@ impl EnableCommand {
 
         // Determine mode
         let mode = if self.runtime {
-            "Runtime Shim Mode (100% Coverage)"
+            "Runtime Shim Mode"
         } else {
             "Static Transform Mode"
         };
@@ -48,13 +51,13 @@ impl EnableCommand {
 
         if self.runtime {
             println!("\nRuntime mode provides:");
-            println!("  ✓ 100% coverage of all SDK calls");
+            println!("  ✓ Intercepts the patched SDK client classes (sync and async)");
             println!("  ✓ Catches dynamic URL construction");
             println!("  ✓ Works with environment variables");
             println!("  ✓ No code modification needed");
         }
 
-        if !Output::confirm("Continue?", true)? {
+        if !self.yes && !Output::confirm("Continue?", true)? {
             return Ok(());
         }
 
@@ -127,12 +130,7 @@ impl EnableCommand {
             ));
         }
 
-        let generator = ShimGenerator::new(
-            root_path,
-            config.proxy_url.clone(),
-            config.env_var_name.clone(),
-            providers.clone(),
-        );
+        let generator = ShimGenerator::new(root_path, config.proxy_url.clone(), providers.clone());
 
         let languages: Vec<Language> = detected_languages.into_iter().collect();
         let shim_files = generator.generate_shims(&languages)?;
@@ -194,13 +192,31 @@ impl EnableCommand {
         // Update config
         config.enabled = true;
         config.runtime_mode = true;
+        config.metadata.last_applied = Some(chrono::Utc::now());
         config_manager.save(config)?;
 
         println!();
         Output::success("PromptGuard runtime mode enabled!");
         println!("\n  • Shim files generated: {}", shim_files.len());
         println!("  • Entry points injected: {total_injected}");
-        println!("\n  Coverage: 100% - All SDK calls will route through PromptGuard");
+
+        // Be honest about coverage: list exactly which client classes the
+        // generated shim patches instead of claiming "100% - All SDK calls".
+        let mut any_patched = false;
+        println!("\n  Coverage — calls constructed via these patched classes route");
+        println!("  through PromptGuard:");
+        for provider in &providers {
+            let classes = crate::shim::templates::get_python_patched_classes(*provider);
+            if !classes.is_empty() {
+                println!("    • {}: {}", provider.display_name(), classes.join(", "));
+                any_patched = true;
+            }
+        }
+        if !any_patched {
+            println!("    (none — no configured provider has a runtime shim yet)");
+        }
+        println!("  Other classes/SDKs are not intercepted by the runtime shim.");
+
         println!("\n  Shim directory: .promptguard/");
         println!("  (Safe to commit to version control)");
 
@@ -226,20 +242,7 @@ impl EnableCommand {
             .filter_map(|p| Provider::parse(p))
             .collect();
 
-        let mut detection_results: HashMap<Provider, Vec<PathBuf>> = HashMap::new();
-
-        for file_path in &files {
-            if let Ok(results) = detect_all_providers(file_path) {
-                for (provider, result) in results {
-                    if providers_to_check.contains(&provider) && !result.instances.is_empty() {
-                        detection_results
-                            .entry(provider)
-                            .or_default()
-                            .push(file_path.clone());
-                    }
-                }
-            }
-        }
+        let detection_results = super::detect_providers_in_files(&files, &providers_to_check);
 
         if detection_results.is_empty() {
             Output::warning("No SDK instances found to transform.");
@@ -248,47 +251,51 @@ impl EnableCommand {
 
         Output::section("Applying transformations...", "🔧");
 
-        let mut files_modified = 0;
+        // Mirror `apply`/`init`: back up each file BEFORE transforming it and
+        // record the backup in metadata.backups, so `disable` can restore
+        // exactly what PromptGuard created (create_backup never overwrites an
+        // existing .bak, so the original state is preserved).
+        let backup_manager = if config.backup_enabled {
+            Some(BackupManager::new(Some(config.backup_extension.clone())))
+        } else {
+            None
+        };
 
-        for (provider, files) in &detection_results {
-            let mut unique_files = files.clone();
-            unique_files.sort();
-            unique_files.dedup();
-
-            for file_path in unique_files {
-                match transformer::transform_file(
-                    &file_path,
-                    *provider,
-                    &config.proxy_url,
-                    &config.env_var_name,
-                ) {
-                    Ok(result) => {
-                        if result.modified {
-                            files_modified += 1;
-                            let rel_path = file_path.strip_prefix(root_path).unwrap_or(&file_path);
-                            Output::step(&format!("✓ {}", rel_path.display()));
-                        }
-                    },
-                    Err(e) => {
-                        Output::warning(&format!(
-                            "Failed to transform {}: {}",
-                            file_path.display(),
-                            e
-                        ));
-                    },
+        let outcome = super::run_transform_pipeline(
+            &detection_results,
+            root_path,
+            super::TransformMode::Apply(backup_manager.as_ref()),
+            &config.proxy_url,
+            &config.env_var_name,
+            |_provider, file_path, result| {
+                let rel_path = file_path.strip_prefix(root_path).unwrap_or(file_path);
+                if result.modified {
+                    Output::step(&format!("✓ {}", rel_path.display()));
+                } else if result.needs_manual_routing > 0 {
+                    Output::excluded(&format!(
+                        "{} (skipped: {} call site(s) pass dynamic arguments — route through PromptGuard manually)",
+                        rel_path.display(),
+                        result.needs_manual_routing
+                    ));
                 }
-            }
-        }
+            },
+        );
 
         // Update config
         config.enabled = true;
         config.runtime_mode = false;
+        for backup in outcome.backups_created {
+            if !config.metadata.backups.contains(&backup) {
+                config.metadata.backups.push(backup);
+            }
+        }
+        config.metadata.last_applied = Some(chrono::Utc::now());
         config_manager.save(config)?;
         Output::step("Updated configuration");
 
         println!();
         Output::success("PromptGuard enabled!");
-        println!("\n  • {files_modified} files modified");
+        println!("\n  • {} files modified", outcome.files_modified.len());
         println!("\nYour LLM requests will now go through PromptGuard.");
 
         Ok(())

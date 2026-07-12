@@ -17,7 +17,6 @@ const JAVASCRIPT_SHIM_FILENAME: &str = "promptguard-shim.js";
 pub struct ShimGenerator {
     project_root: PathBuf,
     proxy_url: String,
-    api_key_var: String,
     providers: Vec<Provider>,
 }
 
@@ -26,13 +25,11 @@ impl ShimGenerator {
     pub fn new(
         project_root: impl AsRef<Path>,
         proxy_url: String,
-        api_key_var: String,
         providers: Vec<Provider>,
     ) -> Self {
         Self {
             project_root: project_root.as_ref().to_path_buf(),
             proxy_url,
-            api_key_var,
             providers,
         }
     }
@@ -86,7 +83,6 @@ impl ShimGenerator {
         // Generate shim content from template
         let content = templates::PYTHON_SHIM_TEMPLATE
             .replace("{{PROXY_URL}}", &self.proxy_url)
-            .replace("{{API_KEY_VAR}}", &self.api_key_var)
             .replace("{{PROVIDER_PATCHES}}", &provider_patches)
             .replace("{{INSTALL_CALLS}}", &install_calls);
 
@@ -109,24 +105,35 @@ impl ShimGenerator {
         self.ensure_shim_dir()?;
 
         let mut provider_exports = String::new();
+        let mut export_names: Vec<&'static str> = Vec::new();
 
         for provider in &self.providers {
             provider_exports.push_str(templates::get_typescript_provider_export(*provider));
             provider_exports.push('\n');
+
+            if let Some(name) = templates::get_typescript_export_name(*provider) {
+                export_names.push(name);
+            }
         }
+
+        // Single CommonJS export at the top level. The provider blocks only
+        // assign local `let` bindings, so the file stays valid JavaScript
+        // (`export class` inside `try {}` is a syntax error).
+        let module_exports = format!("module.exports = {{ {} }};", export_names.join(", "));
 
         // Generate shim content from template
         let content = templates::TYPESCRIPT_SHIM_TEMPLATE
             .replace("{{PROXY_URL}}", &self.proxy_url)
-            .replace("{{API_KEY_VAR}}", &self.api_key_var)
-            .replace("{{PROVIDER_EXPORTS}}", &provider_exports);
+            .replace("{{PROVIDER_EXPORTS}}", &provider_exports)
+            .replace("{{MODULE_EXPORTS}}", &module_exports);
 
         // Write TypeScript shim file
         let ts_shim_path = self.typescript_shim_path();
         fs::write(&ts_shim_path, &content)?;
 
-        // Also create JavaScript version (same content, just .js extension)
-        // TypeScript can be used as JavaScript
+        // Also create the JavaScript version. The template is annotation-free
+        // CommonJS JavaScript (valid TypeScript too), so the same content
+        // works for both extensions.
         let js_shim_path = self.javascript_shim_path();
         fs::write(&js_shim_path, &content)?;
 
@@ -173,10 +180,21 @@ impl ShimGenerator {
     }
 
     /// Create .gitignore in shim directory
+    ///
+    /// The shim files themselves are safe to commit (routing logic only, no
+    /// secrets); ignore the runtime artifacts Python/Node create inside the
+    /// directory when the shims are imported.
     fn create_gitignore(&self) -> Result<()> {
         let gitignore_path = self.shim_dir().join(".gitignore");
-        let content =
-            "# PromptGuard shim directory\n# This directory is auto-generated - safe to commit\n";
+        let content = "\
+# PromptGuard shim directory
+# The shim files are auto-generated and safe to commit (no secrets).
+# Ignore runtime artifacts created when the shims are imported:
+__pycache__/
+*.pyc
+*.pyo
+node_modules/
+";
         fs::write(gitignore_path, content)?;
         Ok(())
     }
@@ -190,14 +208,17 @@ This directory contains auto-generated runtime interception code.
 
 ## What is this?
 
-The PromptGuard runtime shim ensures that **all** LLM SDK calls in your application
-automatically route through PromptGuard for security monitoring and protection.
+The PromptGuard runtime shim intercepts the patched LLM SDK client classes
+(sync and async) so their API calls automatically route through PromptGuard
+for security monitoring and protection.
 
-This provides 100% coverage, even for:
+For those patched classes, interception works even with:
 - Dynamically constructed URLs
 - Configuration loaded from external sources
 - Environment variables
 - SDKs initialized in third-party libraries
+
+Classes and SDKs that are not patched are NOT intercepted.
 
 ## How it works
 
@@ -247,6 +268,11 @@ only routing logic to ensure API calls use the PromptGuard proxy.
     }
 
     /// Check if shims are currently installed
+    ///
+    /// (Used by the library API and tests; the CLI binary itself now checks
+    /// `shim_dir().exists()` so it also cleans up partially-generated
+    /// directories, hence the allow.)
+    #[allow(dead_code)]
     pub fn shims_installed(&self) -> bool {
         let shim_dir = self.shim_dir();
         shim_dir.exists()
@@ -266,7 +292,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
 
@@ -279,7 +304,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI, Provider::Anthropic],
         );
 
@@ -292,13 +316,40 @@ mod tests {
         assert!(content.contains("https://api.promptguard.co/api/v1"));
     }
 
+    /// The Python shim must patch the async client classes too — async
+    /// clients used to bypass the shim entirely while `enable --runtime`
+    /// claimed full coverage.
+    #[test]
+    fn test_python_shim_patches_async_clients() {
+        let temp_dir = TempDir::new().unwrap();
+        let generator = ShimGenerator::new(
+            temp_dir.path(),
+            "https://api.promptguard.co/api/v1".to_string(),
+            vec![
+                Provider::OpenAI,
+                Provider::Anthropic,
+                Provider::Cohere,
+                Provider::HuggingFace,
+            ],
+        );
+
+        let shim_path = generator.generate_python_shim().unwrap();
+        let content = fs::read_to_string(&shim_path).unwrap();
+
+        assert!(content.contains("openai.AsyncOpenAI = PatchedAsyncOpenAI"));
+        assert!(content.contains("anthropic.AsyncAnthropic = PatchedAsyncAnthropic"));
+        assert!(content.contains("cohere.AsyncClient = PatchedAsyncCohereClient"));
+        assert!(
+            content.contains("huggingface_hub.AsyncInferenceClient = PatchedAsyncInferenceClient")
+        );
+    }
+
     #[test]
     fn test_typescript_shim_generation() {
         let temp_dir = TempDir::new().unwrap();
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
 
@@ -306,7 +357,8 @@ mod tests {
         assert!(shim_path.exists());
 
         let content = fs::read_to_string(&shim_path).unwrap();
-        assert!(content.contains("export class OpenAI"));
+        assert!(content.contains("class OpenAI"));
+        assert!(content.contains("module.exports = { OpenAI }"));
         assert!(content.contains("https://api.promptguard.co/api/v1"));
     }
 
@@ -316,7 +368,6 @@ mod tests {
         let generator = ShimGenerator::new(
             temp_dir.path(),
             "https://api.promptguard.co/api/v1".to_string(),
-            "PROMPTGUARD_API_KEY".to_string(),
             vec![Provider::OpenAI],
         );
 

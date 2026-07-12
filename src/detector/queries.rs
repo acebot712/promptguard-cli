@@ -5,9 +5,14 @@
 /// Gemini and Bedrock have special patterns.
 use crate::detector::registry::ProviderInfo;
 use crate::types::Provider;
+use std::fmt::Write;
 
 pub fn get_typescript_query(provider: Provider) -> String {
-    let info = ProviderInfo::get(provider);
+    // An unregistered provider yields an empty query (matches nothing)
+    // rather than silently borrowing another provider's class name.
+    let Some(info) = ProviderInfo::get(provider) else {
+        return String::new();
+    };
     format!(
         r#"
             (new_expression
@@ -20,51 +25,143 @@ pub fn get_typescript_query(provider: Provider) -> String {
     )
 }
 
-fn standard_python_detection_query(class_name: &str) -> String {
-    format!(
-        r#"
-            [
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "{class_name}")
-                    arguments: (argument_list) @args
-                ) @call_expr
+/// Detection query for the standard providers: bare-identifier and
+/// attribute-form constructor calls, for the sync class name AND the SDK's
+/// async client class (`AsyncOpenAI`, `AsyncAnthropic`, `AsyncGroq`,
+/// `AsyncInferenceClient`) when the registry declares one. Async clients
+/// used to be invisible to detection entirely.
+///
+/// NOTE: the patterns are emitted as SEPARATE top-level query patterns, not
+/// one `[...]` alternation. Branches of a top-level alternation share a
+/// single pattern index, so their `#eq?` predicates accumulate — a capture
+/// name reused across branches with different expected values (`@function`
+/// = `"OpenAI"` vs `"AsyncOpenAI"`) could then never match anything.
+fn standard_python_detection_query(info: &ProviderInfo) -> String {
+    let mut patterns = String::new();
 
-                (call
-                    function: (attribute
-                        attribute: (identifier) @class
-                        (#eq? @class "{class_name}")
-                    )
-                    arguments: (argument_list) @args
-                ) @call_expr
-            ]
+    for class_name in [info.py_class_name, info.py_async_class_name] {
+        if class_name.is_empty() {
+            continue;
+        }
+        let _ = write!(
+            patterns,
+            r#"
+            (call
+                function: (identifier) @function
+                (#eq? @function "{class_name}")
+                arguments: (argument_list) @args
+            ) @call_expr
+
+            (call
+                function: (attribute
+                    attribute: (identifier) @class
+                    (#eq? @class "{class_name}")
+                )
+                arguments: (argument_list) @args
+            ) @call_expr
         "#
-    )
+        );
+    }
+
+    patterns
 }
 
-fn standard_python_transform_query(class_name: &str) -> String {
-    format!(
-        r#"
+/// Transform query for the standard providers: bare-identifier calls
+/// (`OpenAI(...)`) plus module-qualified attribute calls constrained to the
+/// SDK's own module (`openai.OpenAI(...)`).
+///
+/// The detection query matches ANY attribute-form call ending in the class
+/// name, but the transformer must only rewrite calls it is sure about:
+/// an unconstrained attribute pattern would rewrite `mymod.OpenAI(...)`
+/// (some unrelated class that happens to share the name). Previously the
+/// transform query had no attribute pattern at all, so detected
+/// `openai.OpenAI(...)` calls were silently reported "(no changes needed)"
+/// and never routed through the proxy.
+fn standard_python_transform_query(info: &ProviderInfo) -> String {
+    let module_name = info.py_module_name;
+    let mut patterns = String::new();
+
+    // Both the sync class and (when the registry declares one) the async
+    // client class accept the same base_url= keyword, so both are
+    // transformable. Separate top-level patterns, NOT one alternation —
+    // see standard_python_detection_query for why.
+    for class_name in [info.py_class_name, info.py_async_class_name] {
+        if class_name.is_empty() {
+            continue;
+        }
+
+        let _ = write!(
+            patterns,
+            r#"
             (call
                 function: (identifier) @function
                 (#eq? @function "{class_name}")
                 arguments: (argument_list) @args
             ) @call_expr
         "#
-    )
+        );
+
+        if !module_name.is_empty() {
+            let _ = write!(
+                patterns,
+                r#"
+            (call
+                function: (attribute
+                    object: (identifier) @module
+                    (#eq? @module "{module_name}")
+                    attribute: (identifier) @class
+                    (#eq? @class "{class_name}")
+                )
+                arguments: (argument_list) @args
+            ) @call_expr
+        "#
+            );
+        }
+    }
+
+    patterns
+}
+
+/// Module-constrained detection/transform patterns for a provider whose class
+/// name is too generic to match bare (e.g. Cohere's `Client` / `ClientV2`).
+/// Matches only `module.Class(...)` attribute calls, never a bare `Class(...)`
+/// — mirroring the Gemini handling, which is why a bare `from cohere import
+/// Client; Client(...)` is intentionally not matched.
+fn module_qualified_query(module_name: &str, class_names: &[&str]) -> String {
+    let mut patterns = String::new();
+    for class_name in class_names {
+        let _ = write!(
+            patterns,
+            r#"
+            (call
+                function: (attribute
+                    object: (identifier) @module
+                    (#eq? @module "{module_name}")
+                    attribute: (identifier) @class
+                    (#eq? @class "{class_name}")
+                )
+                arguments: (argument_list) @args
+            ) @call_expr
+        "#
+        );
+    }
+    patterns
 }
 
 pub fn get_python_detection_query(provider: Provider) -> String {
-    let info = ProviderInfo::get(provider);
     match provider {
+        // Cohere's real Python classes are `cohere.Client` and
+        // `cohere.ClientV2` (there is NO `CohereClient`). Both are matched
+        // module-qualified only: a bare `Client(...)` is far too generic
+        // (database clients, HTTP clients, ...). This aligns static detection
+        // with the runtime shim, which patches `cohere.Client`.
+        Provider::Cohere => module_qualified_query("cohere", &["Client", "ClientV2"]),
+        // Match genai.Client(...) and google.genai.Client(...) only. A bare
+        // Client(...) alternative used to be included, but "Client" is far
+        // too generic an identifier (database clients, HTTP clients, ...)
+        // and produced false positives on unrelated code.
         Provider::Gemini => r#"
             [
-                (call
-                    function: (identifier) @function
-                    (#eq? @function "Client")
-                    arguments: (argument_list) @args
-                ) @call_expr
-
                 (call
                     function: (attribute
                         object: (identifier) @module
@@ -74,9 +171,26 @@ pub fn get_python_detection_query(provider: Provider) -> String {
                     )
                     arguments: (argument_list) @args
                 ) @call_expr
+
+                (call
+                    function: (attribute
+                        object: (attribute
+                            attribute: (identifier) @submodule
+                            (#eq? @submodule "genai")
+                        )
+                        attribute: (identifier) @class
+                        (#eq? @class "Client")
+                    )
+                    arguments: (argument_list) @args
+                ) @call_expr
             ]
         "#
         .to_string(),
+        // boto3.client(...) constructs clients for EVERY AWS service; only
+        // "bedrock-runtime" clients are LLM-related. Match the service name
+        // as the first positional string argument or as service_name=...,
+        // otherwise boto3.client("s3") etc. would be reported (and,
+        // previously, corrupted by the transformer).
         Provider::Bedrock => r#"
             [
                 (call
@@ -86,42 +200,58 @@ pub fn get_python_detection_query(provider: Provider) -> String {
                         attribute: (identifier) @method
                         (#eq? @method "client")
                     )
-                    arguments: (argument_list) @args
+                    arguments: (argument_list
+                        .
+                        (string) @service
+                    ) @args
+                    (#match? @service "bedrock-runtime")
+                ) @call_expr
+
+                (call
+                    function: (attribute
+                        object: (identifier) @module
+                        (#eq? @module "boto3")
+                        attribute: (identifier) @method
+                        (#eq? @method "client")
+                    )
+                    arguments: (argument_list
+                        (keyword_argument
+                            name: (identifier) @kwname
+                            (#eq? @kwname "service_name")
+                            value: (string) @service
+                        )
+                    ) @args
+                    (#match? @service "bedrock-runtime")
                 ) @call_expr
             ]
         "#
         .to_string(),
-        _ => standard_python_detection_query(info.py_class_name),
+        _ => ProviderInfo::get(provider)
+            .map(standard_python_detection_query)
+            .unwrap_or_default(),
     }
 }
 
 pub fn get_python_transform_query(provider: Provider) -> String {
-    let info = ProviderInfo::get(provider);
     match provider {
-        Provider::Gemini => r#"
-            (call
-                function: (attribute
-                    object: (identifier) @module
-                    (#eq? @module "genai")
-                    attribute: (identifier) @class
-                    (#eq? @class "Client")
-                )
-                arguments: (argument_list) @args
-            ) @call_expr
-        "#
-        .to_string(),
-        Provider::Bedrock => r#"
-            (call
-                function: (attribute
-                    object: (identifier) @module
-                    (#eq? @module "boto3")
-                    attribute: (identifier) @method
-                    (#eq? @method "client")
-                )
-                arguments: (argument_list) @args
-            ) @call_expr
-        "#
-        .to_string(),
-        _ => standard_python_transform_query(info.py_class_name),
+        // Cohere's `cohere.Client` / `cohere.ClientV2` BOTH accept a valid
+        // `base_url=` kwarg (verified against cohere 7.x), so — unlike Gemini
+        // — Cohere is transformable, not detect-only. Same module-qualified
+        // patterns as detection.
+        Provider::Cohere => module_qualified_query("cohere", &["Client", "ClientV2"]),
+        // Gemini and Bedrock are both DETECT-ONLY — an empty query compiles
+        // and matches nothing, so the transformer is a no-op:
+        //  * Gemini: `genai.Client.__init__` has no `base_url` param (injecting
+        //    one raised TypeError at runtime), and the TS SDK reads its base
+        //    URL from `httpOptions.baseUrl` (a top-level `baseURL` is silently
+        //    ignored). Runtime coverage is honestly absent (see templates.rs);
+        //    use proxy mode (point httpOptions.baseUrl at the PromptGuard proxy).
+        //  * Bedrock: boto3 clients authenticate via AWS credentials/SigV4, and
+        //    boto3.client() accepts neither api_key= nor base_url= — injecting
+        //    them raised TypeError at runtime.
+        Provider::Gemini | Provider::Bedrock => String::new(),
+        _ => ProviderInfo::get(provider)
+            .map(standard_python_transform_query)
+            .unwrap_or_default(),
     }
 }

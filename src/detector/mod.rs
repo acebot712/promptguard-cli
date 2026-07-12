@@ -1,49 +1,20 @@
 mod core;
-mod python;
 pub mod queries;
 pub mod registry;
-mod typescript;
 
-pub use python::PythonDetector;
+pub use core::{python_args_have_base_url, typescript_object_has_base_url, Grammar};
 pub use queries::{get_python_transform_query, get_typescript_query};
-pub use registry::{ProviderInfo, PROVIDERS};
-pub use typescript::TypeScriptDetector;
+pub use registry::ProviderInfo;
 
 use crate::error::Result;
-use crate::types::{DetectionResult, Language, Provider};
+use crate::types::{DetectionResult, Provider};
 use std::path::Path;
 
-pub trait Detector {
-    fn detect_in_file(&self, file_path: &Path, provider: Provider) -> Result<DetectionResult>;
-}
-
+/// Detect all providers' SDK usage in a single file.
+///
+/// Parses the file once (with a grammar chosen by extension — TSX for
+/// `.tsx`/`.jsx`) and runs every provider's cached, pre-compiled query
+/// against the shared tree.
 pub fn detect_all_providers(file_path: &Path) -> Result<Vec<(Provider, DetectionResult)>> {
-    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-    let language = Language::from_extension(ext);
-    let Some(language) = language else {
-        return Ok(Vec::new());
-    };
-
-    let mut results = Vec::new();
-
-    for provider_info in PROVIDERS {
-        let provider = provider_info.provider;
-        let result = match language {
-            Language::TypeScript | Language::JavaScript => {
-                let detector = TypeScriptDetector::new();
-                detector.detect_in_file(file_path, provider)?
-            },
-            Language::Python => {
-                let detector = PythonDetector::new();
-                detector.detect_in_file(file_path, provider)?
-            },
-        };
-
-        if !result.instances.is_empty() {
-            results.push((provider, result));
-        }
-    }
-
-    Ok(results)
+    core::detect_all_providers_in_file(file_path)
 }

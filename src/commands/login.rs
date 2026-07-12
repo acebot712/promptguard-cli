@@ -12,9 +12,11 @@ pub struct LoginCommand {
 impl LoginCommand {
     pub fn execute(&self) -> Result<()> {
         let api_key = if let Some(key) = &self.api_key {
-            key.clone()
+            // `--api-key -` reads the key from stdin
+            super::resolve_api_key_flag(key)?
         } else {
             Output::info("Log in to PromptGuard. Get your API key at https://app.promptguard.co");
+            Output::info("Note: input is not hidden — prefer 'promptguard login --api-key -' piped from a secret manager if others can see your terminal.");
             Output::input("API key")?
         };
 
@@ -51,7 +53,10 @@ impl LoginCommand {
                         "Check your API key at https://app.promptguard.co/settings/api-keys",
                     );
                 }
-                return Err(PromptGuardError::Auth(msg));
+                // The styled error above is the user-facing report; return the
+                // sentinel so main() exits non-zero without re-printing it
+                // (matches the init key-rejection path).
+                return Err(PromptGuardError::AlreadyReported);
             },
             // Network/other failure: the key may be fine but we can't reach the
             // API. Offer to save with an explicit warning; don't claim "Logged in".

@@ -10,12 +10,15 @@ use crate::types::{Language, Provider, TransformResult};
 use std::path::Path;
 
 pub trait Transformer {
+    /// Transform `file_path` in place. With `dry_run` the full transformation
+    /// is computed (so `modified` is accurate) but the file is never written.
     fn transform_file(
         &self,
         file_path: &Path,
         provider: Provider,
         proxy_url: &str,
         api_key_env_var: &str,
+        dry_run: bool,
     ) -> Result<TransformResult>;
 }
 
@@ -24,12 +27,16 @@ pub fn transform_file(
     provider: Provider,
     proxy_url: &str,
     api_key_env_var: &str,
+    dry_run: bool,
 ) -> Result<TransformResult> {
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
     let language = Language::from_extension(ext);
     let Some(language) = language else {
-        return Ok(TransformResult { modified: false });
+        return Ok(TransformResult {
+            modified: false,
+            needs_manual_routing: 0,
+        });
     };
 
     let transformer: Box<dyn Transformer> = match language {
@@ -37,5 +44,5 @@ pub fn transform_file(
         Language::Python => Box::new(PythonTransformer::new()),
     };
 
-    transformer.transform_file(file_path, provider, proxy_url, api_key_env_var)
+    transformer.transform_file(file_path, provider, proxy_url, api_key_env_var, dry_run)
 }

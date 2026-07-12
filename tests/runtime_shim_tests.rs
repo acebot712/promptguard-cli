@@ -18,7 +18,6 @@ fn test_python_shim_generation() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI, Provider::Anthropic],
     );
 
@@ -70,7 +69,6 @@ fn test_typescript_shim_generation() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
 
@@ -85,9 +83,13 @@ fn test_typescript_shim_generation() {
     // Verify content
     let content = fs::read_to_string(&shim_path).expect("Failed to read shim file");
 
-    // Should contain OpenAI wrapper
+    // Should contain OpenAI wrapper and export it via CommonJS
     assert!(
-        content.contains("export class OpenAI"),
+        content.contains("class OpenAI"),
+        "Shim should define OpenAI wrapper"
+    );
+    assert!(
+        content.contains("module.exports = { OpenAI }"),
         "Shim should export OpenAI wrapper"
     );
 
@@ -108,6 +110,166 @@ fn test_typescript_shim_generation() {
     assert!(package_json.exists(), "package.json should exist");
 }
 
+/// Gate: the generated JS/TS shims must be syntactically valid.
+///
+/// Generates both shim variants (with every provider, including the
+/// comment-only ones) and validates them with `node --check` (JS syntax)
+/// and, when a `tsc` binary is available, `tsc --noEmit` for the .ts file.
+/// Skips silently if node is not installed (e.g. minimal build machines).
+#[test]
+fn test_generated_shims_are_syntactically_valid() {
+    use std::process::Command;
+
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+    let generator = ShimGenerator::new(
+        temp_dir.path(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec![
+            Provider::OpenAI,
+            Provider::Anthropic,
+            Provider::Cohere,
+            Provider::HuggingFace,
+            Provider::Gemini,
+            Provider::Groq,
+            Provider::Bedrock,
+        ],
+    );
+
+    generator
+        .generate_typescript_shim()
+        .expect("Failed to generate TS/JS shims");
+
+    let js_path = temp_dir
+        .path()
+        .join(".promptguard")
+        .join("promptguard-shim.js");
+    let ts_path = temp_dir
+        .path()
+        .join(".promptguard")
+        .join("promptguard-shim.ts");
+    assert!(js_path.exists(), "JS shim should exist");
+    assert!(ts_path.exists(), "TS shim should exist");
+
+    // node --check: parses the file as a CommonJS script without executing it
+    match Command::new("node").arg("--check").arg(&js_path).output() {
+        Ok(out) => {
+            assert!(
+                out.status.success(),
+                "node --check rejected generated JS shim:\n{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        },
+        Err(_) => {
+            eprintln!("node not found; skipping JS syntax validation");
+        },
+    }
+
+    // tsc --noEmit for the TypeScript variant (optional, when available)
+    match Command::new("tsc").arg("--noEmit").arg(&ts_path).output() {
+        Ok(out) => {
+            assert!(
+                out.status.success(),
+                "tsc --noEmit rejected generated TS shim:\n{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+        },
+        Err(_) => {
+            eprintln!("tsc not found; skipping TS validation");
+        },
+    }
+}
+
+/// Gate: the generated Python shim must be syntactically valid.
+///
+/// Mirrors `test_generated_shims_are_syntactically_valid` for Python:
+/// generates the shim for every single-provider set, a multi-provider set,
+/// and the all-provider set (including the comment-only placeholders), then
+/// validates each with `python3 -m py_compile`. Regression for the template
+/// indenting `{{INSTALL_CALLS}}`, which made every generated shim an
+/// `IndentationError` and crashed user apps at startup.
+/// Skips silently if python3 is not installed (e.g. minimal build machines).
+#[test]
+fn test_generated_python_shims_are_syntactically_valid() {
+    use std::process::Command;
+
+    let all_providers = [
+        Provider::OpenAI,
+        Provider::Anthropic,
+        Provider::Cohere,
+        Provider::HuggingFace,
+        Provider::Gemini,
+        Provider::Groq,
+        Provider::Bedrock,
+    ];
+
+    // Every single-provider combo, one multi-provider combo, and all providers.
+    let mut provider_sets: Vec<Vec<Provider>> = all_providers.iter().map(|p| vec![*p]).collect();
+    provider_sets.push(vec![
+        Provider::OpenAI,
+        Provider::Anthropic,
+        Provider::Cohere,
+    ]);
+    provider_sets.push(all_providers.to_vec());
+
+    for providers in provider_sets {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+
+        let generator = ShimGenerator::new(
+            temp_dir.path(),
+            "https://api.promptguard.co/api/v1".to_string(),
+            providers.clone(),
+        );
+
+        let shim_path = generator
+            .generate_python_shim()
+            .expect("Failed to generate Python shim");
+
+        // python3 -m py_compile: parses and byte-compiles without executing
+        let Ok(out) = Command::new("python3")
+            .args(["-m", "py_compile"])
+            .arg(&shim_path)
+            .output()
+        else {
+            eprintln!("python3 not found; skipping Python syntax validation");
+            return;
+        };
+        assert!(
+            out.status.success(),
+            "py_compile rejected generated Python shim for {providers:?}:\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+/// The Cohere runtime shim must patch the v2 clients too. `ClientV2` subclasses
+/// `Client`, but reassigning `cohere.Client` does not re-base an already-defined
+/// `ClientV2`, so a `ClientV2` instance would silently bypass the proxy unless
+/// it is patched explicitly. Regression for the static-vs-runtime coverage split.
+#[test]
+fn test_cohere_shim_patches_v2_clients() {
+    let temp_dir = TempDir::new().expect("Failed to create temp dir");
+    let generator = ShimGenerator::new(
+        temp_dir.path(),
+        "https://api.promptguard.co/api/v1".to_string(),
+        vec![Provider::Cohere],
+    );
+    let shim_path = generator
+        .generate_python_shim()
+        .expect("Failed to generate Python shim");
+    let content = fs::read_to_string(&shim_path).expect("Failed to read shim");
+
+    assert!(
+        content.contains("cohere.ClientV2 = PatchedCohereClientV2"),
+        "Cohere shim must patch ClientV2"
+    );
+    assert!(
+        content.contains("cohere.AsyncClientV2 = PatchedAsyncCohereClientV2"),
+        "Cohere shim must patch AsyncClientV2"
+    );
+}
+
 /// Test that multiple shims are generated for multi-language projects
 #[test]
 fn test_multi_language_shim_generation() {
@@ -116,7 +278,6 @@ fn test_multi_language_shim_generation() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI, Provider::Anthropic, Provider::Cohere],
     );
 
@@ -327,7 +488,6 @@ fn test_shim_cleanup() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
 
@@ -417,7 +577,6 @@ fn test_all_providers_in_shim() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         "https://api.promptguard.co/api/v1".to_string(),
-        "PROMPTGUARD_API_KEY".to_string(),
         all_providers.clone(),
     );
 
@@ -464,7 +623,6 @@ fn test_custom_proxy_url() {
     let generator = ShimGenerator::new(
         temp_dir.path(),
         custom_url.to_string(),
-        "MY_API_KEY".to_string(),
         vec![Provider::OpenAI],
     );
 
@@ -477,9 +635,5 @@ fn test_custom_proxy_url() {
     assert!(
         content.contains(custom_url),
         "Shim should use custom proxy URL"
-    );
-    assert!(
-        content.contains("MY_API_KEY"),
-        "Shim should use custom API key var"
     );
 }

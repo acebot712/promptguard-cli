@@ -152,54 +152,10 @@ fn test_redteam_presets() {
 // =============================================================================
 // UPDATE COMMAND TESTS - Version Checking
 // =============================================================================
-
-/// Test version parsing for update command
-#[test]
-fn test_version_comparison() {
-    // Helper function similar to what update command uses
-    fn parse_version(v: &str) -> Vec<u32> {
-        v.split('.').filter_map(|part| part.parse().ok()).collect()
-    }
-
-    fn is_newer(current: &str, latest: &str) -> bool {
-        let current_parts = parse_version(current);
-        let latest_parts = parse_version(latest);
-
-        for i in 0..3 {
-            let current_num = current_parts.get(i).copied().unwrap_or(0);
-            let latest_num = latest_parts.get(i).copied().unwrap_or(0);
-
-            match latest_num.cmp(&current_num) {
-                std::cmp::Ordering::Greater => return true,
-                std::cmp::Ordering::Less => return false,
-                std::cmp::Ordering::Equal => {},
-            }
-        }
-        false
-    }
-
-    // Test version comparisons
-    assert!(
-        is_newer("1.0.0", "1.1.0"),
-        "1.1.0 should be newer than 1.0.0"
-    );
-    assert!(
-        is_newer("1.0.0", "2.0.0"),
-        "2.0.0 should be newer than 1.0.0"
-    );
-    assert!(
-        is_newer("1.0.0", "1.0.1"),
-        "1.0.1 should be newer than 1.0.0"
-    );
-    assert!(
-        !is_newer("1.1.0", "1.0.0"),
-        "1.0.0 should not be newer than 1.1.0"
-    );
-    assert!(
-        !is_newer("1.0.0", "1.0.0"),
-        "Same version should not be newer"
-    );
-}
+// Version comparison is unit-tested against the REAL implementation in
+// src/commands/update.rs (mod tests), including the actual `cli-vX.Y.Z`
+// release-tag format. A previous test here reimplemented the algorithm and
+// therefore kept passing while the real function misparsed release tags.
 
 // =============================================================================
 // API CLIENT TESTS - HTTP Client Behavior

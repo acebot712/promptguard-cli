@@ -5,11 +5,9 @@
 //! not a new config system.
 
 use crate::api::PromptGuardClient;
-use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::fs;
 
 /// Wrapper for the guardrails API response.
 #[derive(Debug, Deserialize)]
@@ -41,21 +39,18 @@ pub struct PolicyCommand {
 
 impl PolicyCommand {
     pub fn execute(self) -> Result<()> {
-        let api_key = if let Some(key) = &self.api_key {
-            key.clone()
+        // Resolve credentials through the shared precedence (env > project >
+        // global) and the key-exfiltration guard, unless the caller passed an
+        // explicit --api-key ('-' reads the key from stdin, like init/login).
+        // An explicit --base-url always wins over the resolved base URL.
+        let (api_key, base_url) = if let Some(key) = &self.api_key {
+            (super::resolve_api_key_flag(key)?, self.base_url.clone())
         } else {
-            ConfigManager::new(None)
-                .ok()
-                .and_then(|cm| cm.load().ok())
-                .map(|c| c.api_key)
-                .ok_or_else(|| {
-                    PromptGuardError::Config(
-                        "API key required. Run 'promptguard init' or pass --api-key".to_string(),
-                    )
-                })?
+            let (key, resolved_base) = crate::auth::resolve_session()?;
+            (key, self.base_url.clone().or(Some(resolved_base)))
         };
 
-        let client = PromptGuardClient::new(api_key, self.base_url.clone())
+        let client = PromptGuardClient::new(api_key, base_url)
             .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
 
         match self.action {
@@ -66,8 +61,11 @@ impl PolicyCommand {
     }
 
     fn load_yaml(path: &str) -> Result<serde_json::Value> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| PromptGuardError::Config(format!("Failed to read {path}: {e}")))?;
+        // Route through the shared helper so file-read errors read the same as
+        // scan/redact ("File not found: …" / "Not a file: …") with no raw
+        // "(os error N)" tail — instead of the old "Failed to read …: … (os
+        // error 2)".
+        let content = super::read_file_friendly(path)?;
 
         let parsed: serde_yaml::Value = serde_yaml::from_str(&content)
             .map_err(|e| PromptGuardError::Config(format!("YAML parse error: {e}")))?;

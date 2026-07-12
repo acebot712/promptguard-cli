@@ -15,6 +15,51 @@ struct GitHubRelease {
     body: Option<String>,
 }
 
+/// Strip release-tag prefixes. CLI releases are tagged `cli-vX.Y.Z` (the
+/// repository hosts multiple components), with plain `vX.Y.Z` accepted for
+/// robustness. Only stripping `v` left "cli-v1.6.0" parsing as `[6, 0]`
+/// ("cli-" and "1" being non-numeric/mangled), so every check reported a
+/// bogus new version.
+fn strip_tag_prefix(tag: &str) -> &str {
+    tag.strip_prefix("cli-v")
+        .or_else(|| tag.strip_prefix('v'))
+        .unwrap_or(tag)
+}
+
+/// Parse `X.Y.Z` into numeric parts.
+///
+/// Returns `None` when any dot-separated segment is not a plain number.
+/// Non-numeric segments used to be silently FILTERED, shifting the
+/// remaining segments into the wrong positions.
+fn parse_version(v: &str) -> Option<Vec<u32>> {
+    v.split('.').map(|part| part.parse::<u32>().ok()).collect()
+}
+
+/// Whether `latest` (a release tag or bare version) is newer than the
+/// currently running `current` version. Unparseable versions never report
+/// an update.
+fn is_newer_version(current: &str, latest: &str) -> bool {
+    let (Some(current_parts), Some(latest_parts)) = (
+        parse_version(strip_tag_prefix(current)),
+        parse_version(strip_tag_prefix(latest)),
+    ) else {
+        return false;
+    };
+
+    for i in 0..3 {
+        let current_num = current_parts.get(i).copied().unwrap_or(0);
+        let latest_num = latest_parts.get(i).copied().unwrap_or(0);
+
+        match latest_num.cmp(&current_num) {
+            std::cmp::Ordering::Greater => return true,
+            std::cmp::Ordering::Less => return false,
+            std::cmp::Ordering::Equal => {},
+        }
+    }
+
+    false
+}
+
 pub struct UpdateCommand;
 
 impl Default for UpdateCommand {
@@ -35,9 +80,9 @@ impl UpdateCommand {
         // Check GitHub releases for the latest version
         match self.check_latest_version() {
             Ok(release) => {
-                let latest_version = release.tag_name.trim_start_matches('v');
+                let latest_version = strip_tag_prefix(&release.tag_name);
 
-                if self.is_newer_version(current_version, latest_version) {
+                if is_newer_version(current_version, latest_version) {
                     println!();
                     Output::success(&format!("New version available: v{latest_version}"));
                     println!();
@@ -102,27 +147,6 @@ impl UpdateCommand {
             .map_err(|e| PromptGuardError::Api(format!("Failed to parse GitHub response: {e}")))
     }
 
-    fn is_newer_version(&self, current: &str, latest: &str) -> bool {
-        let parse_version =
-            |v: &str| -> Vec<u32> { v.split('.').filter_map(|part| part.parse().ok()).collect() };
-
-        let current_parts = parse_version(current);
-        let latest_parts = parse_version(latest);
-
-        for i in 0..3 {
-            let current_num = current_parts.get(i).copied().unwrap_or(0);
-            let latest_num = latest_parts.get(i).copied().unwrap_or(0);
-
-            match latest_num.cmp(&current_num) {
-                std::cmp::Ordering::Greater => return true,
-                std::cmp::Ordering::Less => return false,
-                std::cmp::Ordering::Equal => {},
-            }
-        }
-
-        false
-    }
-
     fn print_update_instructions(&self) {
         println!("  • Using curl (recommended):");
         println!("      curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh");
@@ -133,5 +157,48 @@ impl UpdateCommand {
         println!("  • Using cargo:");
         println!("      cargo install --force promptguard");
         println!();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The real release tags are `cli-vX.Y.Z`; only stripping `v` made
+    /// "cli-v1.6.0" parse as [6, 0], so v1.6.0 reported 6.0.0 available.
+    #[test]
+    fn cli_v_tags_compare_correctly() {
+        assert!(!is_newer_version("1.6.0", "cli-v1.6.0"));
+        assert!(!is_newer_version("2.0.0", "cli-v1.6.0"));
+        assert!(is_newer_version("1.5.9", "cli-v1.6.0"));
+        assert!(is_newer_version("1.6.0", "cli-v1.6.1"));
+        assert!(is_newer_version("1.6.0", "cli-v2.0.0"));
+    }
+
+    #[test]
+    fn plain_and_v_prefixed_tags_compare_correctly() {
+        assert!(is_newer_version("1.0.0", "v1.1.0"));
+        assert!(is_newer_version("1.0.0", "1.0.1"));
+        assert!(is_newer_version("1.0.0", "2.0.0"));
+        assert!(!is_newer_version("1.1.0", "1.0.0"));
+        assert!(!is_newer_version("1.0.0", "1.0.0"));
+        assert!(!is_newer_version("1.0.0", "v1.0.0"));
+    }
+
+    /// Non-numeric segments are a parse FAILURE, not something to filter:
+    /// filtering shifted segments into the wrong comparison positions.
+    #[test]
+    fn unparseable_versions_never_report_an_update() {
+        assert!(!is_newer_version("1.0.0", "cli-v2.0.0-rc1"));
+        assert!(!is_newer_version("1.0.0", "not-a-version"));
+        assert!(!is_newer_version("1.0.0", ""));
+        assert!(!is_newer_version("garbage", "2.0.0"));
+    }
+
+    #[test]
+    fn tag_prefix_stripping() {
+        assert_eq!(strip_tag_prefix("cli-v1.6.0"), "1.6.0");
+        assert_eq!(strip_tag_prefix("v1.6.0"), "1.6.0");
+        assert_eq!(strip_tag_prefix("1.6.0"), "1.6.0");
     }
 }

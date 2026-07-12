@@ -9,6 +9,11 @@ use crate::types::Provider;
 ///
 /// This template monkey-patches SDK constructors to automatically inject
 /// the `PromptGuard` proxy URL if not already configured.
+///
+/// NOTE: `{{INSTALL_CALLS}}` must stay at column 0. Each install-call
+/// snippet already carries its own 4-space function-body indent; indenting
+/// the placeholder itself put the first call at 8 spaces and made every
+/// generated shim an `IndentationError` (crashing user apps at startup).
 pub const PYTHON_SHIM_TEMPLATE: &str = r#"#!/usr/bin/env python3
 """
 PromptGuard Runtime Shim - Auto-generated
@@ -32,7 +37,6 @@ _shimmed_providers: set = set()
 
 # Configuration
 PROXY_URL = os.environ.get("PROMPTGUARD_PROXY_URL", "{{PROXY_URL}}")
-API_KEY_VAR = os.environ.get("PROMPTGUARD_API_KEY_VAR", "{{API_KEY_VAR}}")
 ENABLED = os.environ.get("PROMPTGUARD_ENABLED", "true").lower() in ("true", "1", "yes")
 
 # Debug mode for troubleshooting
@@ -81,7 +85,7 @@ def _install_shims() -> None:
     """Install all runtime shims for detected providers."""
     providers_shimmed = []
 
-    {{INSTALL_CALLS}}
+{{INSTALL_CALLS}}
 
     if providers_shimmed:
         _debug(f"Installed shims for: {', '.join(providers_shimmed)}")
@@ -96,7 +100,7 @@ _install_shims()
 /// `OpenAI` Python provider patch template
 pub const PYTHON_OPENAI_PATCH: &str = r#"
 def _shim_openai() -> None:
-    """Monkey-patch OpenAI SDK."""
+    """Monkey-patch OpenAI SDK (sync and async clients)."""
     if "openai" in _shimmed_providers:
         return
 
@@ -118,6 +122,23 @@ def _shim_openai() -> None:
 
         # Apply monkey-patch
         openai.OpenAI = PatchedOpenAI
+
+        # Async client (guarded: very old SDKs may not expose it)
+        if hasattr(openai, "AsyncOpenAI"):
+            if "AsyncOpenAI" not in _original_classes:
+                _original_classes["AsyncOpenAI"] = openai.AsyncOpenAI
+
+            original_async_openai = _original_classes["AsyncOpenAI"]
+
+            class PatchedAsyncOpenAI(original_async_openai):
+                """PromptGuard-wrapped AsyncOpenAI client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "AsyncOpenAI", "base_url")
+                    super().__init__(**kwargs)
+
+            openai.AsyncOpenAI = PatchedAsyncOpenAI
+
         _shimmed_providers.add("openai")
         _debug("OpenAI SDK shimmed successfully")
 
@@ -130,7 +151,7 @@ def _shim_openai() -> None:
 /// Anthropic Python provider patch template
 pub const PYTHON_ANTHROPIC_PATCH: &str = r#"
 def _shim_anthropic() -> None:
-    """Monkey-patch Anthropic SDK."""
+    """Monkey-patch Anthropic SDK (sync and async clients)."""
     if "anthropic" in _shimmed_providers:
         return
 
@@ -152,6 +173,23 @@ def _shim_anthropic() -> None:
 
         # Apply monkey-patch
         anthropic.Anthropic = PatchedAnthropic
+
+        # Async client (guarded: very old SDKs may not expose it)
+        if hasattr(anthropic, "AsyncAnthropic"):
+            if "AsyncAnthropic" not in _original_classes:
+                _original_classes["AsyncAnthropic"] = anthropic.AsyncAnthropic
+
+            original_async_anthropic = _original_classes["AsyncAnthropic"]
+
+            class PatchedAsyncAnthropic(original_async_anthropic):
+                """PromptGuard-wrapped AsyncAnthropic client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "AsyncAnthropic", "base_url")
+                    super().__init__(**kwargs)
+
+            anthropic.AsyncAnthropic = PatchedAsyncAnthropic
+
         _shimmed_providers.add("anthropic")
         _debug("Anthropic SDK shimmed successfully")
 
@@ -164,7 +202,7 @@ def _shim_anthropic() -> None:
 /// Cohere Python provider patch template
 pub const PYTHON_COHERE_PATCH: &str = r#"
 def _shim_cohere() -> None:
-    """Monkey-patch Cohere SDK."""
+    """Monkey-patch Cohere SDK (sync and async clients)."""
     if "cohere" in _shimmed_providers:
         return
 
@@ -186,6 +224,57 @@ def _shim_cohere() -> None:
 
         # Apply monkey-patch
         cohere.Client = PatchedCohereClient
+
+        # Async client (guarded: very old SDKs may not expose it)
+        if hasattr(cohere, "AsyncClient"):
+            if "CohereAsyncClient" not in _original_classes:
+                _original_classes["CohereAsyncClient"] = cohere.AsyncClient
+
+            original_async_cohere = _original_classes["CohereAsyncClient"]
+
+            class PatchedAsyncCohereClient(original_async_cohere):
+                """PromptGuard-wrapped Cohere async client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "CohereAsync", "base_url")
+                    super().__init__(**kwargs)
+
+            cohere.AsyncClient = PatchedAsyncCohereClient
+
+        # v2 clients (cohere 5.x+). ClientV2 subclasses Client, but
+        # reassigning cohere.Client does NOT re-base an already-defined
+        # ClientV2, so it must be subclassed and patched explicitly or
+        # ClientV2() traffic silently bypasses the proxy.
+        if hasattr(cohere, "ClientV2"):
+            if "CohereClientV2" not in _original_classes:
+                _original_classes["CohereClientV2"] = cohere.ClientV2
+
+            original_cohere_v2 = _original_classes["CohereClientV2"]
+
+            class PatchedCohereClientV2(original_cohere_v2):
+                """PromptGuard-wrapped Cohere v2 client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "CohereV2", "base_url")
+                    super().__init__(**kwargs)
+
+            cohere.ClientV2 = PatchedCohereClientV2
+
+        if hasattr(cohere, "AsyncClientV2"):
+            if "CohereAsyncClientV2" not in _original_classes:
+                _original_classes["CohereAsyncClientV2"] = cohere.AsyncClientV2
+
+            original_async_cohere_v2 = _original_classes["CohereAsyncClientV2"]
+
+            class PatchedAsyncCohereClientV2(original_async_cohere_v2):
+                """PromptGuard-wrapped Cohere v2 async client."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "CohereAsyncV2", "base_url")
+                    super().__init__(**kwargs)
+
+            cohere.AsyncClientV2 = PatchedAsyncCohereClientV2
+
         _shimmed_providers.add("cohere")
         _debug("Cohere SDK shimmed successfully")
 
@@ -198,7 +287,7 @@ def _shim_cohere() -> None:
 /// `HuggingFace` Python provider patch template
 pub const PYTHON_HUGGINGFACE_PATCH: &str = r#"
 def _shim_huggingface() -> None:
-    """Monkey-patch HuggingFace InferenceClient."""
+    """Monkey-patch HuggingFace InferenceClient (sync and async)."""
     if "huggingface" in _shimmed_providers:
         return
 
@@ -221,6 +310,23 @@ def _shim_huggingface() -> None:
 
         # Apply monkey-patch
         huggingface_hub.InferenceClient = PatchedInferenceClient
+
+        # Async client (guarded: added in later huggingface_hub releases)
+        if hasattr(huggingface_hub, "AsyncInferenceClient"):
+            if "AsyncInferenceClient" not in _original_classes:
+                _original_classes["AsyncInferenceClient"] = huggingface_hub.AsyncInferenceClient
+
+            original_async_hf = _original_classes["AsyncInferenceClient"]
+
+            class PatchedAsyncInferenceClient(original_async_hf):
+                """PromptGuard-wrapped HuggingFace AsyncInferenceClient."""
+
+                def __init__(self, **kwargs):
+                    kwargs = _ensure_base_url(kwargs, "HuggingFaceAsync", "base_url")
+                    super().__init__(**kwargs)
+
+            huggingface_hub.AsyncInferenceClient = PatchedAsyncInferenceClient
+
         _shimmed_providers.add("huggingface")
         _debug("HuggingFace SDK shimmed successfully")
 
@@ -231,6 +337,11 @@ def _shim_huggingface() -> None:
 "#;
 
 /// TypeScript/JavaScript runtime shim template
+///
+/// The same content is written to both the `.ts` and `.js` shim files, so it
+/// is deliberately annotation-free, CommonJS-style JavaScript (which is also
+/// valid TypeScript). `// @ts-nocheck` keeps `tsc --noEmit` from demanding
+/// Node type declarations for `require`/`module`/`process`.
 pub const TYPESCRIPT_SHIM_TEMPLATE: &str = r#"/**
  * PromptGuard Runtime Shim - Auto-generated
  * DO NOT EDIT THIS FILE MANUALLY
@@ -238,29 +349,30 @@ pub const TYPESCRIPT_SHIM_TEMPLATE: &str = r#"/**
  * This module intercepts LLM SDK initialization to ensure all API calls
  * route through PromptGuard for security monitoring and protection.
  */
+// @ts-nocheck
+"use strict";
 
 const PROXY_URL = process.env.PROMPTGUARD_PROXY_URL || "{{PROXY_URL}}";
-const API_KEY_VAR = process.env.PROMPTGUARD_API_KEY_VAR || "{{API_KEY_VAR}}";
 const ENABLED = (process.env.PROMPTGUARD_ENABLED || "true").toLowerCase() !== "false";
 const DEBUG = (process.env.PROMPTGUARD_DEBUG || "false").toLowerCase() === "true";
 
-function debug(msg: string): void {
+function debug(msg) {
   if (DEBUG) {
     console.error(`[PromptGuard Shim] ${msg}`);
   }
 }
 
-function ensureBaseURL<T extends Record<string, any>>(
-  config: T | undefined,
-  provider: string,
-  paramName: string = "baseURL"
-): T {
-  if (!ENABLED) {
-    debug(`PromptGuard disabled, skipping ${provider} interception`);
-    return config || ({} as T);
+function ensureBaseURL(config, provider, paramName) {
+  if (paramName === undefined) {
+    paramName = "baseURL";
   }
 
-  const cfg = config || ({} as T);
+  if (!ENABLED) {
+    debug(`PromptGuard disabled, skipping ${provider} interception`);
+    return config || {};
+  }
+
+  const cfg = config || {};
 
   if (paramName in cfg) {
     debug(`${provider}: ${paramName} already set to ${cfg[paramName]}`);
@@ -268,138 +380,173 @@ function ensureBaseURL<T extends Record<string, any>>(
   }
 
   // Inject PromptGuard proxy URL
-  const modified = { ...cfg, [paramName]: PROXY_URL };
+  const modified = Object.assign({}, cfg, { [paramName]: PROXY_URL });
   debug(`${provider}: injected ${paramName}=${PROXY_URL}`);
 
   return modified;
 }
 
 {{PROVIDER_EXPORTS}}
+
+{{MODULE_EXPORTS}}
 "#;
 
 /// `OpenAI` TypeScript provider export template
 pub const TYPESCRIPT_OPENAI_EXPORT: &str = r#"
 // OpenAI SDK wrapper
-let OriginalOpenAI: any = null;
+let OpenAI;
 
 try {
   const openaiModule = require("openai");
-  OriginalOpenAI = openaiModule.OpenAI || openaiModule.default?.OpenAI;
+  const OriginalOpenAI =
+    openaiModule.OpenAI || (openaiModule.default && openaiModule.default.OpenAI);
 
   if (OriginalOpenAI) {
-    export class OpenAI extends OriginalOpenAI {
-      constructor(config?: any) {
-        const modifiedConfig = ensureBaseURL(config, "OpenAI", "baseURL");
-        super(modifiedConfig);
+    OpenAI = class OpenAI extends OriginalOpenAI {
+      constructor(config) {
+        super(ensureBaseURL(config, "OpenAI", "baseURL"));
       }
-    }
+    };
     debug("OpenAI SDK shimmed successfully");
   } else {
     debug("OpenAI class not found in module");
   }
 } catch (e) {
   debug(`OpenAI SDK not available: ${e}`);
-  // Re-export empty class as fallback
-  export class OpenAI {
+}
+
+if (!OpenAI) {
+  // Fallback that fails loudly when the SDK is missing
+  OpenAI = class OpenAI {
     constructor() {
       throw new Error("OpenAI SDK not installed");
     }
-  }
+  };
 }
 "#;
 
 /// Anthropic TypeScript provider export template
 pub const TYPESCRIPT_ANTHROPIC_EXPORT: &str = r#"
 // Anthropic SDK wrapper
-let OriginalAnthropic: any = null;
+let Anthropic;
 
 try {
   const anthropicModule = require("@anthropic-ai/sdk");
-  OriginalAnthropic = anthropicModule.Anthropic || anthropicModule.default?.Anthropic;
+  const OriginalAnthropic =
+    anthropicModule.Anthropic || (anthropicModule.default && anthropicModule.default.Anthropic);
 
   if (OriginalAnthropic) {
-    export class Anthropic extends OriginalAnthropic {
-      constructor(config?: any) {
-        const modifiedConfig = ensureBaseURL(config, "Anthropic", "baseURL");
-        super(modifiedConfig);
+    Anthropic = class Anthropic extends OriginalAnthropic {
+      constructor(config) {
+        super(ensureBaseURL(config, "Anthropic", "baseURL"));
       }
-    }
+    };
     debug("Anthropic SDK shimmed successfully");
   } else {
     debug("Anthropic class not found in module");
   }
 } catch (e) {
   debug(`Anthropic SDK not available: ${e}`);
-  // Re-export empty class as fallback
-  export class Anthropic {
+}
+
+if (!Anthropic) {
+  // Fallback that fails loudly when the SDK is missing
+  Anthropic = class Anthropic {
     constructor() {
       throw new Error("Anthropic SDK not installed");
     }
-  }
+  };
 }
 "#;
 
 /// Cohere TypeScript provider export template
 pub const TYPESCRIPT_COHERE_EXPORT: &str = r#"
 // Cohere SDK wrapper
-let OriginalCohereClient: any = null;
+let CohereClient;
 
 try {
   const cohereModule = require("cohere-ai");
-  OriginalCohereClient = cohereModule.CohereClient || cohereModule.default?.CohereClient;
+  const OriginalCohereClient =
+    cohereModule.CohereClient || (cohereModule.default && cohereModule.default.CohereClient);
 
   if (OriginalCohereClient) {
-    export class CohereClient extends OriginalCohereClient {
-      constructor(config?: any) {
-        const modifiedConfig = ensureBaseURL(config, "Cohere", "baseURL");
-        super(modifiedConfig);
+    CohereClient = class CohereClient extends OriginalCohereClient {
+      constructor(config) {
+        super(ensureBaseURL(config, "Cohere", "baseURL"));
       }
-    }
+    };
     debug("Cohere SDK shimmed successfully");
   } else {
     debug("CohereClient class not found in module");
   }
 } catch (e) {
   debug(`Cohere SDK not available: ${e}`);
-  // Re-export empty class as fallback
-  export class CohereClient {
+}
+
+if (!CohereClient) {
+  // Fallback that fails loudly when the SDK is missing
+  CohereClient = class CohereClient {
     constructor() {
       throw new Error("Cohere SDK not installed");
     }
-  }
+  };
 }
 "#;
 
 /// `HuggingFace` TypeScript provider export template
 pub const TYPESCRIPT_HUGGINGFACE_EXPORT: &str = r#"
 // HuggingFace SDK wrapper
-let OriginalHfInference: any = null;
+let HfInference;
 
 try {
   const hfModule = require("@huggingface/inference");
-  OriginalHfInference = hfModule.HfInference || hfModule.default?.HfInference;
+  const OriginalHfInference =
+    hfModule.HfInference || (hfModule.default && hfModule.default.HfInference);
 
   if (OriginalHfInference) {
-    export class HfInference extends OriginalHfInference {
-      constructor(config?: any) {
-        const modifiedConfig = ensureBaseURL(config, "HuggingFace", "baseUrl");
-        super(modifiedConfig);
+    HfInference = class HfInference extends OriginalHfInference {
+      constructor(config) {
+        super(ensureBaseURL(config, "HuggingFace", "baseUrl"));
       }
-    }
+    };
     debug("HuggingFace SDK shimmed successfully");
   } else {
     debug("HfInference class not found in module");
   }
 } catch (e) {
   debug(`HuggingFace SDK not available: ${e}`);
-  // Re-export empty class as fallback
-  export class HfInference {
+}
+
+if (!HfInference) {
+  // Fallback that fails loudly when the SDK is missing
+  HfInference = class HfInference {
     constructor() {
       throw new Error("HuggingFace SDK not installed");
     }
-  }
+  };
 }
 "#;
+
+/// Client classes the generated Python shim actually patches for a provider
+/// (module-qualified, sync + async), for honest user-facing coverage
+/// reporting. Empty for providers without a runtime shim.
+pub fn get_python_patched_classes(provider: Provider) -> &'static [&'static str] {
+    match provider {
+        Provider::OpenAI => &["openai.OpenAI", "openai.AsyncOpenAI"],
+        Provider::Anthropic => &["anthropic.Anthropic", "anthropic.AsyncAnthropic"],
+        Provider::Cohere => &[
+            "cohere.Client",
+            "cohere.AsyncClient",
+            "cohere.ClientV2",
+            "cohere.AsyncClientV2",
+        ],
+        Provider::HuggingFace => &[
+            "huggingface_hub.InferenceClient",
+            "huggingface_hub.AsyncInferenceClient",
+        ],
+        Provider::Gemini | Provider::Groq | Provider::Bedrock => &[],
+    }
+}
 
 /// Get Python provider patch code for a given provider
 pub fn get_python_provider_patch(provider: Provider) -> &'static str {
@@ -428,6 +575,18 @@ pub fn get_python_install_call(provider: Provider) -> &'static str {
         Provider::Bedrock => {
             "    # Bedrock: use promptguard SDK auto-instrumentation (promptguard.init())"
         },
+    }
+}
+
+/// Name under which a provider's wrapper class is exported from the
+/// TypeScript/JavaScript shim. `None` for providers without a runtime shim.
+pub fn get_typescript_export_name(provider: Provider) -> Option<&'static str> {
+    match provider {
+        Provider::OpenAI => Some("OpenAI"),
+        Provider::Anthropic => Some("Anthropic"),
+        Provider::Cohere => Some("CohereClient"),
+        Provider::HuggingFace => Some("HfInference"),
+        Provider::Gemini | Provider::Groq | Provider::Bedrock => None,
     }
 }
 

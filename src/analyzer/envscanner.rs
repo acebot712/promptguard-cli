@@ -103,9 +103,12 @@ impl EnvScanner {
                 let name = trimmed[..equals_pos].trim().to_string();
                 let value_part = trimmed[equals_pos + 1..].trim();
 
-                // Remove quotes if present
-                let value = if (value_part.starts_with('"') && value_part.ends_with('"'))
-                    || (value_part.starts_with('\'') && value_part.ends_with('\''))
+                // Remove quotes if present. The len >= 2 guard matters: a
+                // lone quote (e.g. `KEY="`) both starts and ends with '"',
+                // and slicing [1..0] would panic.
+                let value = if value_part.len() >= 2
+                    && ((value_part.starts_with('"') && value_part.ends_with('"'))
+                        || (value_part.starts_with('\'') && value_part.ends_with('\'')))
                 {
                     value_part[1..value_part.len() - 1].to_string()
                 } else {
@@ -388,6 +391,24 @@ mod tests {
         assert_eq!(vars.len(), 3);
         assert_eq!(vars[0].name, "OPENAI_API_KEY");
         assert_eq!(vars[0].value.as_ref().unwrap(), "sk-test123");
+    }
+
+    /// Regression test: a value consisting of a single quote character
+    /// (`KEY="`) used to panic via a `[1..0]` slice.
+    #[test]
+    fn test_parse_env_file_lone_quote_value_does_not_panic() {
+        let temp_dir = TempDir::new().unwrap();
+        let env_file = temp_dir.path().join(".env");
+
+        fs::write(&env_file, "BROKEN=\"\nALSO_BROKEN='\nOK=\"quoted\"\n").unwrap();
+
+        let scanner = EnvScanner::new(temp_dir.path());
+        let vars = scanner.parse_env_file(&env_file).unwrap();
+
+        assert_eq!(vars.len(), 3);
+        assert_eq!(vars[0].value.as_ref().unwrap(), "\"");
+        assert_eq!(vars[1].value.as_ref().unwrap(), "'");
+        assert_eq!(vars[2].value.as_ref().unwrap(), "quoted");
     }
 
     #[test]
