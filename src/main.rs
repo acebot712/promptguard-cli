@@ -376,7 +376,7 @@ Examples:
 Examples:
   promptguard redteam                             Run the default attack suite
   promptguard redteam --preset strict             Use the strict preset
-  promptguard redteam --autonomous --budget 50    Autonomous mode, 50 iterations")]
+")]
     Redteam {
         /// PromptGuard API base URL to run the tests against. Must be
         /// HTTPS and point at the PromptGuard API host (or localhost for
@@ -410,14 +410,6 @@ Examples:
         /// Preset to use for testing (default, strict, permissive)
         #[arg(long, default_value = "default")]
         preset: String,
-
-        /// Run the autonomous red team agent (LLM-powered mutation)
-        #[arg(long)]
-        autonomous: bool,
-
-        /// Max iterations for autonomous mode (1-1000)
-        #[arg(long, default_value = "100", value_parser = clap::value_parser!(u32).range(1..=1000))]
-        budget: u32,
     },
 
     /// Manage guardrail policies as YAML files (policy-as-code)
@@ -722,8 +714,6 @@ fn main() {
             test,
             prompt,
             preset,
-            autonomous,
-            budget,
         } => RedTeamCommand {
             target_url,
             api_key,
@@ -733,8 +723,6 @@ fn main() {
             test_name: test,
             custom_prompt: prompt,
             preset,
-            autonomous,
-            budget,
         }
         .execute(),
 

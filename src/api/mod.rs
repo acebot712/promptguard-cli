@@ -274,27 +274,6 @@ impl PromptGuardClient {
         )
     }
 
-    /// POST with a per-request timeout override, for endpoints whose work
-    /// legitimately exceeds the default request timeout (e.g. the
-    /// autonomous red-team agent, which runs an LLM-powered loop
-    /// server-side).
-    pub fn post_with_timeout<T: serde::de::DeserializeOwned, B: serde::Serialize>(
-        &self,
-        endpoint: &str,
-        body: &B,
-        timeout: Duration,
-    ) -> Result<T> {
-        self.request_with_timeout(
-            &reqwest::Method::POST,
-            endpoint,
-            Some(
-                serde_json::to_value(body)
-                    .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
-            ),
-            Some(timeout),
-        )
-    }
-
     pub fn put<T: serde::de::DeserializeOwned, B: serde::Serialize>(
         &self,
         endpoint: &str,

@@ -7,13 +7,6 @@ use crate::api::PromptGuardClient;
 use crate::config::ConfigManager;
 use crate::error::{PromptGuardError, Result};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
-
-/// The autonomous agent runs an LLM-powered mutation loop server-side and
-/// routinely takes minutes; the default 30s request timeout all but
-/// guaranteed a client-side timeout (and, before retries were restricted to
-/// connect errors, a timeout-retry storm of duplicate agent runs).
-const AUTONOMOUS_TIMEOUT: Duration = Duration::from_mins(5);
 
 #[derive(Debug, Deserialize, Serialize)]
 struct RedTeamTestResult {
@@ -44,24 +37,6 @@ struct TestRequest {
     custom_prompt: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct AutonomousRequest {
-    budget: u32,
-    target_preset: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct AutonomousReport {
-    grade: String,
-    bypass_rate: f64,
-    total_attempts: usize,
-    bypasses_found: usize,
-    #[serde(default)]
-    bypasses: Vec<serde_json::Value>,
-    #[serde(default)]
-    recommendations: Vec<String>,
-}
-
 pub struct RedTeamCommand {
     pub target_url: Option<String>,
     pub api_key: Option<String>,
@@ -70,8 +45,6 @@ pub struct RedTeamCommand {
     pub test_name: Option<String>,
     pub custom_prompt: Option<String>,
     pub preset: String,
-    pub autonomous: bool,
-    pub budget: u32,
 }
 
 impl Default for RedTeamCommand {
@@ -84,8 +57,6 @@ impl Default for RedTeamCommand {
             test_name: None,
             custom_prompt: None,
             preset: "default".to_string(),
-            autonomous: false,
-            budget: 100,
         }
     }
 }
@@ -119,9 +90,7 @@ impl RedTeamCommand {
         let client = PromptGuardClient::new(api_key, base_url)
             .map_err(|e| PromptGuardError::Config(format!("Failed to create client: {e}")))?;
 
-        if self.autonomous {
-            self.run_autonomous(&client)?;
-        } else if let Some(prompt) = &self.custom_prompt {
+        if let Some(prompt) = &self.custom_prompt {
             self.run_custom_test(&client, prompt)?;
         } else if let Some(test_name) = &self.test_name {
             self.run_single_test(&client, test_name)?;
@@ -193,7 +162,7 @@ impl RedTeamCommand {
         // Call the API
         let summary: RedTeamSummary = client
             .post(
-                "/internal/redteam/test-all",
+                "/security-testing/run-all",
                 &TestRequest {
                     target_preset: self.preset.clone(),
                     custom_prompt: None,
@@ -247,7 +216,7 @@ impl RedTeamCommand {
 
         let result: RedTeamTestResult = client
             .post(
-                &format!("/internal/redteam/test/{test_name}"),
+                &format!("/security-testing/run/{test_name}"),
                 &TestRequest {
                     target_preset: self.preset.clone(),
                     custom_prompt: None,
@@ -291,7 +260,7 @@ impl RedTeamCommand {
 
         let result: RedTeamTestResult = client
             .post(
-                "/internal/redteam/test-custom",
+                "/security-testing/run-custom",
                 &TestRequest {
                     target_preset: self.preset.clone(),
                     custom_prompt: Some(prompt.to_string()),
@@ -315,69 +284,6 @@ impl RedTeamCommand {
                 serde_json::to_string_pretty(&result).unwrap_or_default()
             );
         }
-
-        Ok(())
-    }
-
-    fn run_autonomous(&self, client: &PromptGuardClient) -> Result<()> {
-        println!(
-            "Running autonomous red team agent (budget: {}, preset: '{}')...\n",
-            self.budget, self.preset
-        );
-        println!("This may take a while - the agent uses LLM-powered mutation\n");
-
-        let report: AutonomousReport = client
-            .post_with_timeout(
-                "/internal/redteam/autonomous",
-                &AutonomousRequest {
-                    budget: self.budget,
-                    target_preset: self.preset.clone(),
-                },
-                AUTONOMOUS_TIMEOUT,
-            )
-            .map_err(|e| PromptGuardError::Api(format!("Autonomous agent failed: {e}")))?;
-
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-        println!("🤖 Autonomous Red Team Report");
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
-
-        println!("  Grade:            {}", report.grade);
-        println!("  Bypass Rate:      {:.1}%", report.bypass_rate * 100.0);
-        println!("  Total Attempts:   {}", report.total_attempts);
-        println!("  Bypasses Found:   {}\n", report.bypasses_found);
-
-        if !report.bypasses.is_empty() && self.verbose {
-            println!("⚠️  Discovered Bypasses:\n");
-            for (i, bypass) in report.bypasses.iter().enumerate() {
-                println!("  {}. {}", i + 1, bypass);
-            }
-            println!();
-        }
-
-        if !report.recommendations.is_empty() {
-            println!("📋 Recommendations:\n");
-            for rec in &report.recommendations {
-                println!("  • {rec}");
-            }
-            println!();
-        }
-
-        if self.output_format == "json" {
-            let json_out = serde_json::json!({
-                "grade": report.grade,
-                "bypass_rate": report.bypass_rate,
-                "total_attempts": report.total_attempts,
-                "bypasses_found": report.bypasses_found,
-                "bypasses": report.bypasses,
-                "recommendations": report.recommendations,
-            });
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&json_out).unwrap_or_default()
-            );
-        }
-
-        println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
         Ok(())
     }
