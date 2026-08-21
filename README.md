@@ -55,8 +55,6 @@ promptguard mcp -t stdio                           # Start MCP server
 | `projects` | `list` / `select` active project |
 | `config` | View or update local configuration |
 | `key` | Manage API keys |
-| `logs` | View recent security event logs |
-| `events` | View security events |
 | `dashboard` | Open the PromptGuard dashboard in browser |
 | `redact` | Redact PII from text |
 | `test` | Run a quick connectivity and detection test |
