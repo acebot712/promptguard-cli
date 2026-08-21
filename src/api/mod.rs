@@ -33,11 +33,6 @@ struct ErrorDetail {
     requests_limit: Option<u64>,
 }
 
-/// Percent-encode a value for safe use in a URL query string.
-pub fn encode_query_param(value: &str) -> String {
-    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
-}
-
 pub struct PromptGuardClient {
     client: Client,
     base_url: String,
@@ -271,27 +266,6 @@ impl PromptGuardClient {
                 serde_json::to_value(body)
                     .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
             ),
-        )
-    }
-
-    /// POST with a per-request timeout override, for endpoints whose work
-    /// legitimately exceeds the default request timeout (e.g. the
-    /// autonomous red-team agent, which runs an LLM-powered loop
-    /// server-side).
-    pub fn post_with_timeout<T: serde::de::DeserializeOwned, B: serde::Serialize>(
-        &self,
-        endpoint: &str,
-        body: &B,
-        timeout: Duration,
-    ) -> Result<T> {
-        self.request_with_timeout(
-            &reqwest::Method::POST,
-            endpoint,
-            Some(
-                serde_json::to_value(body)
-                    .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
-            ),
-            Some(timeout),
         )
     }
 

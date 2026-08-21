@@ -27,10 +27,9 @@ mod types;
 use clap::{Parser, Subcommand};
 use commands::{
     ApplyCommand, ConfigCommand, DashboardCommand, DisableCommand, DoctorCommand, EnableCommand,
-    EventsCommand, InitCommand, KeyAction, KeyCommand, LoginCommand, LogoutCommand, LogsCommand,
-    McpCommand, PolicyAction, PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand,
-    RedactCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
-    VerifyCommand, WhoamiCommand,
+    InitCommand, KeyAction, KeyCommand, LoginCommand, LogoutCommand, McpCommand, PolicyAction,
+    PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand, RedactCommand, RevertCommand,
+    ScanCommand, StatusCommand, TestCommand, UpdateCommand, VerifyCommand, WhoamiCommand,
 };
 
 /// Grouped command reference + examples for the top-level `--help`.
@@ -67,8 +66,6 @@ Commands:
     test       Test configuration and connectivity
 
   Monitor
-    logs       View activity logs from the PromptGuard API
-    events     View recent security events
     dashboard  Open the PromptGuard dashboard in your browser
 
   Security testing
@@ -301,24 +298,6 @@ Examples:
         action: Option<KeySubcommand>,
     },
 
-    /// View activity logs from the PromptGuard API
-    ///
-    /// Fetches recent LLM requests, security events, and usage metrics
-    /// directly from the PromptGuard backend.
-    Logs {
-        /// Number of log entries to fetch
-        #[arg(short, long, default_value = "20")]
-        limit: usize,
-
-        /// Filter by log type (security, request, response, error)
-        #[arg(short = 't', long = "type")]
-        log_type: Option<String>,
-
-        /// Output results as JSON (for scripting)
-        #[arg(long)]
-        json: bool,
-    },
-
     /// Test PromptGuard configuration
     ///
     /// Validates API key, tests proxy connectivity, and verifies
@@ -376,7 +355,7 @@ Examples:
 Examples:
   promptguard redteam                             Run the default attack suite
   promptguard redteam --preset strict             Use the strict preset
-  promptguard redteam --autonomous --budget 50    Autonomous mode, 50 iterations")]
+")]
     Redteam {
         /// PromptGuard API base URL to run the tests against. Must be
         /// HTTPS and point at the PromptGuard API host (or localhost for
@@ -410,14 +389,6 @@ Examples:
         /// Preset to use for testing (default, strict, permissive)
         #[arg(long, default_value = "default")]
         preset: String,
-
-        /// Run the autonomous red team agent (LLM-powered mutation)
-        #[arg(long)]
-        autonomous: bool,
-
-        /// Max iterations for autonomous mode (1-1000)
-        #[arg(long, default_value = "100", value_parser = clap::value_parser!(u32).range(1..=1000))]
-        budget: u32,
     },
 
     /// Manage guardrail policies as YAML files (policy-as-code)
@@ -510,24 +481,6 @@ Examples:
 
         /// Output results as JSON
         #[arg(long, global = true)]
-        json: bool,
-    },
-
-    /// View recent security events
-    ///
-    /// Lists security events (blocks, alerts, redactions) from the
-    /// PromptGuard API. Useful for monitoring and auditing.
-    Events {
-        /// Number of events to fetch
-        #[arg(short, long, default_value = "20")]
-        limit: usize,
-
-        /// Filter by event type
-        #[arg(short = 't', long = "type")]
-        event_type: Option<String>,
-
-        /// Output results as JSON
-        #[arg(long)]
         json: bool,
     },
 
@@ -681,16 +634,6 @@ fn main() {
             });
             KeyCommand::run(key_action)
         },
-        Commands::Logs {
-            limit,
-            log_type,
-            json,
-        } => LogsCommand {
-            limit,
-            log_type,
-            json,
-        }
-        .execute(),
         Commands::Test => TestCommand::execute(),
         Commands::Verify { json } => VerifyCommand { json }.execute().map(|exit_code| {
             // Same differentiated exit codes as `scan`, so `verify` can gate
@@ -722,8 +665,6 @@ fn main() {
             test,
             prompt,
             preset,
-            autonomous,
-            budget,
         } => RedTeamCommand {
             target_url,
             api_key,
@@ -733,8 +674,6 @@ fn main() {
             test_name: test,
             custom_prompt: prompt,
             preset,
-            autonomous,
-            budget,
         }
         .execute(),
 
@@ -794,17 +733,6 @@ fn main() {
             .execute()
         },
 
-        Commands::Events {
-            limit,
-            event_type,
-            json,
-        } => EventsCommand {
-            limit,
-            event_type,
-            json,
-        }
-        .execute(),
-
         Commands::Dashboard { json } => DashboardCommand { json }.execute(),
     };
 
@@ -840,14 +768,12 @@ fn command_requested_json(command: &Commands) -> bool {
         | Commands::Status { json, .. }
         | Commands::Doctor { json, .. }
         | Commands::Config { json, .. }
-        | Commands::Logs { json, .. }
         | Commands::Verify { json, .. }
         | Commands::Redact { json, .. }
         | Commands::Login { json, .. }
         | Commands::Logout { json, .. }
         | Commands::Whoami { json, .. }
         | Commands::Projects { json, .. }
-        | Commands::Events { json, .. }
         | Commands::Dashboard { json, .. }
         | Commands::Key {
             action: Some(KeySubcommand::Show { json, .. }),

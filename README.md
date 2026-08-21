@@ -47,7 +47,7 @@ promptguard mcp -t stdio                           # Start MCP server
 | `disable` / `enable` | Toggle PromptGuard on/off |
 | `revert` | Revert all changes (restores backups) |
 | `mcp` | Start MCP server for AI editor integration |
-| `redteam` | Red team testing (manual or `--autonomous` with LLM agent) |
+| `redteam` | Run the adversarial corpus against your policy (`--test`, `--prompt`, or all) |
 | `verify` | End-to-end integration check: connectivity, auth, scan, and redact |
 | `policy` | Policy-as-code: `apply`, `diff`, `export` YAML guardrail configs |
 | `login` / `logout` | Authenticate with PromptGuard cloud |
@@ -55,8 +55,6 @@ promptguard mcp -t stdio                           # Start MCP server
 | `projects` | `list` / `select` active project |
 | `config` | View or update local configuration |
 | `key` | Manage API keys |
-| `logs` | View recent security event logs |
-| `events` | View security events |
 | `dashboard` | Open the PromptGuard dashboard in browser |
 | `redact` | Redact PII from text |
 | `test` | Run a quick connectivity and detection test |

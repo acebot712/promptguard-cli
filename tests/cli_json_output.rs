@@ -97,9 +97,11 @@ fn doctor_json_includes_checks_array() {
 #[test]
 fn missing_credentials_error_is_unified() {
     let dir = TempDir::new().unwrap();
-    let cases: [&[&str]; 4] = [
-        &["logs", "--json"],
-        &["events", "--json"],
+    // `logs` and `events` used to be here. They were removed: both called
+    // /api/v1 routes that were never built, so every invocation 404'd. What
+    // this asserts -- one credential error shape across every JSON command --
+    // is unchanged, and `scan`/`redact` still cover it.
+    let cases: [&[&str]; 2] = [
         &["scan", "--json", "--text", "hi"],
         &["redact", "--json", "--text", "hi"],
     ];
