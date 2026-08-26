@@ -14,6 +14,25 @@ survives three releases is a changelog nobody is maintaining.
 
 No user-facing changes yet.
 
+## [2.0.0] - 2026-08-24
+
+### Fixed
+
+- **`redteam` was unreachable for every customer.** Its subcommands targeted
+  `/internal/redteam`, the platform-admin plane, which rejects an API key
+  outright — so the command could not have worked for anyone using the CLI as
+  documented. It now targets the customer-facing `/api/v1/security-testing`.
+
+### Removed
+
+- **BREAKING — `logs` and `events` are gone.** Both called endpoints the API
+  does not serve, so they only ever failed. Scripts invoking `promptguard logs`
+  or `promptguard events` will now exit with an unrecognised-subcommand error
+  rather than a request failure. There is no replacement command; security
+  events are available in the dashboard.
+- **BREAKING — `redteam --autonomous` and the intelligence-stats output are
+  gone**, for the same reason: the endpoints behind them do not exist.
+
 ## [1.7.2] - 2026-08-19
 
 ### Security

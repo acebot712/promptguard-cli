@@ -11,9 +11,34 @@ permissions:
   contents: read
 
 jobs:
+  # The tag names the release; Cargo.toml names what the binary reports for
+  # `promptguard --version`. Nothing made them agree, so a tag pushed without
+  # bumping Cargo.toml shipped assets called cli-vX that identify themselves as
+  # the previous version -- and the only way to notice was to run the binary.
+  # The same defect shipped in the MCP image on 2026-08-23 from the other
+  # direction, where the tag chose the CLI version.
+  version-matches-tag:
+    name: Tag matches Cargo.toml
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF#refs/tags/cli-v}"
+          crate=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          echo "tag=$tag crate=$crate"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::tag cli-v$tag does not match Cargo.toml version $crate. \
+          The published binary would report $crate while the release claims $tag."
+            exit 1
+          fi
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
+    needs: version-matches-tag
     timeout-minutes: 30
     strategy:
       fail-fast: false
