@@ -129,3 +129,17 @@ wholesale; do not invent a second mechanism.
 - Commit API keys, tokens, or credentials
 - Break the CLI interface without a major version bump
 - Skip `cargo clippy` warnings
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues, worked via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` plus `docs/adr/` at the repo root, both created lazily. See `docs/agents/domain.md`.
