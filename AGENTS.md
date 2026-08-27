@@ -35,6 +35,22 @@ Requires Rust toolchain. Install via [rustup](https://rustup.rs/).
 cargo build
 ```
 
+**Enable the tracked git hooks once per clone** — git will not turn on a repo's
+own hooks for you:
+
+```bash
+git config core.hooksPath .githooks
+git config promptguard.pushGate true    # optional: also run `make ci` on push
+```
+
+`.githooks/pre-push` scans the commits you are pushing for secrets. It is
+scoped to that range on purpose: this repo is public, so a credential on `main`
+is world-readable at once, while scanning the whole tree or the history fails on
+its first run and teaches everyone `--no-verify`. Fixtures that are meant to
+look like credentials — the env-var redaction tests — are exempted by path in
+`.gitleaks.toml`, where the exemption is reviewable. `make ci` is opt-in
+because fmt-check + clippy + test + build is minutes on this workspace.
+
 ## Building and Testing
 
 ```bash
