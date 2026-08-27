@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# Tracked pre-push gate. Enable it once per clone:
+#
+#   git config core.hooksPath .githooks
+#   git config promptguard.pushGate true    # optional: also run `make ci`
+#
+set -euo pipefail
+
+# ~/.zshrc is zsh syntax and breaks when sourced from bash -- name the toolchain
+# paths it would have added instead.
+export PATH="$HOME/.cargo/bin:$HOME/.nvm/versions/node/v24.18.0/bin:$HOME/Library/pnpm:$HOME/Library/pnpm/bin:/opt/homebrew/opt/python@3.13/bin:/opt/homebrew/opt/libpq/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+cd "$(git rev-parse --show-toplevel)"
+
+
+command -v gitleaks >/dev/null 2>&1 || {
+  echo "gitleaks not installed; skipping the local secret scan." >&2
+  echo "  brew install gitleaks" >&2
+  exit 0
+}
+
+# Set by pre-commit at the pre-push stage. Falling back to "everything not yet
+# on a remote" covers a direct hook invocation and a brand-new branch alike.
+from_ref="${PRE_COMMIT_FROM_REF:-}"
+to_ref="${PRE_COMMIT_TO_REF:-}"
+if [ -n "$from_ref" ] && ! git rev-parse --quiet --verify "$from_ref" >/dev/null 2>&1; then
+  from_ref=""
+fi
+
+if [ -n "$from_ref" ] && [ -n "$to_ref" ]; then
+  log_opts="$from_ref..$to_ref"
+else
+  log_opts="HEAD --not --remotes"
+fi
+
+if ! gitleaks detect --source . --log-opts "$log_opts" --no-banner --redact; then
+  cat >&2 <<'MSG'
+
+A secret was found in the commits you are pushing.
+
+This repository is public. A credential that lands on the default branch is
+world-readable immediately and must be rotated, not just reverted.
+
+If this is a test fixture, do not bypass -- give it an obviously-fake shape, or
+add its path to .gitleaks.toml so the exemption is written down and reviewable.
+
+Bypass (last resort): git push --no-verify
+MSG
+  exit 1
+fi
+
+# `make ci` is fmt-check + clippy -D warnings + test + build: minutes on a Rust
+# workspace. Worth it before a push to main, too slow to impose on every branch
+# push, so it is opt-in. The secret scan above is not -- that one is 50ms.
+if [ "$(git config --bool promptguard.pushGate 2>/dev/null || echo false)" = "true" ]; then
+  echo "pre-push: promptguard.pushGate is on -- running 'make ci'..." >&2
+  start=$(date +%s)
+  make ci
+  echo "pre-push gate passed in $(( $(date +%s) - start ))s -- pushing." >&2
+fi

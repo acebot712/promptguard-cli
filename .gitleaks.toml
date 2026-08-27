@@ -1,0 +1,12 @@
+# gitleaks configuration for promptguard-cli.
+#
+# Extends the stock rules; the allowlist below names test fixtures that are
+# SUPPOSED to look like credentials, because the code under test redacts them.
+# An exemption belongs here, written down and reviewable, rather than in
+# somebody's `--no-verify`.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Env-var redaction fixtures: the test asserts a key-shaped value is scrubbed, so it has to be key-shaped."
+paths = ['''tests/command_tests\.rs''']
