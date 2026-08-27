@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - name: Compare
         run: |
           set -euo pipefail
@@ -44,6 +44,10 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The extraction lives in scripts/changelog-section.sh because the
+      # `release` job below needs the same text to build the Release body.
+      # While it was inline here, this gate produced notes nothing consumed and
+      # the release published a hardcoded body instead.
       - name: Require a CHANGELOG section for this tag
         run: |
           case "$GITHUB_REF_NAME" in
@@ -54,20 +58,8 @@ jobs:
               ;;
           esac
           ver="${GITHUB_REF_NAME#cli-v}"
-          awk -v v="$ver" '
-            $0 ~ "^## \\[" v "\\]" { grab=1; next }
-            grab && /^## \[/ { exit }
-            grab { print }
-          ' CHANGELOG.md > notes.md
-          # Present-but-empty is the failure mode to catch, not just a missing
-          # heading -- test for content.
-          if ! grep -q '[^[:space:]]' notes.md; then
-            echo "::error::CHANGELOG.md has no non-empty '## [$ver]' section."
-            echo "::error::Write the release notes for $ver, then re-tag."
-            exit 1
-          fi
           echo "Release notes for $ver:"
-          cat notes.md
+          ./scripts/changelog-section.sh "$ver"
 
   build:
     name: Build ${{ matrix.target }}
@@ -178,52 +170,36 @@ jobs:
         id: get_version
         run: echo "VERSION=${GITHUB_REF#refs/tags/cli-v}" >> $GITHUB_OUTPUT
 
+      # Build the Release body from the CHANGELOG section `notes-gate` insisted
+      # existed, then append the standing install instructions.
+      #
+      # Until now these two were disconnected: the gate extracted per-release
+      # notes and threw them away, while this step published a hardcoded body.
+      # Every release shipped byte-identical text -- so the "What's New" section
+      # described whichever release it was written for, and the gate guarded
+      # notes no reader ever saw. `body_path` closes the loop, and the same
+      # script both jobs share guarantees the published notes are the ones the
+      # gate approved.
+      - name: Compose release notes
+        run: |
+          set -euo pipefail
+          ver="${{ steps.get_version.outputs.VERSION }}"
+          {
+            echo "## PromptGuard CLI v${ver}"
+            echo
+            ./scripts/changelog-section.sh "$ver"
+            # Strip the footer's HTML comment: it is maintainer guidance about
+            # what belongs in that file, and GitHub hides it when rendering but
+            # not when someone reads the raw body or the API returns it.
+            sed '/<!--/,/-->/d' .github/release-body-footer.md
+          } > release-notes.md
+          echo "--- composed body ---"; cat release-notes.md
+
       - name: Create Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3
         with:
           name: PromptGuard CLI v${{ steps.get_version.outputs.VERSION }}
-          body: |
-            ## PromptGuard CLI v${{ steps.get_version.outputs.VERSION }}
-
-            Drop-in LLM security for your applications - Built with Rust + Tree-sitter
-
-            ### Installation
-
-            **One-line install (macOS/Linux)**:
-            ```bash
-            curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh
-            ```
-
-            **Manual install**:
-            1. Download the binary for your platform below
-            2. Make it executable: `chmod +x promptguard-*`
-            3. Move to PATH: `sudo mv promptguard-* /usr/local/bin/promptguard`
-            4. Verify: `promptguard --version`
-
-            ### Checksums
-
-            SHA256 checksums are provided for each binary (`.sha256` files).
-
-            ### What's New
-
-            - ✅ Real AST transformations using Tree-sitter
-            - ✅ TypeScript, JavaScript, Python support
-            - ✅ OpenAI, Anthropic, Cohere, HuggingFace providers
-            - ✅ Automatic backups with safe revert
-            - ✅ Single 5.3MB static binary
-
-            ### Supported Platforms
-
-            - macOS ARM64 (M1/M2/M3)
-            - macOS x86_64 (Intel)
-            - Linux x86_64
-            - Windows x86_64
-
-            ---
-
-            📖 **Documentation**: https://docs.promptguard.co/cli
-            🏠 **Homepage**: https://promptguard.co
-            🐛 **Issues**: https://github.com/acebot712/promptguard-cli/issues
+          body_path: release-notes.md
           files: release/*
           draft: false
           prerelease: false
