@@ -168,7 +168,21 @@ jobs:
 
       - name: Extract version from tag
         id: get_version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/cli-v}" >> $GITHUB_OUTPUT
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/tags/cli-v}"
+          echo "VERSION=$version" >> "$GITHUB_OUTPUT"
+          # Prerelease is decided from the VERSION, never from the raw tag.
+          # This repo's tags are `cli-v2.0.0` -- the prefix itself contains a
+          # hyphen, so the obvious `contains(github.ref_name, '-')` (which is
+          # correct in promptguard-shadow-desktop, whose tags are bare `v0.3.3`)
+          # would mark EVERY release here a prerelease. Strip the prefix first,
+          # then look for the semver pre-release separator.
+          case "$version" in
+            *-*) echo "PRERELEASE=true"  >> "$GITHUB_OUTPUT" ;;
+            *)   echo "PRERELEASE=false" >> "$GITHUB_OUTPUT" ;;
+          esac
+          echo "version=$version prerelease=$(case "$version" in *-*) echo true ;; *) echo false ;; esac)"
 
       # Build the Release body from the CHANGELOG section `notes-gate` insisted
       # existed, then append the standing install instructions.
@@ -202,6 +216,15 @@ jobs:
           body_path: release-notes.md
           files: release/*
           draft: false
-          prerelease: false
+          # Derived from the tag, not hardcoded. A pre-release version
+          # (cli-v2.1.0-rc1) must be labelled as one, or it appears in the
+          # Releases list, the "Latest" badge and the API exactly like a final
+          # release -- and anyone installing "the latest version" gets a
+          # release candidate.
+          #
+          # Computed in `get_version` above rather than inline: this repo's tag
+          # prefix (`cli-v`) contains a hyphen, so an inline
+          # `contains(github.ref_name, '-')` would be true for EVERY tag.
+          prerelease: ${{ steps.get_version.outputs.PRERELEASE }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
