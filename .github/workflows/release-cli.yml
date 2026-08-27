@@ -35,10 +35,44 @@ jobs:
             exit 1
           fi
 
+  # Refuse to build a release nobody can read the notes for. A separate job
+  # that `build` needs, rather than a step inside it, so a missing entry
+  # costs seconds instead of paying for the full 4-platform matrix (one leg
+  # of which is a paid macOS runner).
+  notes-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Require a CHANGELOG section for this tag
+        run: |
+          case "$GITHUB_REF_NAME" in
+            cli-v[0-9]*) ;;
+            *)
+              echo "::notice::$GITHUB_REF_NAME is not a version tag -- skipping."
+              exit 0
+              ;;
+          esac
+          ver="${GITHUB_REF_NAME#cli-v}"
+          awk -v v="$ver" '
+            $0 ~ "^## \\[" v "\\]" { grab=1; next }
+            grab && /^## \[/ { exit }
+            grab { print }
+          ' CHANGELOG.md > notes.md
+          # Present-but-empty is the failure mode to catch, not just a missing
+          # heading -- test for content.
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "::error::CHANGELOG.md has no non-empty '## [$ver]' section."
+            echo "::error::Write the release notes for $ver, then re-tag."
+            exit 1
+          fi
+          echo "Release notes for $ver:"
+          cat notes.md
+
   build:
     name: Build ${{ matrix.target }}
+    needs: [version-matches-tag, notes-gate]
     runs-on: ${{ matrix.os }}
-    needs: version-matches-tag
     timeout-minutes: 30
     strategy:
       fail-fast: false
