@@ -205,7 +205,7 @@ impl DisableCommand {
                 Output::step("✓ Removed .promptguard/ directory");
             }
         } else {
-            // Restore backups (static mode). Only restore the backups that
+            // Restore backups (static transform mode). Only restore the backups that
             // PromptGuard itself created (recorded in metadata.backups) —
             // never glob the tree for *.bak, which would clobber backup files
             // the user created for their own reasons and destroy their work.

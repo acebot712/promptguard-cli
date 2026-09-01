@@ -245,7 +245,7 @@ pub fn get_python_transform_query(provider: Provider) -> String {
         //    one raised TypeError at runtime), and the TS SDK reads its base
         //    URL from `httpOptions.baseUrl` (a top-level `baseURL` is silently
         //    ignored). Runtime coverage is honestly absent (see templates.rs);
-        //    use proxy mode (point httpOptions.baseUrl at the PromptGuard proxy).
+        //    use static transform mode (point httpOptions.baseUrl at the PromptGuard proxy).
         //  * Bedrock: boto3 clients authenticate via AWS credentials/SigV4, and
         //    boto3.client() accepts neither api_key= nor base_url= — injecting
         //    them raised TypeError at runtime.

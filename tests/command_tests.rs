@@ -853,7 +853,7 @@ fn test_proxy_url_validation() {
 // `read_line` in `Output::confirm` hung until the extension's timeout. These
 // tests spawn the real binary the same way and require it to exit.
 
-/// Write a minimal valid .promptguard.json (static mode, enabled) into `dir`.
+/// Write a minimal valid .promptguard.json (static transform mode, enabled) into `dir`.
 fn write_minimal_config(dir: &std::path::Path) {
     let config = PromptGuardConfig::new(
         "pg_live_test_key_1234567890".to_string(),
