@@ -22,7 +22,19 @@ struct GuardrailsUpdateRequest {
 }
 
 const VALID_LEVELS: &[&str] = &["strict", "moderate", "permissive"];
-const VALID_PII_MODES: &[&str] = &["redact", "mask", "block"];
+// Mirrors `PIIMode` in the platform's shared/security/pii_modes.py, which is
+// the single home for this vocabulary. `tokenize` is the reversible mode: the
+// proxy tokenises on the way out and restores on the way back, streaming
+// included.
+//
+// It was missing here, so `policy apply` rejected a mode the API accepts and
+// told the user the value was invalid. The backend has had this exact bug:
+// `tokenize` was implemented end to end and then omitted from the write
+// schema, "which made a fully implemented feature unreachable for every
+// customer". They fixed it by writing the vocabulary once. This list is a
+// third copy of it, and stays hand-maintained for the reasons in AGENTS.md --
+// so when a mode is added, it is added here too.
+const VALID_PII_MODES: &[&str] = &["redact", "mask", "block", "tokenize"];
 
 pub enum PolicyAction {
     Apply { file: String, dry_run: bool },
@@ -274,5 +286,45 @@ impl PolicyCommand {
 
         print!("{yaml_str}");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// `validate` is private, which AGENTS.md names as the one case where an
+    /// inline test module beats an integration test in `tests/`.
+    fn guardrails_with_pii_mode(mode: &str) -> serde_json::Value {
+        serde_json::json!({ "pii_detection": { "mode": mode } })
+    }
+
+    /// Regression: `tokenize` is a real PII mode -- the reversible one -- and
+    /// `policy apply` rejected it, so the only mode the proxy can undo was
+    /// unreachable from policy-as-code. The backend shipped the same omission
+    /// in its write schema before writing the vocabulary down once.
+    #[test]
+    fn tokenize_is_accepted() {
+        assert!(PolicyCommand::validate(&guardrails_with_pii_mode("tokenize")).is_ok());
+    }
+
+    #[test]
+    fn every_documented_mode_is_accepted() {
+        for mode in ["redact", "mask", "block", "tokenize"] {
+            assert!(
+                PolicyCommand::validate(&guardrails_with_pii_mode(mode)).is_ok(),
+                "{mode} should be a valid pii_detection.mode"
+            );
+        }
+    }
+
+    /// The check still has to reject something, or accepting `tokenize` proves
+    /// nothing about the validator.
+    #[test]
+    fn an_unknown_mode_is_still_rejected() {
+        let err = PolicyCommand::validate(&guardrails_with_pii_mode("obfuscate"))
+            .expect_err("an unknown mode must not validate");
+        assert!(err.to_string().contains("pii_detection.mode"));
     }
 }
