@@ -53,9 +53,9 @@ impl Provider {
 
     /// Whether a runtime interception shim is available for this provider.
     ///
-    /// Providers without a runtime shim are still supported via proxy mode
-    /// (rewriting the SDK base URL); only the `--runtime` interception path
-    /// is unavailable.
+    /// Providers without a runtime shim are still supported via static
+    /// transform mode (rewriting the SDK base URL); only the `--runtime`
+    /// interception path is unavailable.
     pub fn has_runtime_shim(&self) -> bool {
         matches!(
             self,

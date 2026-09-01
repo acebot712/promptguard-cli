@@ -139,9 +139,10 @@ All LLM requests now flow through PromptGuard's six-layer security pipeline.
 
 ### Supported Providers
 
-"Proxy mode" rewrites the SDK base URL (works for every provider/language below).
-"Runtime shim" (`promptguard enable --runtime`) intercepts SDK calls in-process and
-is available for a subset of providers; the rest fall back to proxy mode.
+"Static transform mode" rewrites the SDK base URL in your source (works for every
+provider/language below). "Runtime shim mode" (`promptguard enable --runtime`)
+intercepts SDK calls in-process instead, and is available for a subset of
+providers; the rest use static transform mode.
 
 | Provider | TypeScript | JavaScript | Python | Runtime shim |
 |----------|:---:|:---:|:---:|:---:|
@@ -149,8 +150,8 @@ is available for a subset of providers; the rest fall back to proxy mode.
 | Anthropic | Yes | Yes | Yes | Yes |
 | Cohere | Yes | Yes | Yes | Yes |
 | HuggingFace | Yes | Yes | Yes | Yes |
-| Gemini | Yes | Yes | Yes | Proxy only |
-| Groq | Yes | Yes | Yes | Proxy only |
+| Gemini | Yes | Yes | Yes | Static only |
+| Groq | Yes | Yes | Yes | Static only |
 | AWS Bedrock | Yes | Yes | Yes | SDK auto-instrument |
 
 ## Environment Variables
