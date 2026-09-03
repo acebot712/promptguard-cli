@@ -47,7 +47,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 release tag
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1 release tag
         with:
           toolchain: stable
           components: rustfmt, clippy
@@ -56,7 +56,7 @@ jobs:
       # rustc version + Cargo.lock, prunes target/ to keep the cache
       # small, and is ~2x faster than hand-rolled actions/cache for
       # the three cargo dirs.
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: quality
 
@@ -103,11 +103,11 @@ jobs:
       # is selected via the `toolchain` input (the @stable/@beta refs are
       # moving branches, not immutable tags).
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1 release tag
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1 release tag
         with:
           toolchain: ${{ matrix.rust }}
 
-      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - uses: Swatinem/rust-cache@f0d9c3887740aee45f6153b24b3a6b815192ec16 # v2
         with:
           shared-key: test-${{ matrix.os }}-${{ matrix.rust }}
 
