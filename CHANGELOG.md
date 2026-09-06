@@ -12,7 +12,22 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
-No user-facing changes yet.
+## [2.1.0] - 2026-09-06
+
+### Added
+
+- **`policy apply` accepts `tokenize` as a `pii_detection.mode`.** It validated
+  the field against a hand-written list of `redact`/`mask`/`block` and rejected
+  `tokenize`, telling you a value the API accepts is invalid. Tokenize is the
+  reversible mode — the proxy tokenises on the way out and restores on the way
+  back, streaming included — so the one PII mode whose effect can be undone was
+  the one unreachable from policy-as-code.
+
+  The platform had this same bug: `tokenize` was implemented end to end and then
+  omitted from the write schema, which made a finished feature unreachable for
+  every customer. This list is a third copy of that vocabulary and stays
+  hand-maintained, so it now records where the source of truth is and that a new
+  mode has to be added here too.
 
 ## [2.0.0] - 2026-08-24
 
