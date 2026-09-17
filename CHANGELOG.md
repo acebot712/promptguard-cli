@@ -12,6 +12,15 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-09-18
+
+### Security
+
+- **rustls 0.23.45, for RUSTSEC-2026-0285.** The TLS stack every HTTP call in
+  this CLI goes through. Published so the released binaries carry the patched
+  version rather than only the source tree.
+
+
 ## [2.1.0] - 2026-09-06
 
 ### Added
