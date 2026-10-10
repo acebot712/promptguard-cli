@@ -12,6 +12,23 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.1.2] - 2026-10-10
+
+**No change to the CLI's own code.** No source file changed since 2.1.1; this
+release rebuilds the binaries against newer patch versions of four direct
+dependencies, so the published binaries match what `main` has been building
+and testing.
+
+### Changed
+
+- **clap 4.6.6 → 4.6.7, reqwest 0.13.4 → 0.13.5, thiserror 2.0.20 → 2.0.21 and
+  open 5.4.2 → 5.4.4** (#45). Patch releases of the argument parser, the HTTP
+  client, the error-derive macro and the browser launcher. reqwest 0.13.5 moves
+  to base64 0.23.1, so the lockfile carries that alongside 0.22.1. None of the
+  four is a security fix: no advisory applied to the versions 2.1.1 shipped.
+- The `dtolnay/rust-toolchain` action that installs Rust in CI and in the
+  release build is pinned to a newer commit (#44). It still installs `stable`.
+
 ## [2.1.1] - 2026-09-18
 
 ### Security
