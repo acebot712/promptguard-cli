@@ -11,8 +11,10 @@
 //! The `regex` crate guarantees linear-time matching, so a hostile argument
 //! cannot make this check slow.
 
+use icu_normalizer::ComposingNormalizerBorrowed;
 use regex::Regex;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::sync::OnceLock;
 
 /// Nesting deeper than this is treated as destructive rather than walked:
@@ -25,18 +27,96 @@ const MAX_DEPTH: usize = 32;
 /// climbing two directories at once.
 const ORIGINAL: &str = r"\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b|\b(drop|truncate)\s+(table|database)\b|\bmkfs\b|\b(curl|wget)\b[^\n]*\|\s*(sh|bash)\b|/etc/shadow|\.\.[/\\]\.\.[/\\]";
 
+// Fragments shared by several of [`OURS`]'s patterns. Macros, because
+// `concat!` takes only literals.
+
+/// A shell, or `sudo`/`doas` running one, as the end of a pipe.
+macro_rules! shell_or_sudo {
+    () => {
+        r"(?:sudo|doas|(?:ba|z|da|k|c|tc|fi)?sh)\b"
+    };
+}
+
+/// A whole disk or partition, not `/dev/null` or a terminal.
+macro_rules! block_device {
+    () => {
+        r"/dev/(?:sd[a-z]|hd[a-z]|vd[a-z]|xvd[a-z]|nvme\d|mmcblk\d|r?disk\d|md\d|dm-\d|loop\d|mapper/)"
+    };
+}
+
+/// Whitespace or SQL block comments between keywords (`DROP/**/TABLE`).
+macro_rules! sql_gap {
+    () => {
+        r"(?:\s|/\*[^*]*\*/)+"
+    };
+}
+
+/// A SQL table name, optionally qualified or quoted.
+macro_rules! sql_name {
+    () => {
+        r#"[\w."`\[\]]+"#
+    };
+}
+
 /// Ours, not the earlier rule set's: forms its pattern misses.
 ///
 /// - `rm` with the recursive and force flags as separate words, short or
 ///   long, in either order, with anything between them up to a shell
-///   separator (`rm -r -f`, `rm --force --recursive`, `rm -r dir -f`).
+///   separator (`rm -r -f`, `rm --force --recursive`, `rm -r dir -f`), or in
+///   one cluster with other letters too (`rm -rfv`).
 /// - `find ... -delete`, and `find ... -exec rm` / `-execdir rm`.
-/// - `DROP SCHEMA`.
-const OURS: [&str; 4] = [
+/// - A download, or base64-decoded text, piped into a shell or `sudo`; a
+///   shell, `eval` or `source` running a download through `$(...)` or `<(...)`.
+/// - `dd of=`, `shred` or a redirect onto a block device; `wipefs` on one.
+/// - A recursive `chmod`, `chown` or `chgrp` of `/` or `/*`.
+/// - The fork bomb.
+/// - `DROP`/`TRUNCATE` with comments between the keywords, `DROP SCHEMA`,
+///   `TRUNCATE name` without `TABLE`, and `DELETE FROM name` with nothing
+///   after it (so no `WHERE`).
+/// - PowerShell's `Remove-Item -Recurse -Force`, and `cmd`'s `del /s`,
+///   `rmdir /s` and `rd /s`.
+/// - `git clean` with `-f`.
+const OURS: [&str; 20] = [
     r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--force)\b",
     r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--force)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b",
+    r"\brm(?:\s+[^\s;&|]+)*?\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*\b",
     r"\bfind\b[^\n;&|]*\s-(?:delete\b|exec(?:dir)?\s+rm\b)",
-    r"\bdrop\s+schema\b",
+    concat!(r"\b(?:curl|wget)\b[^\n]*\|\s*", shell_or_sudo!()),
+    concat!(
+        r"\bbase64\b[^\n|]*\s(?:-[a-z]*d[a-z]*|--decode)\b[^\n]*\|\s*",
+        shell_or_sudo!()
+    ),
+    r"\b(?:(?:ba|z|da|k)?sh|eval|source)\b[^\n|;&]*[$<]\(\s*(?:curl|wget)\b",
+    concat!(r"\bdd\b[^\n;&|]*\bof=", block_device!()),
+    concat!(r"\bshred\b[^\n;&|]*\s", block_device!()),
+    concat!(r">\s*", block_device!()),
+    r"\bwipefs\b[^\n;&|]*\s/dev/",
+    r"\bch(?:mod|own|grp)(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+[^\s;&|]+)*?\s+/\*?(?:\s|$|[;&|])",
+    r":\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}",
+    concat!(
+        r"\b(?:drop|truncate)",
+        sql_gap!(),
+        r"(?:table|database|schema)\b"
+    ),
+    concat!(
+        r"\btruncate",
+        sql_gap!(),
+        r"(?:only\s+)?",
+        sql_name!(),
+        r"(?:\s*(?:;|$)|\s+(?:cascade|restart|continue)\b)"
+    ),
+    concat!(
+        r"\bdelete",
+        sql_gap!(),
+        r"from",
+        sql_gap!(),
+        sql_name!(),
+        r"\s*(?:;|$)"
+    ),
+    r"\bremove-item\b[^\n;|]*\s-r[a-z]*\b[^\n;|]*\s-fo[a-z]*\b",
+    r"\bremove-item\b[^\n;|]*\s-fo[a-z]*\b[^\n;|]*\s-r[a-z]*\b",
+    r"\b(?:del|erase|rmdir|rd)\b[^\n&|]*\s/s\b",
+    r"\bgit\s+clean\b[^\n;&|]*\s(?:-[a-z]*f[a-z]*|--force)\b",
 ];
 
 /// The compiled pattern, or `None` if it failed to compile, in which case
@@ -51,8 +131,29 @@ fn pattern() -> Option<&'static Regex> {
         .as_ref()
 }
 
+/// Zero-width and other format characters (`\p{Cf}`), which a shell or SQL
+/// parser may never see but which split a keyword for the pattern.
+fn format_characters() -> Option<&'static Regex> {
+    static FORMAT: OnceLock<Option<Regex>> = OnceLock::new();
+    FORMAT.get_or_init(|| Regex::new(r"\p{Cf}+").ok()).as_ref()
+}
+
+/// `s` as the pattern sees it: NFKC (fullwidth `ｒｍ` is `rm`, and so on),
+/// then without format characters. ASCII is already in that form.
+fn normalise(s: &str) -> Option<Cow<'_, str>> {
+    if s.is_ascii() {
+        return Some(Cow::Borrowed(s));
+    }
+    let folded = ComposingNormalizerBorrowed::new_nfkc().normalize(s);
+    let stripped = format_characters()?.replace_all(&folded, "").into_owned();
+    Some(Cow::Owned(stripped))
+}
+
 fn matches(s: &str) -> bool {
-    pattern().is_none_or(|re| re.is_match(s))
+    match (pattern(), normalise(s)) {
+        (Some(re), Some(s)) => re.is_match(&s),
+        _ => true,
+    }
 }
 
 /// Whether any string in a tool call's arguments looks destructive.
@@ -206,12 +307,12 @@ mod tests {
     #[test]
     fn obfuscated_commands_are_normalised_before_matching() {
         for command in [
-            "\u{ff52}\u{ff4d} -rf /",      // fullwidth "rm"
-            "r\u{200b}m -rf /",            // zero-width space
-            "rm\u{2060} -rf /",            // word joiner
-            "D\u{200d}ROP TABLE users",    // zero-width joiner
+            "\u{ff52}\u{ff4d} -rf /",        // fullwidth "rm"
+            "r\u{200b}m -rf /",              // zero-width space
+            "rm\u{2060} -rf /",              // word joiner
+            "D\u{200d}ROP TABLE users",      // zero-width joiner
             "rm \u{ff0d}\u{ff52}\u{ff46} /", // fullwidth "-rf"
-            "\u{feff}mkfs.ext4 /dev/sda1", // byte-order mark
+            "\u{feff}mkfs.ext4 /dev/sda1",   // byte-order mark
         ] {
             assert!(
                 is_destructive(&json!({ "command": command })),
@@ -268,6 +369,7 @@ mod tests {
     #[test]
     fn the_pattern_compiles() {
         assert!(pattern().is_some());
+        assert!(format_characters().is_some());
     }
 
     #[test]
