@@ -144,6 +144,7 @@ struct Proxy {
     stdout: Receiver<String>,
     stderr: Arc<Mutex<String>>,
     server_log: PathBuf,
+    syncs: u32,
     _home: TempDir,
 }
 
@@ -199,6 +200,7 @@ impl Proxy {
             stdout: rx,
             stderr: stderr_buf,
             server_log,
+            syncs: 0,
             _home: home,
         }
     }
@@ -267,6 +269,21 @@ impl Proxy {
             .lines()
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
             .collect()
+    }
+
+    /// Round-trip a ping, so everything sent before it has reached the server
+    /// (and its log) before a test asserts something did not.
+    fn sync(&mut self) {
+        let id = 9_000_000 + u64::from(self.syncs);
+        self.syncs += 1;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": "ping"}));
+        assert_eq!(self.recv_id(id)["result"], json!({}));
+    }
+
+    /// Whether a `tools/call` with this id never reached the server.
+    fn never_reached_server(&mut self, id: u64) -> bool {
+        self.sync();
+        !self.server_saw_call(id)
     }
 
     /// Whether the server ever received a `tools/call` with this id.
@@ -373,7 +390,7 @@ fn call_the_api_refuses_gets_invalid_request_and_never_reaches_the_server() {
 
     // A later call still works, and the refused one never reached the server.
     assert_relayed(&proxy.call(3, "read_file", &json!({})), "read_file");
-    assert!(!proxy.server_saw_call(2));
+    assert!(proxy.never_reached_server(2));
     assert!(proxy.server_saw_call(3));
 }
 
@@ -386,7 +403,7 @@ fn destructive_call_is_refused_by_the_local_check_before_the_api() {
     // The fake API would allow this tool name; the local regex refuses it.
     let reply = proxy.call(4, "run_command", &json!({"command": "rm -rf /tmp/x"}));
     assert_refused(&reply);
-    assert!(!proxy.server_saw_call(4));
+    assert!(proxy.never_reached_server(4));
     assert!(
         api.requests().is_empty(),
         "a destructive call is refused locally, without a round trip"
@@ -403,7 +420,7 @@ fn malformed_tool_call_is_refused() {
     assert_refused(&proxy.recv_id(5));
     proxy.send(&json!({"jsonrpc": "2.0", "id": 6, "method": "tools/call", "params": {}}));
     assert_refused(&proxy.recv_id(6));
-    assert!(!proxy.server_saw_call(5) && !proxy.server_saw_call(6));
+    assert!(proxy.never_reached_server(5) && proxy.never_reached_server(6));
 }
 
 #[test]
@@ -425,7 +442,7 @@ fn batch_containing_a_tool_call_is_refused_whole() {
     for reply in replies {
         assert_refused(reply);
     }
-    assert!(!proxy.server_saw_call(8));
+    assert!(proxy.never_reached_server(8));
 }
 
 // ---------------------------------------------------------------------------
@@ -444,7 +461,7 @@ fn mixed_is_the_default_and_blocks_only_destructive_calls_when_the_api_is_down()
 
         let (tool, args) = DESTRUCTIVE;
         assert_refused(&proxy.call(10, tool, &args()));
-        assert!(!proxy.server_saw_call(10), "{flags:?}");
+        assert!(proxy.never_reached_server(10), "{flags:?}");
 
         let (tool, args) = READ_ONLY;
         assert_relayed(&proxy.call(11, tool, &args()), tool);
@@ -480,7 +497,7 @@ fn open_still_enforces_checks_when_the_api_is_up() {
     assert_refused(&proxy.call(22, "forbidden_tool", &json!({})));
     let (tool, args) = DESTRUCTIVE;
     assert_refused(&proxy.call(23, tool, &args()));
-    assert!(!proxy.server_saw_call(22) && !proxy.server_saw_call(23));
+    assert!(proxy.never_reached_server(22) && proxy.never_reached_server(23));
 }
 
 #[test]
@@ -500,7 +517,7 @@ fn closed_refuses_every_call_when_the_api_is_down() {
     );
     let (tool, args) = DESTRUCTIVE;
     assert_refused(&proxy.call(31, tool, &args()));
-    assert!(!proxy.server_saw_call(30) && !proxy.server_saw_call(31));
+    assert!(proxy.never_reached_server(30) && proxy.never_reached_server(31));
 }
 
 #[test]
@@ -575,7 +592,7 @@ fn oversized_client_message_is_dropped_not_relayed() {
     }));
     proxy.send(&json!({"jsonrpc": "2.0", "id": 51, "method": "ping"}));
     assert_eq!(proxy.recv_id(51)["result"], json!({}));
-    assert!(!proxy.server_saw_call(50));
+    assert!(proxy.never_reached_server(50));
     proxy.wait_stderr("4 MiB");
 }
 

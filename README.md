@@ -47,6 +47,7 @@ promptguard mcp -t stdio                           # Start MCP server
 | `disable` / `enable` | Toggle PromptGuard on/off |
 | `revert` | Revert all changes (restores backups) |
 | `mcp` | Start MCP server for AI editor integration |
+| `mcp-proxy` | Wrap any stdio MCP server and check every tool call before it runs |
 | `redteam` | Run the adversarial corpus against your policy (`--test`, `--prompt`, or all) |
 | `verify` | End-to-end integration check: connectivity, auth, scan, and redact |
 | `policy` | Policy-as-code: `apply`, `diff`, `export` YAML guardrail configs |
@@ -115,6 +116,83 @@ gemini mcp add -t stdio promptguard -- promptguard mcp -t stdio
 ```
 
 Full setup instructions for 13+ clients: [docs.promptguard.co/tools/mcp](https://docs.promptguard.co/tools/mcp)
+
+## MCP Proxy
+
+`promptguard mcp-proxy` sits between your agent and an MCP server you already
+run, and checks every tool call before the server sees it:
+
+```bash
+promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
+```
+
+Put it in front of the server's command wherever your client launches it:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "promptguard",
+      "args": ["mcp-proxy", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
+```bash
+claude mcp add filesystem -- promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
+```
+
+It needs an API key (`promptguard login` or `PROMPTGUARD_API_KEY`), and does
+not pass `PROMPTGUARD_API_KEY` on to the server it wraps.
+
+### What it checks
+
+Each `tools/call` is checked twice, in order:
+
+1. **Locally**, by a destructive-action check on the call's arguments:
+   recursive forced removal (`rm -rf`), `DROP`/`TRUNCATE TABLE|DATABASE`,
+   `mkfs`, a download piped into a shell, `/etc/shadow`, and `../../` path
+   climbing.
+2. **By the PromptGuard API**, through `POST /api/v1/agent/validate-tool`, which
+   applies your project's agent policies and behaviour analysis. Calls are
+   reported under the agent ID `mcp-proxy:<server name>`; set your own with
+   `--agent-id`.
+
+A refused call never reaches the server. The agent gets a JSON-RPC error with
+code `-32600` and a message naming the reason, and the proxy logs it to stderr.
+
+### When the API is unreachable
+
+`--fail-mode` decides what happens to a call the API cannot give a verdict on
+(unreachable, timed out after 10 seconds, or returning an error):
+
+| Fail mode | Call the local check matches | Any other call |
+|-----------|------------------------------|----------------|
+| `mixed` (default) | Refused | Relayed, logged as unchecked |
+| `open` | Relayed, logged as unchecked | Relayed, logged as unchecked |
+| `closed` | Refused | Refused |
+
+While the API is reachable, a call the local check matches is refused in every
+mode. `mixed` is the default because an outage should neither break your agent
+nor let through the actions the proxy exists to stop. Each unchecked call is
+logged to stderr with the word `unchecked`, the tool's name and why the API
+gave no verdict; arguments are never logged.
+
+### What passes through untouched
+
+- Every message other than `tools/call`, byte for byte, in both directions.
+- Lines that are not JSON, so a server that prints a banner to stdout still
+  works.
+- The server's stderr.
+
+Messages are bounded at 4 MiB. A larger one from the agent is dropped (it is
+too large to check, so relaying it would be a way around the check); a larger
+one from the server is streamed through. At most 1024 requests may be pending
+at once; one past that is refused with `-32600`. A JSON-RPC batch that contains
+a `tools/call` is refused whole.
+
+The proxy exits when the server does, with the server's exit code.
 
 ## How the CLI Works
 

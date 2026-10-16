@@ -269,6 +269,26 @@ impl PromptGuardClient {
         )
     }
 
+    /// [`post`](Self::post) with its own request timeout, for callers that
+    /// have a better answer than waiting the default 30s (`mcp-proxy` falls
+    /// back to its fail mode).
+    pub fn post_with_timeout<T: serde::de::DeserializeOwned, B: serde::Serialize>(
+        &self,
+        endpoint: &str,
+        body: &B,
+        timeout: Duration,
+    ) -> Result<T> {
+        self.request_with_timeout(
+            &reqwest::Method::POST,
+            endpoint,
+            Some(
+                serde_json::to_value(body)
+                    .map_err(|e| PromptGuardError::Api(format!("Failed to serialize body: {e}")))?,
+            ),
+            Some(timeout),
+        )
+    }
+
     pub fn put<T: serde::de::DeserializeOwned, B: serde::Serialize>(
         &self,
         endpoint: &str,

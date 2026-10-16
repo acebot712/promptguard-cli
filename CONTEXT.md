@@ -89,6 +89,28 @@ a set of providers.
 A source file the CLI injects a shim import into, chosen because the app starts
 there (`main.py`, a `package.json` main, an `if __name__ == "__main__"` block).
 
+### Tool calls
+
+**MCP proxy**:
+`promptguard mcp-proxy`, which wraps a stdio MCP server the developer already
+runs and decides each tool call before the server sees it.
+_Avoid_: MCP server (that is `promptguard mcp`, which serves PromptGuard's own
+tools), firewall, gateway
+
+**Destructive-action check**:
+The local regex over a tool call's arguments, ported from the earlier rule set. Runs with no
+network, so it is what still protects under the `mixed` fail mode during an
+outage.
+_Avoid_: dangerous-pattern check (that is the backend's own list)
+
+**Fail mode**:
+What the MCP proxy does with a tool call the API gives no verdict on: `open`,
+`closed` or `mixed` (default). ADR-0034 in the platform repo records why.
+
+**Unchecked call**:
+A tool call relayed without an API verdict because the fail mode allowed it.
+Always logged to stderr as unchecked.
+
 ### The project side
 
 **Project**:

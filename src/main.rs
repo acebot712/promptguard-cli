@@ -27,9 +27,10 @@ mod types;
 use clap::{Parser, Subcommand};
 use commands::{
     ApplyCommand, ConfigCommand, DashboardCommand, DisableCommand, DoctorCommand, EnableCommand,
-    InitCommand, KeyAction, KeyCommand, LoginCommand, LogoutCommand, McpCommand, PolicyAction,
-    PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand, RedactCommand, RevertCommand,
-    ScanCommand, StatusCommand, TestCommand, UpdateCommand, VerifyCommand, WhoamiCommand,
+    FailMode, InitCommand, KeyAction, KeyCommand, LoginCommand, LogoutCommand, McpCommand,
+    McpProxyCommand, PolicyAction, PolicyCommand, ProjectsAction, ProjectsCommand, RedTeamCommand,
+    RedactCommand, RevertCommand, ScanCommand, StatusCommand, TestCommand, UpdateCommand,
+    VerifyCommand, WhoamiCommand,
 };
 
 /// Grouped command reference + examples for the top-level `--help`.
@@ -75,6 +76,7 @@ Commands:
 
   Other
     mcp        Start an MCP server for IDE integration
+    mcp-proxy  Wrap an MCP server and check every tool call it receives
     update     Check for CLI updates
 
 Run 'promptguard <command> --help' for details on a command.
@@ -433,6 +435,38 @@ Examples:
         transport: String,
     },
 
+    /// Wrap an MCP server and check every tool call it receives
+    ///
+    /// Spawns a stdio MCP server and relays JSON-RPC between it and your
+    /// agent. Each tools/call is checked by a local destructive-action check
+    /// and then by the PromptGuard API before the server sees it; a refused
+    /// call is answered with JSON-RPC error -32600. Everything else passes
+    /// through untouched, including the server's stderr.
+    #[command(after_help = "\
+Fail modes (what happens when the PromptGuard API cannot be reached):
+  mixed   Refuse calls the destructive-action check matches, relay the rest
+          logged as unchecked (default)
+  open    Relay every call, logged as unchecked
+  closed  Refuse every call
+
+Examples:
+  promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
+  promptguard mcp-proxy --fail-mode closed -- python3 my_server.py
+  claude mcp add fs -- promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .")]
+    McpProxy {
+        /// What to do with a tool call when the PromptGuard API cannot be reached
+        #[arg(long, value_enum, default_value_t = FailMode::Mixed)]
+        fail_mode: FailMode,
+
+        /// Agent ID the calls are reported under (default: mcp-proxy:<server name>)
+        #[arg(long)]
+        agent_id: Option<String>,
+
+        /// The MCP server's command and arguments, after `--`
+        #[arg(last = true, required = true, value_name = "SERVER_COMMAND")]
+        command: Vec<String>,
+    },
+
     /// Authenticate with PromptGuard and store credentials globally
     ///
     /// Saves your API key to ~/.promptguard/credentials.json so all
@@ -705,6 +739,23 @@ fn main() {
         },
 
         Commands::Mcp { transport } => McpCommand { transport }.execute(),
+
+        Commands::McpProxy {
+            fail_mode,
+            agent_id,
+            command,
+        } => McpProxyCommand {
+            fail_mode,
+            agent_id,
+            command,
+        }
+        .execute()
+        .map(|exit_code| {
+            // The wrapped server's exit code is the proxy's.
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+        }),
 
         Commands::Login {
             api_key,

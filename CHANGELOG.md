@@ -12,6 +12,20 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Added
+
+- **`promptguard mcp-proxy -- <server command>`** wraps a stdio MCP server and
+  checks every tool call before the server sees it: first a local
+  destructive-action check on the arguments, then the API's
+  `POST /agent/validate-tool`. A refused call is answered with JSON-RPC
+  `-32600` and never reaches the server. `--fail-mode open|closed|mixed`
+  (default `mixed`) decides what happens when the API cannot be reached:
+  `mixed` refuses calls the local check matches and relays the rest, logged to
+  stderr as unchecked. Non-JSON lines and the server's stderr pass through
+  untouched; messages are bounded at 4 MiB and pending requests at 1024. The
+  wrapped server does not inherit `PROMPTGUARD_API_KEY`
+  (acebot712/promptguard#943).
+
 ## [2.1.2] - 2026-10-10
 
 **No change to the CLI's own code.** No source file changed since 2.1.1; this
