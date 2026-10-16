@@ -970,7 +970,9 @@ fn a_batch_holding_an_item_that_is_not_an_object_is_refused_whole() {
         "tools/call",
     ]));
     let replies: Value = serde_json::from_str(&proxy.recv_line()).unwrap();
-    let replies = replies.as_array().expect("a batch is answered with a batch");
+    let replies = replies
+        .as_array()
+        .expect("a batch is answered with a batch");
     assert_eq!(replies.len(), 1, "{replies:?}");
     assert_refused(&replies[0]);
     assert_eq!(replies[0]["id"], json!(77));
@@ -987,20 +989,29 @@ fn a_huge_batch_is_refused_without_stalling_the_proxy() {
     let mut proxy = Proxy::start(&api.base_url, &[]);
     proxy.initialize();
 
-    let batch: Vec<Value> = (0..60_000u64)
-        .map(|i| json!({"jsonrpc": "2.0", "id": 100_000 + i, "method": "ping"}))
-        .collect();
+    let batch = Value::Array(
+        (0..60_000u64)
+            .map(|i| json!({"jsonrpc": "2.0", "id": 100_000 + i, "method": "ping"}))
+            .collect(),
+    )
+    .to_string();
     let started = std::time::Instant::now();
-    proxy.send(&Value::Array(batch));
+    proxy.send_raw(&batch);
     proxy.send(&json!({"jsonrpc": "2.0", "id": 3000, "method": "ping"}));
-    let replies: Value = serde_json::from_str(&proxy.recv_line()).unwrap();
-    assert_eq!(replies.as_array().map(Vec::len), Some(60_000));
-    assert_eq!(proxy.recv_id(3000)["result"], json!({}));
+    let replies = proxy.recv_line();
     let elapsed = started.elapsed();
+    // About 0.5s in a debug build, most of it building the 60k refusals.
+    // Scanning the batch for duplicates before checking the cap took 15s.
     assert!(
-        elapsed < Duration::from_secs(3),
+        elapsed < Duration::from_secs(2),
         "the batch held the proxy up for {elapsed:?}"
     );
+    let replies: Value = serde_json::from_str(&replies).unwrap();
+    assert_eq!(replies.as_array().map(Vec::len), Some(60_000));
+    for reply in replies.as_array().unwrap() {
+        assert_refused(reply);
+    }
+    assert_eq!(proxy.recv_id(3000)["result"], json!({}));
 }
 
 #[test]

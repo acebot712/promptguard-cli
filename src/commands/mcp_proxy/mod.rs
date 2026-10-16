@@ -16,7 +16,8 @@
 //! Threads: the main thread reads the server; one thread reads the client;
 //! each `tools/call` is checked on its own short-lived thread so a slow API
 //! does not hold up pings, cancellations or other requests. The pending cap
-//! bounds how many of those exist at once, id-less calls included.
+//! bounds how many of those exist at once. A `tools/call` without an id is
+//! refused at once, so it takes neither a slot nor a check.
 //!
 //! So messages can overtake a `tools/call` that is still being checked. A
 //! `notifications/cancelled` for that call may reach the server first; the
@@ -36,11 +37,10 @@ use crate::error::{PromptGuardError, Result};
 use check::{ApiValidator, Decision, Validator};
 use line::{Line, MAX_LINE_BYTES};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -55,6 +55,9 @@ const PENDING_TTL: Duration = Duration::from_mins(10);
 
 /// How long the startup key check may take. It delays the server's start.
 const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The refusal for a request past [`MAX_PENDING`].
+const TOO_MANY_PENDING: &str = "too many pending requests (limit 1024)";
 
 /// JSON-RPC "Invalid Request", the code every refusal carries.
 const INVALID_REQUEST: i64 = -32600;
@@ -129,7 +132,6 @@ impl McpProxyCommand {
             fail_mode: self.fail_mode,
             validator: Box::new(validator),
             pending: Mutex::new(HashMap::new()),
-            notifications: AtomicU64::new(0),
             to_server: Mutex::new(Some(to_server)),
         });
 
@@ -296,8 +298,6 @@ struct Proxy {
     validator: Box<dyn Validator>,
     /// Client requests awaiting a server response, by serialized id.
     pending: Mutex<HashMap<String, Instant>>,
-    /// Numbers the pending keys of id-less tool calls.
-    notifications: AtomicU64,
     /// `None` once the client has gone and the server's stdin is closed.
     to_server: Mutex<Option<ChildStdin>>,
 }
@@ -374,57 +374,55 @@ impl Proxy {
             return;
         }
 
+        // MCP's tools/call is a request, so one without an id is malformed.
+        // It is refused before any work, so a flood of them takes no pending
+        // slot and no check thread. JSON-RPC answers a request whose id it
+        // cannot use with a null id.
+        let Some(id) = id else {
+            log("refused a tools/call without an id");
+            self.write_client_value(&refusal(
+                &Value::Null,
+                "Invalid tools/call: it must have an id",
+            ));
+            return;
+        };
         let (tool, arguments) = match parse_tool_call(message) {
             Ok(call) => call,
             Err(why) => {
                 log(&format!("refused a malformed tools/call: {why}"));
-                if let Some(id) = &id {
-                    self.write_client_value(&refusal(id, &format!("Invalid tools/call: {why}")));
-                }
+                self.write_client_value(&refusal(&id, &format!("Invalid tools/call: {why}")));
                 return;
             },
         };
-        // A tools/call without an id still holds a slot while it is checked,
-        // under a key no JSON id can serialize to, so the cap bounds the
-        // check threads whether or not the client asks for an answer.
-        let key = match &id {
-            Some(id) => id_key(id),
-            None => format!(
-                "#notification-{}",
-                self.notifications.fetch_add(1, Ordering::Relaxed)
-            ),
-        };
+        let key = id_key(&id);
         if let Err(why) = self.track(std::slice::from_ref(&key)) {
-            match &id {
-                Some(id) => self.write_client_value(&refusal(id, why)),
-                None => log(&format!(
-                    "dropped a tools/call notification for `{tool}`: {why}"
-                )),
-            }
+            self.write_client_value(&refusal(&id, why));
             return;
         }
 
         let proxy = Arc::clone(self);
+        let (thread_key, thread_id) = (key.clone(), id.clone());
         let check = thread::Builder::new()
             .name("mcp-proxy-check".to_string())
-            .spawn(move || proxy.check_and_forward(&raw, &key, id.as_ref(), &tool, &arguments));
+            .spawn(move || {
+                proxy.check_and_forward(&raw, &thread_key, &thread_id, &tool, &arguments);
+            });
         if let Err(e) = check {
+            // Nothing will check or answer the call: free its slot and say so.
             log(&format!("could not start a check: {e}"));
+            self.untrack(&key);
+            self.write_client_value(&refusal(
+                &id,
+                "the proxy could not start a check for this call",
+            ));
         }
     }
 
-    fn check_and_forward(
-        &self,
-        raw: &[u8],
-        key: &str,
-        id: Option<&Value>,
-        tool: &str,
-        arguments: &Value,
-    ) {
+    fn check_and_forward(&self, raw: &[u8], key: &str, id: &Value, tool: &str, arguments: &Value) {
         let decision = check::decide(self.fail_mode, tool, arguments, self.validator.as_ref());
-        // A relayed call with an id keeps its slot until the server answers;
-        // anything else is finished with now.
-        if id.is_none() || matches!(decision, Decision::Refuse { .. }) {
+        // A relayed call keeps its slot until the server answers; a refused
+        // one is finished with now.
+        if matches!(decision, Decision::Refuse { .. }) {
             self.untrack(key);
         }
         match decision {
@@ -439,12 +437,10 @@ impl Proxy {
             },
             Decision::Refuse { reason } => {
                 log(&format!("refused tools/call `{tool}`: {reason}"));
-                if let Some(id) = id {
-                    self.write_client_value(&refusal(
-                        id,
-                        &format!("PromptGuard refused tool call `{tool}`: {reason}"),
-                    ));
-                }
+                self.write_client_value(&refusal(
+                    id,
+                    &format!("PromptGuard refused tool call `{tool}`: {reason}"),
+                ));
             },
         }
     }
@@ -452,6 +448,9 @@ impl Proxy {
     /// A batch is relayed whole or refused whole. One holding a `tools/call`
     /// is refused: checking its calls one by one would mean splitting the
     /// batch, and forwarding it unchecked would be a way around the proxy.
+    /// So is one holding anything but objects (a nested batch, a string):
+    /// JSON-RPC allows only objects there, and a server that unwrapped a
+    /// nested batch would run a `tools/call` the proxy never looked at.
     /// (MCP dropped batching in its 2025-06-18 revision.)
     fn handle_client_batch(&self, items: &[Value]) {
         // The batch's requests: messages with a method and an id.
@@ -468,10 +467,18 @@ impl Proxy {
             }
         };
 
+        if items.iter().any(|m| !m.is_object()) {
+            refuse_all("a batch may contain only JSON-RPC objects");
+            return;
+        }
         if items.iter().any(|m| method_of(m) == Some("tools/call")) {
             refuse_all(
                 "a batch containing tools/call cannot be checked; send tool calls one at a time",
             );
+            return;
+        }
+        if requests.len() > MAX_PENDING {
+            refuse_all(TOO_MANY_PENDING);
             return;
         }
         let keys: Vec<String> = requests.iter().copied().map(id_key).collect();
@@ -482,22 +489,33 @@ impl Proxy {
         self.write_server(&canonical(&Value::Array(items.to_vec())));
     }
 
-    fn expire(pending: &mut HashMap<String, Instant>) {
-        pending.retain(|_, since| since.elapsed() < PENDING_TTL);
-    }
-
     /// Record requests as pending, all or none: each key must be new (to the
-    /// pending set and within `entries`) and the set must stay within the cap.
+    /// pending set and within `keys`) and the set must stay within the cap.
+    ///
+    /// Every message takes this lock, so the work under it is bounded by
+    /// `keys.len()` (at most [`MAX_PENDING`]), never by anything the client
+    /// controls: the cap is checked first, duplicates are found by hashing,
+    /// and expired entries are swept only when the set is otherwise full (an
+    /// expired id is not a duplicate, swept or not).
     fn track(&self, keys: &[String]) -> std::result::Result<(), &'static str> {
+        if keys.len() > MAX_PENDING {
+            return Err(TOO_MANY_PENDING);
+        }
         let mut pending = lock(&self.pending);
-        Self::expire(&mut pending);
-        for (i, key) in keys.iter().enumerate() {
-            if pending.contains_key(key) || keys[..i].contains(key) {
-                return Err("a request with this id is already pending");
+        if pending.len() + keys.len() > MAX_PENDING {
+            pending.retain(|_, since| since.elapsed() < PENDING_TTL);
+            if pending.len() + keys.len() > MAX_PENDING {
+                return Err(TOO_MANY_PENDING);
             }
         }
-        if pending.len() + keys.len() > MAX_PENDING {
-            return Err("too many pending requests (limit 1024)");
+        let live = |key: &String| {
+            pending
+                .get(key)
+                .is_some_and(|since| since.elapsed() < PENDING_TTL)
+        };
+        let mut seen = HashSet::with_capacity(keys.len());
+        if keys.iter().any(|key| live(key) || !seen.insert(key)) {
+            return Err("a request with this id is already pending");
         }
         let now = Instant::now();
         for key in keys {
