@@ -22,7 +22,8 @@ survives three releases is a changelog nobody is maintaining.
   Linux ARM64 was listed as a supported platform but no release builds it, and
   Windows x86_64, which every release does build, was missing; the README now
   names each published binary. `promptguard update` and `install.sh` stopped
-  suggesting Homebrew and the crates.io crate too. A new test,
+  suggesting Homebrew and the crates.io crate too, and `update` on Windows now
+  points at the release binary instead of piping `install.sh` into `sh`. A new test,
   `tests/install_methods_tests.rs`, checks the README and `install.sh` against
   the release workflow's build matrix and fails when they disagree
   (acebot712/promptguard#962).

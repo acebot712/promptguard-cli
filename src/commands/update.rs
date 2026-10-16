@@ -152,16 +152,28 @@ impl UpdateCommand {
     }
 }
 
-/// How to update, for each install method the README offers. There is no
-/// Homebrew tap and no crates.io crate, so neither appears here; the Cargo
-/// route builds a release tag from the repository, named when it is known.
-fn update_instructions(latest_tag: Option<&str>, _windows: bool) -> String {
+/// How to update, for each install method the README offers on this
+/// platform. There is no Homebrew tap and no crates.io crate, so neither
+/// appears here; the Cargo route builds a release tag from the repository,
+/// named when it is known. install.sh is a POSIX shell script, so Windows is
+/// sent to the release binary instead.
+fn update_instructions(latest_tag: Option<&str>, windows: bool) -> String {
+    const REPO: &str = "https://github.com/acebot712/promptguard-cli";
     let tag = latest_tag.unwrap_or("cli-v<version>");
-    format!(
+    let first = if windows {
+        format!(
+            "  • Download the release binary (recommended):\n      \
+             {REPO}/releases/latest -> promptguard-windows-x86_64.exe\n      \
+             then replace your promptguard.exe with it\n\n"
+        )
+    } else {
         "  • Using curl (recommended):\n      \
-         curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh\n\n  \
-         • Using cargo (build from source):\n      \
-         cargo install --locked --force --git https://github.com/acebot712/promptguard-cli --tag {tag}\n\n"
+         curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh\n\n"
+            .to_string()
+    };
+    format!(
+        "{first}  • Using cargo (build from source):\n      \
+         cargo install --locked --force --git {REPO} --tag {tag}\n\n"
     )
 }
 
