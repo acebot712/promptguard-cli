@@ -5,8 +5,10 @@
 //! ways. Each `tools/call` from the client is decided first by the local
 //! destructive-action check and then by the API's validate-tool endpoint
 //! (see [`check::decide`]); a refusal is answered with JSON-RPC `-32600` and
-//! never reaches the server. Everything else, including lines that are not
-//! JSON, is relayed byte for byte. The server's stderr is inherited, so it
+//! never reaches the server. Client messages are relayed as the proxy parsed
+//! them (re-serialized), never as the client's bytes, and a client line that
+//! is not JSON is dropped: see [`Proxy::handle_client_line`]. The server's
+//! output is relayed byte for byte. The server's stderr is inherited, so it
 //! reaches the client untouched; the proxy's own log lines go there too,
 //! prefixed `promptguard mcp-proxy:`. Nothing but relayed messages is ever
 //! written to stdout.
@@ -191,6 +193,25 @@ fn refusal(id: &Value, message: &str) -> Value {
     })
 }
 
+/// `message` serialized on one line, exactly as the proxy read it. `serde_json`
+/// leaves U+2028, U+2029 and U+0085 raw inside strings, and some readers
+/// split lines on them, so they are escaped; they cannot occur outside a
+/// string in `serde_json`'s output, so the escape is always valid JSON.
+fn canonical(message: &Value) -> Vec<u8> {
+    let mut out = message.to_string();
+    for (raw, escaped) in [
+        ('\u{2028}', "\\u2028"),
+        ('\u{2029}', "\\u2029"),
+        ('\u{85}', "\\u0085"),
+    ] {
+        if out.contains(raw) {
+            out = out.replace(raw, escaped);
+        }
+    }
+    out.push('\n');
+    out.into_bytes()
+}
+
 /// The tool name and arguments of a `tools/call`, or why it is malformed.
 /// Arguments must be an object (absent means `{}`), as MCP requires.
 fn parse_tool_call(message: &Value) -> std::result::Result<(String, Value), String> {
@@ -226,7 +247,7 @@ impl Proxy {
         loop {
             match line::read_line(&mut reader, MAX_LINE_BYTES) {
                 Ok(None) => break,
-                Ok(Some(Line::Complete(raw))) => self.handle_client_line(raw),
+                Ok(Some(Line::Complete(raw))) => self.handle_client_line(&raw),
                 Ok(Some(Line::Oversized(_))) => {
                     // Too large to inspect, so relaying it would let a padded
                     // tool call through unchecked. Its id is unreadable, so
@@ -246,16 +267,31 @@ impl Proxy {
         lock(&self.to_server).take();
     }
 
-    fn handle_client_line(self: &Arc<Self>, raw: Vec<u8>) {
-        match serde_json::from_slice::<Value>(&raw) {
-            Ok(message @ Value::Object(_)) => self.handle_client_message(raw, &message),
-            Ok(Value::Array(items)) => self.handle_client_batch(&raw, &items),
-            // Not JSON-RPC: not ours to judge.
-            _ => self.write_server(&raw),
+    /// A client line is relayed only as the proxy read it: parsed, then
+    /// re-serialized. A client never legitimately sends anything else, and
+    /// the server's parser may read the original bytes differently (deeper
+    /// nesting, NaN, 1e999, lone surrogates, duplicate keys, or a bare `\r`
+    /// that a universal-newline reader treats as a line break), which would
+    /// let a `tools/call` past the check. So a line `serde_json` cannot parse,
+    /// or one with a bare `\r`, is dropped and logged.
+    fn handle_client_line(self: &Arc<Self>, raw: &[u8]) {
+        let body = raw.strip_suffix(b"\n").unwrap_or(raw);
+        let body = body.strip_suffix(b"\r").unwrap_or(body);
+        if body.contains(&b'\r') {
+            log("dropped a client line with a bare carriage return: a server may split it into several messages, so it was not relayed");
+            return;
+        }
+        match serde_json::from_slice::<Value>(body) {
+            Ok(message @ Value::Object(_)) => self.handle_client_message(&message),
+            Ok(Value::Array(items)) => self.handle_client_batch(&items),
+            Ok(_) | Err(_) => log(
+                "dropped a client line that is not JSON-RPC: the server could parse it differently, so it was not relayed",
+            ),
         }
     }
 
-    fn handle_client_message(self: &Arc<Self>, raw: Vec<u8>, message: &Value) {
+    fn handle_client_message(self: &Arc<Self>, message: &Value) {
+        let raw = canonical(message);
         let Some(method) = method_of(message).map(str::to_string) else {
             // A response to a request the server made.
             self.write_server(&raw);
@@ -328,7 +364,7 @@ impl Proxy {
     /// is refused: checking its calls one by one would mean splitting the
     /// batch, and forwarding it unchecked would be a way around the proxy.
     /// (MCP dropped batching in its 2025-06-18 revision.)
-    fn handle_client_batch(&self, raw: &[u8], items: &[Value]) {
+    fn handle_client_batch(&self, items: &[Value]) {
         let requests: Vec<(&Value, &str)> = items
             .iter()
             .filter_map(|m| Some((id_of(m)?, method_of(m)?)))
@@ -368,7 +404,7 @@ impl Proxy {
                 );
             }
         }
-        self.write_server(raw);
+        self.write_server(&canonical(&Value::Array(items.to_vec())));
     }
 
     fn expire(pending: &mut HashMap<String, (AnsweredRequest, Instant)>) {

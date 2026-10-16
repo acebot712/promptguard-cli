@@ -573,7 +573,7 @@ fn non_json_client_lines_are_dropped_and_server_stderr_passes_through() {
     proxy.wait_stderr("fake-mcp-server: diagnostics go to stderr");
 }
 
-/// Lines that serde_json rejects, or reads differently, but that the fake
+/// Lines that `serde_json` rejects, or reads differently, but that the fake
 /// server (Python's `json.loads` on universal-newline stdin, as the official
 /// Python MCP SDK reads it) accepts as a destructive `tools/call`. Relaying
 /// any of them as "not JSON" would run the call unchecked.
@@ -655,7 +655,7 @@ fn relayed_messages_are_what_the_proxy_checked() {
     );
     let sep = raw_for(81);
     assert!(
-        sep.contains(r" ") && !sep.contains('\u{2028}'),
+        sep.contains("\\u2028") && !sep.contains('\u{2028}'),
         "U+2028 must reach the server escaped: {sep}"
     );
 }

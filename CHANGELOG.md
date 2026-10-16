@@ -21,8 +21,11 @@ survives three releases is a changelog nobody is maintaining.
   `-32600` and never reaches the server. `--fail-mode open|closed|mixed`
   (default `mixed`) decides what happens when the API cannot be reached:
   `mixed` refuses calls the local check matches and relays the rest, logged to
-  stderr as unchecked. Non-JSON lines and the server's stderr pass through
-  untouched; messages are bounded at 4 MiB and pending requests at 1024. The
+  stderr as unchecked. Agent messages reach the server as the proxy parsed
+  them, never as the agent's bytes, and an agent line that is not JSON or holds
+  a bare carriage return is dropped, so a server that parses differently
+  cannot see a tool call the proxy did not. Server output and stderr pass
+  through untouched; messages are bounded at 4 MiB and pending requests at 1024. The
   wrapped server does not inherit `PROMPTGUARD_API_KEY`
   (acebot712/promptguard#943).
 

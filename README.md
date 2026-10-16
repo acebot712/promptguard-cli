@@ -179,12 +179,20 @@ nor let through the actions the proxy exists to stop. Each unchecked call is
 logged to stderr with the word `unchecked`, the tool's name and why the API
 gave no verdict; arguments are never logged.
 
-### What passes through untouched
+### What is relayed, and how
 
-- Every message other than `tools/call`, byte for byte, in both directions.
-- Lines that are not JSON, so a server that prints a banner to stdout still
-  works.
-- The server's stderr.
+- **From the server to the agent:** everything, byte for byte, including lines
+  that are not JSON (so a server that prints a banner to stdout still works).
+  The server's stderr is passed through too.
+- **From the agent to the server:** each message as the proxy parsed it, then
+  re-serialized on one line, so the server receives exactly what was checked.
+  The agent's original bytes are never relayed: a server's parser can read
+  them differently (nesting deeper than the proxy reads, `NaN`, `1e999`, lone
+  surrogates, duplicate keys) and see a tool call the proxy did not. For the
+  same reason a line that is not valid JSON, or that contains a bare carriage
+  return (which a universal-newline reader, like the Python MCP SDK's, treats
+  as a line break), is dropped and logged to stderr. A well-behaved agent sends
+  neither.
 
 Messages are bounded at 4 MiB. A larger one from the agent is dropped (it is
 too large to check, so relaying it would be a way around the check); a larger
