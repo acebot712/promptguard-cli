@@ -14,8 +14,13 @@ serde_json does. Those differences are what the proxy must not let a tool
 call hide behind.
 
 Methods:
-  initialize, tools/list, ping   answered normally
-  tools/call                     answered with "ran <tool name>"
+  initialize, ping               answered normally
+  tools/list                     the tools in the JSON file FAKE_MCP_TOOLS names,
+                                 or two default tools
+  tools/call                     answered with "ran <tool name>"; the tool
+                                 `echo` answers with its `text` argument
+                                 (`repeat` times), as a text block, an image
+                                 block and structuredContent
   test/hang                      never answered (fills the proxy's pending set)
   test/exit                      exits with params["code"]
 """
@@ -26,6 +31,19 @@ import os
 import sys
 
 LOG_PATH = os.environ.get("FAKE_MCP_LOG")
+TOOLS_PATH = os.environ.get("FAKE_MCP_TOOLS")
+
+DEFAULT_TOOLS = [
+    {"name": "read_file", "description": "Read a file", "inputSchema": {"type": "object"}},
+    {"name": "run_command", "description": "Run a shell command", "inputSchema": {"type": "object"}},
+]
+
+
+def tools():
+    if TOOLS_PATH:
+        with open(TOOLS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    return DEFAULT_TOOLS
 
 
 def log(entry):
@@ -83,13 +101,18 @@ while True:
             },
         )
     elif method == "tools/list":
+        reply(request_id, {"tools": tools()})
+    elif method == "tools/call" and params.get("name") == "echo":
+        arguments = params.get("arguments") or {}
+        text = str(arguments.get("text", "")) * int(arguments.get("repeat", 1))
         reply(
             request_id,
             {
-                "tools": [
-                    {"name": "read_file", "description": "Read a file", "inputSchema": {"type": "object"}},
-                    {"name": "run_command", "description": "Run a shell command", "inputSchema": {"type": "object"}},
-                ]
+                "content": [
+                    {"type": "text", "text": text},
+                    {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+                ],
+                "structuredContent": {"echo": text, "length": len(text)},
             },
         )
     elif method == "tools/call":
