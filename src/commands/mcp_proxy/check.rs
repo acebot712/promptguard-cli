@@ -5,7 +5,6 @@ use super::destructive::is_destructive;
 use crate::api::{PromptGuardClient, RawResponse};
 use serde::Deserialize;
 use serde_json::Value;
-use std::sync::Arc;
 use std::time::Duration;
 
 /// How long one validate-tool request may take before the call is treated as
@@ -83,7 +82,7 @@ pub trait Validator: Send + Sync {
 
 /// The validate-tool endpoint, through the CLI's own HTTP client.
 pub struct ApiValidator {
-    pub client: Arc<PromptGuardClient>,
+    pub client: PromptGuardClient,
     pub agent_id: String,
     pub session_id: String,
 }

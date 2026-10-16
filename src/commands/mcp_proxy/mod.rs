@@ -26,7 +26,6 @@
 
 mod check;
 mod destructive;
-mod inspect;
 mod line;
 
 pub use check::FailMode;
@@ -35,7 +34,6 @@ use crate::api::{PromptGuardClient, RawResponse};
 use crate::auth::resolve_session;
 use crate::error::{PromptGuardError, Result};
 use check::{ApiValidator, Decision, Validator};
-use inspect::{AnsweredRequest, Relay, ResponseInspector, ServerIdentity};
 use line::{Line, MAX_LINE_BYTES};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -88,12 +86,8 @@ impl McpProxyCommand {
         };
 
         let (api_key, base_url) = resolve_session()?;
-        let client = Arc::new(PromptGuardClient::new(api_key, Some(base_url))?);
+        let client = PromptGuardClient::new(api_key, Some(base_url))?;
         self.verify_key(&client)?;
-        let server = ServerIdentity {
-            command: self.command.clone(),
-        };
-        let inspector = inspect::response_inspector(&server, &client);
         let validator = ApiValidator {
             client,
             agent_id: self
@@ -134,7 +128,6 @@ impl McpProxyCommand {
         let proxy = Arc::new(Proxy {
             fail_mode: self.fail_mode,
             validator: Box::new(validator),
-            inspector,
             pending: Mutex::new(HashMap::new()),
             notifications: AtomicU64::new(0),
             to_server: Mutex::new(Some(to_server)),
@@ -251,13 +244,6 @@ fn id_key(id: &Value) -> String {
     }
 }
 
-fn request(method: &str, tool: Option<String>) -> AnsweredRequest {
-    AnsweredRequest {
-        method: method.to_string(),
-        tool,
-    }
-}
-
 fn method_of(message: &Value) -> Option<&str> {
     message.get("method").and_then(Value::as_str)
 }
@@ -308,9 +294,8 @@ fn parse_tool_call(message: &Value) -> std::result::Result<(String, Value), Stri
 struct Proxy {
     fail_mode: FailMode,
     validator: Box<dyn Validator>,
-    inspector: Box<dyn ResponseInspector>,
     /// Client requests awaiting a server response, by serialized id.
-    pending: Mutex<HashMap<String, (AnsweredRequest, Instant)>>,
+    pending: Mutex<HashMap<String, Instant>>,
     /// Numbers the pending keys of id-less tool calls.
     notifications: AtomicU64,
     /// `None` once the client has gone and the server's stdin is closed.
@@ -380,7 +365,7 @@ impl Proxy {
 
         if method != "tools/call" {
             if let Some(id) = &id {
-                if let Err(why) = self.track(&[(id_key(id), request(&method, None))]) {
+                if let Err(why) = self.track(&[id_key(id)]) {
                     self.write_client_value(&refusal(id, why));
                     return;
                 }
@@ -409,7 +394,7 @@ impl Proxy {
                 self.notifications.fetch_add(1, Ordering::Relaxed)
             ),
         };
-        if let Err(why) = self.track(&[(key.clone(), request(&method, Some(tool.clone())))]) {
+        if let Err(why) = self.track(std::slice::from_ref(&key)) {
             match &id {
                 Some(id) => self.write_client_value(&refusal(id, why)),
                 None => log(&format!(
@@ -469,13 +454,15 @@ impl Proxy {
     /// batch, and forwarding it unchecked would be a way around the proxy.
     /// (MCP dropped batching in its 2025-06-18 revision.)
     fn handle_client_batch(&self, items: &[Value]) {
-        let requests: Vec<(&Value, &str)> = items
+        // The batch's requests: messages with a method and an id.
+        let requests: Vec<&Value> = items
             .iter()
-            .filter_map(|m| Some((id_of(m)?, method_of(m)?)))
+            .filter(|m| method_of(m).is_some())
+            .filter_map(id_of)
             .collect();
         let refuse_all = |why: &str| {
             log(&format!("refused a batch: {why}"));
-            let replies: Vec<Value> = requests.iter().map(|(id, _)| refusal(id, why)).collect();
+            let replies: Vec<Value> = requests.iter().map(|id| refusal(id, why)).collect();
             if !replies.is_empty() {
                 self.write_client_value(&Value::Array(replies));
             }
@@ -487,45 +474,40 @@ impl Proxy {
             );
             return;
         }
-        let entries: Vec<(String, AnsweredRequest)> = requests
-            .iter()
-            .map(|(id, method)| (id_key(id), request(method, None)))
-            .collect();
-        if let Err(why) = self.track(&entries) {
+        let keys: Vec<String> = requests.iter().copied().map(id_key).collect();
+        if let Err(why) = self.track(&keys) {
             refuse_all(why);
             return;
         }
         self.write_server(&canonical(&Value::Array(items.to_vec())));
     }
 
-    fn expire(pending: &mut HashMap<String, (AnsweredRequest, Instant)>) {
-        pending.retain(|_, (_, since)| since.elapsed() < PENDING_TTL);
+    fn expire(pending: &mut HashMap<String, Instant>) {
+        pending.retain(|_, since| since.elapsed() < PENDING_TTL);
     }
 
     /// Record requests as pending, all or none: each key must be new (to the
     /// pending set and within `entries`) and the set must stay within the cap.
-    fn track(
-        &self,
-        entries: &[(String, AnsweredRequest)],
-    ) -> std::result::Result<(), &'static str> {
+    fn track(&self, keys: &[String]) -> std::result::Result<(), &'static str> {
         let mut pending = lock(&self.pending);
         Self::expire(&mut pending);
-        for (i, (key, _)) in entries.iter().enumerate() {
-            if pending.contains_key(key) || entries[..i].iter().any(|(k, _)| k == key) {
+        for (i, key) in keys.iter().enumerate() {
+            if pending.contains_key(key) || keys[..i].contains(key) {
                 return Err("a request with this id is already pending");
             }
         }
-        if pending.len() + entries.len() > MAX_PENDING {
+        if pending.len() + keys.len() > MAX_PENDING {
             return Err("too many pending requests (limit 1024)");
         }
-        for (key, request) in entries {
-            pending.insert(key.clone(), (request.clone(), Instant::now()));
+        let now = Instant::now();
+        for key in keys {
+            pending.insert(key.clone(), now);
         }
         Ok(())
     }
 
-    fn untrack(&self, key: &str) -> Option<AnsweredRequest> {
-        lock(&self.pending).remove(key).map(|(r, _)| r)
+    fn untrack(&self, key: &str) {
+        lock(&self.pending).remove(key);
     }
 
     fn write_server(&self, raw: &[u8]) {
@@ -551,8 +533,8 @@ impl Proxy {
                 Ok(Some(Line::Complete(raw))) => self.handle_server_line(&raw),
                 Ok(Some(Line::Oversized(prefix))) => {
                     // Streamed through unread, so memory stays bounded and a
-                    // large tool result still arrives. Nothing in #943 inspects
-                    // this direction; see inspect.rs for #954.
+                    // large tool result still arrives. Its pending slot, if
+                    // any, expires after PENDING_TTL.
                     log("relayed a server message over 4 MiB without inspecting it");
                     let stdout = io::stdout();
                     let mut out = stdout.lock();
@@ -571,44 +553,25 @@ impl Proxy {
         }
     }
 
+    /// Relay a server line byte for byte, first freeing the pending slot of
+    /// each response in it. (acebot712/promptguard#954 inspects responses
+    /// here, to redact tool results and pin tool lists.)
     fn handle_server_line(&self, raw: &[u8]) {
-        let replacement = match serde_json::from_slice::<Value>(raw) {
-            Ok(message @ Value::Object(_)) => match self.inspect(&message) {
-                Relay::Unchanged => None,
-                Relay::Replace(v) => Some(v),
-            },
-            Ok(Value::Array(items)) => {
-                let mut replaced = false;
-                let out: Vec<Value> = items
-                    .into_iter()
-                    .map(|m| match self.inspect(&m) {
-                        Relay::Unchanged => m,
-                        Relay::Replace(v) => {
-                            replaced = true;
-                            v
-                        },
-                    })
-                    .collect();
-                replaced.then_some(Value::Array(out))
-            },
-            _ => None,
-        };
-        match replacement {
-            Some(v) => self.write_client_value(&v),
-            None => self.write_client(raw),
+        match serde_json::from_slice::<Value>(raw) {
+            Ok(message @ Value::Object(_)) => self.answered(&message),
+            Ok(Value::Array(items)) => items.iter().for_each(|m| self.answered(m)),
+            _ => {},
         }
+        self.write_client(raw);
     }
 
-    /// Pass a response to the inspector with the request it answers. Server
-    /// requests and notifications, and responses to ids the proxy is not
-    /// tracking, are relayed unchanged.
-    fn inspect(&self, message: &Value) -> Relay {
-        if method_of(message).is_some() {
-            return Relay::Unchanged;
-        }
-        match id_of(message).and_then(|id| self.untrack(&id_key(id))) {
-            Some(request) => self.inspector.inspect(&request, message),
-            None => Relay::Unchanged,
+    /// A response (an id and no method) ends that request's pending slot.
+    /// Server requests and notifications carry a method and hold none.
+    fn answered(&self, message: &Value) {
+        if method_of(message).is_none() {
+            if let Some(id) = id_of(message) {
+                self.untrack(&id_key(id));
+            }
         }
     }
 
