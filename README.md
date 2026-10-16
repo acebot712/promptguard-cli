@@ -154,10 +154,17 @@ and its fail mode applies.
 Each `tools/call` is checked twice, in order:
 
 1. **Locally**, by a destructive-action check on the call's arguments:
-   recursive forced removal (`rm -rf`, `rm -r -f`, `rm --recursive --force`,
-   in any order), `find ... -delete` and `find ... -exec rm`,
-   `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE TABLE|DATABASE`, `mkfs`, a download
-   piped into a shell, `/etc/shadow`, and `../../` path climbing.
+   recursive forced removal (`rm -rf`, `rm -rfv`, `rm -r -f`,
+   `rm --recursive --force`, in any order), `find ... -delete` and
+   `find ... -exec rm`, PowerShell's `Remove-Item -Recurse -Force`, `del /s`,
+   `rmdir /s`, `git clean -f`; `DROP TABLE|DATABASE|SCHEMA` and `TRUNCATE`
+   (comments between the keywords included), `DELETE FROM <table>` with no
+   `WHERE`; `mkfs`, `wipefs`, and `dd`, `shred` or a redirect onto a disk; a
+   recursive `chmod`/`chown` of `/`; the fork bomb; a download or base64-decoded
+   text piped into a shell or `sudo`, or run through `sh -c "$(curl ...)"` or
+   `bash <(curl ...)`; `/etc/shadow`; and `../../` path climbing. Each string is
+   checked after NFKC normalisation with zero-width and other format characters
+   removed, so fullwidth `ｒｍ` or a zero-width space inside `rm` is still `rm`.
 2. **By the PromptGuard API**, through `POST /api/v1/agent/validate-tool`, which
    applies your project's agent policies and behaviour analysis. Calls are
    reported under the agent ID `mcp-proxy:<server name>`; set your own with
@@ -206,10 +213,11 @@ verdict. A revoked key must not turn the proxy into a pass-through.
 Messages are bounded at 4 MiB. A larger one from the agent is dropped (it is
 too large to check, so relaying it would be a way around the check); a larger
 one from the server is streamed through. At most 1024 requests may be pending
-at once, counting tool calls sent without an id while they are checked; one
-past that is refused with `-32600`. So is a request whose id is already
-pending (`1`, `1.0` and `1e0` are the same id). A JSON-RPC batch that contains
-a `tools/call` is refused whole.
+at once; one past that is refused with `-32600`. So is a request whose id is
+already pending (`1`, `1.0` and `1e0` are the same id), and a `tools/call`
+without an id, which MCP does not allow (it is answered with a null id). A
+JSON-RPC batch that contains a `tools/call`, or anything but JSON-RPC objects,
+is refused whole.
 
 Tool calls are checked concurrently, so other messages can overtake one that
 is still being checked. A `notifications/cancelled` for such a call may reach

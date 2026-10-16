@@ -440,8 +440,10 @@ Examples:
     /// Spawns a stdio MCP server and relays JSON-RPC between it and your
     /// agent. Each tools/call is checked by a local destructive-action check
     /// and then by the PromptGuard API before the server sees it; a refused
-    /// call is answered with JSON-RPC error -32600. Everything else passes
-    /// through untouched, including the server's stderr.
+    /// call is answered with JSON-RPC error -32600. Other messages from your
+    /// agent are relayed as the proxy parsed them (re-serialized), and a line
+    /// that is not JSON-RPC is dropped. The server's output and stderr pass
+    /// through untouched.
     #[command(after_help = "\
 Fail modes (what happens when the PromptGuard API cannot be reached):
   mixed   Refuse calls the destructive-action check matches, relay the rest

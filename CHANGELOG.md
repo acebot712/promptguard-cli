@@ -18,7 +18,12 @@ survives three releases is a changelog nobody is maintaining.
   checks every tool call before the server sees it: first a local
   destructive-action check on the arguments (the earlier rule set's pattern, which we
   extended to catch `rm -r -f`, `rm --recursive --force` in any order,
-  `find -delete`, `find -exec rm` and `DROP SCHEMA`), then the API's
+  `rm -rfv`, `find -delete`, `find -exec rm`, `DROP SCHEMA`, `TRUNCATE`,
+  `DELETE FROM` with no `WHERE`, `dd`/`shred`/`wipefs` on a disk, a recursive
+  `chmod`/`chown` of `/`, the fork bomb, `curl | sudo bash`, `base64 -d | sh`,
+  `sh -c "$(curl ...)"`, `Remove-Item -Recurse -Force`, `del /s`, `rmdir /s`
+  and `git clean -f`, after NFKC normalisation and with zero-width characters
+  removed), then the API's
   `POST /agent/validate-tool`. A refused call is answered with JSON-RPC
   `-32600` and never reaches the server.
   - `--fail-mode open|closed|mixed` (default `mixed`) decides what happens when
@@ -32,8 +37,9 @@ survives three releases is a changelog nobody is maintaining.
     return, is dropped. A server that parses differently cannot see a tool
     call the proxy did not check.
   - Server output and stderr pass through untouched. Messages are bounded at
-    4 MiB; at most 1024 requests may be pending, id-less tool calls included,
-    and a request reusing a pending id (`1` and `1.0` are one id) is refused.
+    4 MiB; at most 1024 requests may be pending, and a request reusing a
+    pending id (`1` and `1.0` are one id) is refused, as are a tool call
+    without an id and a batch holding anything but JSON-RPC objects.
   - The wrapped server does not inherit `PROMPTGUARD_API_KEY`, and logs name
     the server's program, never its arguments (acebot712/promptguard#943).
 
