@@ -186,8 +186,9 @@ Examples:
     /// With --offline as well: Scans the content on this machine against a bundled
     /// regex rule pack, with no network and no API key, for CI. This is a local
     /// subset, not the full detection the PromptGuard API runs: no ML classifiers
-    /// and no project policy. Critical and high rules fail the scan; medium rules
-    /// only warn.
+    /// and no project policy. Findings are scored with the upstream rule set's
+    /// thresholds; only a block finding fails the scan. Add --untrusted for
+    /// content from outside your control (tool output, retrieved documents).
     ///
     /// Exit codes: 0 = content allowed / no SDK usage found,
     /// 2 = content blocked / SDK usage found, 1 = error.
@@ -218,6 +219,12 @@ Examples:
         /// no network, no key. A local subset, weaker than the API's detection
         #[arg(long, conflicts_with = "provider")]
         offline: bool,
+
+        /// With --offline: treat the content as untrusted (tool output, retrieved
+        /// documents, web pages) and also run the indirect-injection rules, which
+        /// flag ordinary instructions like "answer quietly" in your own prompts
+        #[arg(long, requires = "offline")]
+        untrusted: bool,
     },
 
     /// Show current PromptGuard status and configuration
@@ -614,12 +621,14 @@ fn main() {
             text,
             file,
             offline,
+            untrusted,
         } => ScanCommand {
             provider,
             json,
             text,
             file,
             offline,
+            untrusted,
         }
         .execute()
         .map(|exit_code| {

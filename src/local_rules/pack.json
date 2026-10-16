@@ -17,6 +17,14 @@
       {
         "path": "secrets.go",
         "sha256": "b1944ce1915f3762ab7a0e0d21d3208faf58776e4b1c26b802c511d7db1d959b"
+      },
+      {
+        "path": "../steps.go",
+        "sha256": "b866070d24c0ec7319916b861361bdf49a9a6490303ff3e9d823f40657d7cc2b"
+      },
+      {
+        "path": "../engine.go",
+        "sha256": "9bd8dd55b049bb351fa5209b9e497e7be157130a143db83f770d951141b8079b"
       }
     ],
     "generated_on": "2026-10-16",
@@ -24,7 +32,9 @@
     "match_semantics": [
       "injection rules match case-insensitively; the earlier rule set lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
       "rules with min_entropy count a match only when its Shannon entropy (bits per character) is at least that value",
-      "critical and high rules block; medium rules warn and do not fail the scan"
+      "findings are scored and gated by the pipeline block below, as the earlier rule set's DefaultInputSteps do, including each detector's combination bonus",
+      "indirect_injection rules run only on content marked untrusted (the earlier rule set runs them only for tool, retrieval and memory roles)",
+      "a rule in demoted can at most warn; a rule in dropped is not in the pack"
     ],
     "excluded": {
       "crescendo.go": "multi-turn: needs conversation history a single scan does not have",
@@ -33,7 +43,48 @@
       "pii.go": "PII is redaction, a separate API operation from a threat scan; several rules also need code validators (Luhn, checksums) that are not regexes",
       "structural.go": "not a pattern list: fake-turn counting and encoding-density heuristics are code",
       "topic.go": "per-tenant topic policy, configured at run time, with no default rules"
+    },
+    "dropped": {
+      "jailbreak/authority.admin_override#4": "slash_admin matches any /dev, /root, /admin or /debug path (/dev/null in every shell script, /admin routes in every web app); under the earlier rule set's jailbreak thresholds it can only warn, so in a file scan it is pure noise"
+    },
+    "demoted": {
+      "injection/extraction.direct": "blocks \"Never reveal your system prompt\" and \"Summarize the context below\", the defensive and task lines most system prompts are made of; it fires on the noun, not on intent",
+      "injection/override.imperative": "blocks at exactly the 0.72 threshold on any imperative near \"the ... rules/context/message\" within one sentence (\"skip the rules section\", \"override the default message\"); the narrow override.* rules still block the real phrasings"
     }
+  },
+  "pipeline": {
+    "severity_scores": {
+      "critical": 0.95,
+      "high": 0.8,
+      "medium": 0.55
+    },
+    "input_steps": [
+      {
+        "detector": "indirect_injection",
+        "strategy": "block",
+        "threshold": 0
+      },
+      {
+        "detector": "injection",
+        "strategy": "block",
+        "threshold": 0.72
+      },
+      {
+        "detector": "jailbreak",
+        "strategy": "warn",
+        "threshold": 0.6
+      },
+      {
+        "detector": "jailbreak",
+        "strategy": "block",
+        "threshold": 0.8
+      },
+      {
+        "detector": "secrets",
+        "strategy": "mask",
+        "threshold": 0
+      }
+    ]
   },
   "patterns": [
     {
@@ -636,15 +687,6 @@
       "confidence": 0.93,
       "description": "Spoofed override credential",
       "regex": "(?i)\\b(?:override|bypass|admin)[-_\\s]?(?:code|key|token|password)\\s*[:=]\\s*\\S+\\b"
-    },
-    {
-      "id": "jailbreak/authority.admin_override#4",
-      "detector": "jailbreak",
-      "category": "slash_admin",
-      "severity": "high",
-      "confidence": 0.82,
-      "description": "Slash-command admin toggle",
-      "regex": "(?i)(?:^|[^a-z0-9_])/(?:admin|root|debug|dev)\\b(?:\\s+(?:enable|on|true))?"
     },
     {
       "id": "jailbreak/authority.admin_override#5",

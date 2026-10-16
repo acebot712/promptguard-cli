@@ -25,7 +25,7 @@ const REVIVED_RULES: &[&str] = &["injection/delimiter.inst", "injection/delimite
 /// Windows checkout with `autocrlf` produces the same value. Not a security
 /// hash: it makes a hand edit of either generated file fail here until the pin
 /// is updated on purpose, after `scripts/local-rules/regenerate.sh`.
-const GENERATED_FILES_FINGERPRINT: u64 = 0;
+const GENERATED_FILES_FINGERPRINT: u64 = 0x0723_d4a8_0b2e_27ee;
 
 fn fingerprint(parts: &[&str]) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
@@ -48,6 +48,7 @@ struct Sample {
     earlier-rules_matches: Vec<String>,
     earlier-rules_verdict_user: String,
     earlier-rules_verdict_untrusted: String,
+    earlier-rules_structural: bool,
 }
 
 #[derive(serde::Deserialize)]
@@ -58,6 +59,15 @@ struct BenignPrompt {
 
 fn corpus() -> Vec<Sample> {
     serde_json::from_str(CORPUS_JSON).unwrap()
+}
+
+fn dropped_rules() -> Vec<String> {
+    provenance()["dropped"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect()
 }
 
 fn provenance() -> serde_json::Value {
@@ -84,6 +94,16 @@ fn finding<'a>(findings: &'a [LocalFinding], id: &str) -> &'a LocalFinding {
 
 /// The verdict the earlier rule set's pipeline would give: the strongest effect before this
 /// pack's demotions, in the earlier rule set's own vocabulary.
+fn rank(verdict: &str) -> u8 {
+    match verdict {
+        "pass" => 0,
+        "warn" => 1,
+        "mask" => 2,
+        "block" => 3,
+        other => panic!("unknown verdict {other}"),
+    }
+}
+
 fn upstream_verdict(findings: &[LocalFinding]) -> &'static str {
     match findings.iter().map(|f| f.upstream_effect).max() {
         Some(Effect::Block) => "block",
@@ -134,12 +154,18 @@ fn pack_loads_every_rule() {
 /// detector-level behaviour; `scoring_reaches_earlier-ruless_verdicts` covers that.
 #[test]
 fn go_and_rust_regex_engines_agree_on_each_rule() {
+    let dropped = dropped_rules();
     let samples = corpus();
     assert!(samples.len() > 200, "corpus shrank to {}", samples.len());
     let mut mismatches = Vec::new();
     for sample in &samples {
         let ours = ids(&scan(&sample.text, true));
-        let go: BTreeSet<String> = sample.earlier-rules_matches.iter().cloned().collect();
+        let go: BTreeSet<String> = sample
+            .earlier-rules_matches
+            .iter()
+            .filter(|m| !dropped.contains(m))
+            .cloned()
+            .collect();
         let missing: Vec<_> = go.difference(&ours).collect();
         let extra: Vec<_> = ours
             .difference(&go)
@@ -162,16 +188,15 @@ fn go_and_rust_regex_engines_agree_on_each_rule() {
 
 /// Scoring agreement: with this pack's demotions undone (`upstream_effect`),
 /// the port reaches the verdict the earlier rule set's engine reached on the same sample,
-/// as user content and as tool output. Samples that matched a dropped rule
-/// or a revived one are exempt, since their inputs to the scoring differ.
+/// as user content and as tool output. Samples that matched a dropped or a
+/// revived rule are exempt: their inputs to the scoring differ on purpose.
+/// Where the jailbreak detector's non-regex layer fired in Go (it is code, not
+/// patterns, and is not ported; see `provenance.excluded`), it can only have
+/// added findings, so there the port must reach the earlier rule set's verdict or a weaker
+/// one, never a stronger one.
 #[test]
 fn scoring_reaches_earlier-ruless_verdicts() {
-    let dropped: Vec<String> = provenance()["dropped"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .cloned()
-        .collect();
+    let dropped = dropped_rules();
     let mut mismatches = Vec::new();
     let mut compared = 0;
     for sample in corpus() {
@@ -190,7 +215,12 @@ fn scoring_reaches_earlier-ruless_verdicts() {
             ("untrusted", &untrusted, &sample.earlier-rules_verdict_untrusted),
         ] {
             let ours = upstream_verdict(findings);
-            if ours != earlier-rules {
+            let agrees = if sample.earlier-rules_structural {
+                rank(ours) <= rank(earlier-rules)
+            } else {
+                ours == earlier-rules
+            };
+            if !agrees {
                 mismatches.push(format!(
                     "{} ({mode}): ours {ours}, the earlier rule set {earlier-rules}",
                     sample.name

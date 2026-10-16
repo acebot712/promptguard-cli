@@ -107,6 +107,9 @@ type corpusSample struct {
 	Matches          []string `json:"earlier-rules_matches"`
 	VerdictUser      string   `json:"earlier-rules_verdict_user"`
 	VerdictUntrusted string   `json:"earlier-rules_verdict_untrusted"`
+	// Structural is true when the jailbreak detector's non-regex layer
+	// (structuralFindings, not ported) produced findings on the sample.
+	Structural bool `json:"earlier-rules_structural"`
 }
 
 func TestDumpOfflinePack(t *testing.T) {
@@ -129,11 +132,13 @@ func TestDumpOfflinePack(t *testing.T) {
 		if n := seen[base]; n > 1 {
 			p.ID = fmt.Sprintf("%s#%d", base, n)
 		}
+		// A dropped rule still records its matches in the corpus, so the
+		// tests can tell which samples it would have changed.
+		all = append(all, compiled{p, match})
 		if _, drop := dropped[p.ID]; drop {
 			return
 		}
 		pack = append(pack, p)
-		all = append(all, compiled{p, match})
 	}
 
 	for _, p := range NewInjectionDetector().patterns {
@@ -207,6 +212,7 @@ func TestDumpOfflinePack(t *testing.T) {
 	for i := range samples {
 		samples[i].VerdictUser = verdict(samples[i].Text, security.RoleUser)
 		samples[i].VerdictUntrusted = verdict(samples[i].Text, security.RoleTool)
+		samples[i].Structural = len(structuralFindings(samples[i].Text)) > 0
 		samples[i].Matches = []string{}
 		for _, c := range all {
 			if c.match(samples[i].Text) {

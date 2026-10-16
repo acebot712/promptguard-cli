@@ -42,6 +42,9 @@ pub struct ScanCommand {
     pub file: Option<String>,
     /// Scan `text`/`file` with the bundled local rule pack, not the API
     pub offline: bool,
+    /// With `offline`: the content is untrusted (tool output, retrieved
+    /// documents), so the indirect-injection rules run too
+    pub untrusted: bool,
 }
 
 impl ScanCommand {
@@ -74,14 +77,46 @@ impl ScanCommand {
         }
     }
 
+    /// The content for an offline scan: as `content`, but refused above
+    /// `local_rules::MAX_INPUT_BYTES`, checked before a file is read.
+    fn offline_content(&self) -> Result<String> {
+        let limit = local_rules::MAX_INPUT_BYTES;
+        let too_large = |what: &str, bytes: u64| {
+            PromptGuardError::Custom(format!(
+                "{what} is {:.1} MiB; an offline scan accepts at most {} MiB. \
+                 Split the input, or scan it with the API (without --offline).",
+                mib(bytes),
+                limit / (1024 * 1024)
+            ))
+        };
+        if let Some(ref file_path) = self.file {
+            if let Ok(meta) = std::fs::metadata(file_path) {
+                if meta.len() > limit {
+                    return Err(too_large(file_path, meta.len()));
+                }
+            }
+        }
+        let content = self.content()?;
+        let bytes = content.len() as u64;
+        if bytes > limit {
+            return Err(too_large("The input", bytes));
+        }
+        Ok(content)
+    }
+
     /// Scan text or file content against the bundled local rule pack. Opens
     /// no connection and needs no key; says on every run that it is a local
     /// subset of what the API detects.
     fn execute_offline_scan(&self) -> Result<i32> {
-        let content = self.content()?;
+        let content = self.offline_content()?;
         let pack = local_rules::bundled()?;
-        let findings = pack.scan(&content);
-        let blocked = findings.iter().any(|f| f.blocking);
+        let findings = pack.scan(
+            &content,
+            &local_rules::ScanOptions {
+                untrusted: self.untrusted,
+            },
+        );
+        let blocked = local_rules::verdict(&findings) == local_rules::Effect::Block;
         let notice = local_rules::notice(pack.rules().len());
 
         if self.json {
@@ -93,6 +128,10 @@ impl ScanCommand {
                         "detector": f.detector,
                         "category": f.category,
                         "severity": f.severity.as_str(),
+                        "score": (f.score * 1000.0).round() / 1000.0,
+                        "effect": f.effect.as_str(),
+                        "upstream_effect": f.upstream_effect.as_str(),
+                        "demoted": f.demoted,
                         "blocking": f.blocking,
                         "line": f.line,
                         "excerpt": f.excerpt,
@@ -103,6 +142,7 @@ impl ScanCommand {
                 "mode": "offline",
                 "notice": notice,
                 "rules": pack.rules().len(),
+                "untrusted": self.untrusted,
                 "blocked": blocked,
                 "decision": if blocked { "block" } else { "allow" },
                 "findings": findings_json,
@@ -116,6 +156,9 @@ impl ScanCommand {
             Output::section("Offline Threat Scan (local subset)", "🔍");
             // Printed directly, not through Output, so --quiet cannot hide it.
             println!("{notice}");
+            if self.untrusted {
+                Output::info("Treating the content as untrusted: indirect-injection rules are on.");
+            }
             Output::info(&format!("Scanning {} characters...", content.len()));
             println!();
             if blocked {
@@ -123,18 +166,34 @@ impl ScanCommand {
             } else {
                 println!("Decision: ✅ ALLOWED by the local rules");
             }
+            let mut below_threshold = 0;
             for f in &findings {
-                let effect = if f.blocking { "blocking" } else { "warning" };
+                if f.effect == local_rules::Effect::None {
+                    below_threshold += 1;
+                    continue;
+                }
+                let demoted = if f.demoted { ", demoted" } else { "" };
                 println!(
-                    "  • [{}] {} (line {}, {effect}): {:?}",
-                    f.severity.as_str(),
+                    "  • {} {} (line {}, {} score {:.2}{demoted}): {:?}",
+                    f.effect.as_str(),
                     f.rule_id,
                     f.line,
+                    f.severity.as_str(),
+                    f.score,
                     f.excerpt
                 );
             }
-            if !blocked && !findings.is_empty() {
-                println!("Medium-severity matches are warnings and do not fail the scan.");
+            if below_threshold > 0 {
+                println!(
+                    "  {below_threshold} more match(es) scored below every threshold (listed in --json)."
+                );
+            }
+            if !blocked
+                && findings
+                    .iter()
+                    .any(|f| f.effect > local_rules::Effect::None)
+            {
+                println!("Only block findings fail the scan; warn and mask findings are reported.");
             }
             println!("For full detection, run the same scan without --offline.");
         }
@@ -387,4 +446,9 @@ impl ScanCommand {
 
         Ok(())
     }
+}
+
+#[allow(clippy::cast_precision_loss)] // display only
+fn mib(bytes: u64) -> f64 {
+    bytes as f64 / (1024.0 * 1024.0)
 }

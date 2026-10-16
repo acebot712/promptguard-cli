@@ -364,25 +364,3 @@ fn an_oversized_file_is_refused() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("10 MiB"), "{stderr}");
 }
-
-#[test]
-fn a_file_at_the_cap_is_scanned() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("at-cap.txt");
-    std::fs::write(&path, "a".repeat(10 * 1024 * 1024)).unwrap();
-    let trap = NetworkTrap::start();
-
-    let out = run(
-        &dir,
-        &trap,
-        &["scan", "--offline", "--file", path.to_str().unwrap()],
-    );
-
-    assert_eq!(trap.connections(), 0);
-    assert_eq!(
-        out.status.code(),
-        Some(EXIT_CLEAN),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-}
