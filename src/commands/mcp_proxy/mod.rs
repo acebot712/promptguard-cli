@@ -16,7 +16,13 @@
 //! Threads: the main thread reads the server; one thread reads the client;
 //! each `tools/call` is checked on its own short-lived thread so a slow API
 //! does not hold up pings, cancellations or other requests. The pending cap
-//! bounds how many of those exist at once.
+//! bounds how many of those exist at once, id-less calls included.
+//!
+//! So messages can overtake a `tools/call` that is still being checked. A
+//! `notifications/cancelled` for that call may reach the server first; the
+//! server ignores a cancellation for an id it does not know, and then runs
+//! the call when it arrives. Keeping order would mean holding every message
+//! behind every check, which is the stall the threads exist to avoid.
 
 mod check;
 mod destructive;
@@ -36,6 +42,7 @@ use std::collections::HashMap;
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -129,6 +136,7 @@ impl McpProxyCommand {
             validator: Box::new(validator),
             inspector,
             pending: Mutex::new(HashMap::new()),
+            notifications: AtomicU64::new(0),
             to_server: Mutex::new(Some(to_server)),
         });
 
@@ -227,6 +235,29 @@ fn id_of(message: &Value) -> Option<&Value> {
     message.get("id").filter(|id| !id.is_null())
 }
 
+/// The pending-set key for an id. Numbers are normalised, so `1`, `1.0` and
+/// `1e0` are one id, as a server parsing them to the same number sees them;
+/// strings keep their quotes, so `"1"` stays a different id from `1`.
+fn id_key(id: &Value) -> String {
+    /// The largest integer an f64 holds exactly.
+    const EXACT: f64 = 9_007_199_254_740_992.0;
+    match id {
+        Value::Number(n) if n.is_f64() => match n.as_f64() {
+            #[allow(clippy::cast_possible_truncation)] // whole and within EXACT
+            Some(f) if f.fract() == 0.0 && f.abs() <= EXACT => format!("{}", f as i64),
+            _ => n.to_string(),
+        },
+        other => other.to_string(),
+    }
+}
+
+fn request(method: &str, tool: Option<String>) -> AnsweredRequest {
+    AnsweredRequest {
+        method: method.to_string(),
+        tool,
+    }
+}
+
 fn method_of(message: &Value) -> Option<&str> {
     message.get("method").and_then(Value::as_str)
 }
@@ -280,6 +311,8 @@ struct Proxy {
     inspector: Box<dyn ResponseInspector>,
     /// Client requests awaiting a server response, by serialized id.
     pending: Mutex<HashMap<String, (AnsweredRequest, Instant)>>,
+    /// Numbers the pending keys of id-less tool calls.
+    notifications: AtomicU64,
     /// `None` once the client has gone and the server's stdin is closed.
     to_server: Mutex<Option<ChildStdin>>,
 }
@@ -347,7 +380,7 @@ impl Proxy {
 
         if method != "tools/call" {
             if let Some(id) = &id {
-                if let Err(why) = self.track(id, &method, None) {
+                if let Err(why) = self.track(&[(id_key(id), request(&method, None))]) {
                     self.write_client_value(&refusal(id, why));
                     return;
                 }
@@ -366,24 +399,50 @@ impl Proxy {
                 return;
             },
         };
-        if let Some(id) = &id {
-            if let Err(why) = self.track(id, &method, Some(tool.clone())) {
-                self.write_client_value(&refusal(id, why));
-                return;
+        // A tools/call without an id still holds a slot while it is checked,
+        // under a key no JSON id can serialize to, so the cap bounds the
+        // check threads whether or not the client asks for an answer.
+        let key = match &id {
+            Some(id) => id_key(id),
+            None => format!(
+                "#notification-{}",
+                self.notifications.fetch_add(1, Ordering::Relaxed)
+            ),
+        };
+        if let Err(why) = self.track(&[(key.clone(), request(&method, Some(tool.clone())))]) {
+            match &id {
+                Some(id) => self.write_client_value(&refusal(id, why)),
+                None => log(&format!(
+                    "dropped a tools/call notification for `{tool}`: {why}"
+                )),
             }
+            return;
         }
 
         let proxy = Arc::clone(self);
         let check = thread::Builder::new()
             .name("mcp-proxy-check".to_string())
-            .spawn(move || proxy.check_and_forward(&raw, id.as_ref(), &tool, &arguments));
+            .spawn(move || proxy.check_and_forward(&raw, &key, id.as_ref(), &tool, &arguments));
         if let Err(e) = check {
             log(&format!("could not start a check: {e}"));
         }
     }
 
-    fn check_and_forward(&self, raw: &[u8], id: Option<&Value>, tool: &str, arguments: &Value) {
-        match check::decide(self.fail_mode, tool, arguments, self.validator.as_ref()) {
+    fn check_and_forward(
+        &self,
+        raw: &[u8],
+        key: &str,
+        id: Option<&Value>,
+        tool: &str,
+        arguments: &Value,
+    ) {
+        let decision = check::decide(self.fail_mode, tool, arguments, self.validator.as_ref());
+        // A relayed call with an id keeps its slot until the server answers;
+        // anything else is finished with now.
+        if id.is_none() || matches!(decision, Decision::Refuse { .. }) {
+            self.untrack(key);
+        }
+        match decision {
             Decision::Relay => self.write_server(raw),
             Decision::RelayUnchecked { why } => {
                 log(&format!(
@@ -396,7 +455,6 @@ impl Proxy {
             Decision::Refuse { reason } => {
                 log(&format!("refused tools/call `{tool}`: {reason}"));
                 if let Some(id) = id {
-                    self.untrack(id);
                     self.write_client_value(&refusal(
                         id,
                         &format!("PromptGuard refused tool call `{tool}`: {reason}"),
@@ -429,26 +487,13 @@ impl Proxy {
             );
             return;
         }
-        {
-            let mut pending = lock(&self.pending);
-            Self::expire(&mut pending);
-            if pending.len() + requests.len() > MAX_PENDING {
-                drop(pending);
-                refuse_all("too many pending requests (limit 1024)");
-                return;
-            }
-            for (id, method) in &requests {
-                pending.insert(
-                    id.to_string(),
-                    (
-                        AnsweredRequest {
-                            method: (*method).to_string(),
-                            tool: None,
-                        },
-                        Instant::now(),
-                    ),
-                );
-            }
+        let entries: Vec<(String, AnsweredRequest)> = requests
+            .iter()
+            .map(|(id, method)| (id_key(id), request(method, None)))
+            .collect();
+        if let Err(why) = self.track(&entries) {
+            refuse_all(why);
+            return;
         }
         self.write_server(&canonical(&Value::Array(items.to_vec())));
     }
@@ -457,36 +502,30 @@ impl Proxy {
         pending.retain(|_, (_, since)| since.elapsed() < PENDING_TTL);
     }
 
+    /// Record requests as pending, all or none: each key must be new (to the
+    /// pending set and within `entries`) and the set must stay within the cap.
     fn track(
         &self,
-        id: &Value,
-        method: &str,
-        tool: Option<String>,
+        entries: &[(String, AnsweredRequest)],
     ) -> std::result::Result<(), &'static str> {
         let mut pending = lock(&self.pending);
         Self::expire(&mut pending);
-        let key = id.to_string();
-        if pending.contains_key(&key) {
-            return Err("a request with this id is already pending");
+        for (i, (key, _)) in entries.iter().enumerate() {
+            if pending.contains_key(key) || entries[..i].iter().any(|(k, _)| k == key) {
+                return Err("a request with this id is already pending");
+            }
         }
-        if pending.len() >= MAX_PENDING {
+        if pending.len() + entries.len() > MAX_PENDING {
             return Err("too many pending requests (limit 1024)");
         }
-        pending.insert(
-            key,
-            (
-                AnsweredRequest {
-                    method: method.to_string(),
-                    tool,
-                },
-                Instant::now(),
-            ),
-        );
+        for (key, request) in entries {
+            pending.insert(key.clone(), (request.clone(), Instant::now()));
+        }
         Ok(())
     }
 
-    fn untrack(&self, id: &Value) -> Option<AnsweredRequest> {
-        lock(&self.pending).remove(&id.to_string()).map(|(r, _)| r)
+    fn untrack(&self, key: &str) -> Option<AnsweredRequest> {
+        lock(&self.pending).remove(key).map(|(r, _)| r)
     }
 
     fn write_server(&self, raw: &[u8]) {
@@ -567,7 +606,7 @@ impl Proxy {
         if method_of(message).is_some() {
             return Relay::Unchanged;
         }
-        match id_of(message).and_then(|id| self.untrack(id)) {
+        match id_of(message).and_then(|id| self.untrack(&id_key(id))) {
             Some(request) => self.inspector.inspect(&request, message),
             None => Relay::Unchanged,
         }

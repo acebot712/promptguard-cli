@@ -206,8 +206,14 @@ verdict. A revoked key must not turn the proxy into a pass-through.
 Messages are bounded at 4 MiB. A larger one from the agent is dropped (it is
 too large to check, so relaying it would be a way around the check); a larger
 one from the server is streamed through. At most 1024 requests may be pending
-at once; one past that is refused with `-32600`. A JSON-RPC batch that contains
+at once, counting tool calls sent without an id while they are checked; one
+past that is refused with `-32600`. So is a request whose id is already
+pending (`1`, `1.0` and `1e0` are the same id). A JSON-RPC batch that contains
 a `tools/call` is refused whole.
+
+Tool calls are checked concurrently, so other messages can overtake one that
+is still being checked. A `notifications/cancelled` for such a call may reach
+the server before the call does; the server ignores it, and runs the call.
 
 The proxy exits when the server does, with the server's exit code.
 
