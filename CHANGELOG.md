@@ -20,19 +20,22 @@ survives three releases is a changelog nobody is maintaining.
   extended to catch `rm -r -f`, `rm --recursive --force` in any order,
   `find -delete`, `find -exec rm` and `DROP SCHEMA`), then the API's
   `POST /agent/validate-tool`. A refused call is answered with JSON-RPC
-  `-32600` and never reaches the server. `--fail-mode open|closed|mixed`
-  (default `mixed`) decides what happens when the API cannot be reached (no
-  answer, a timeout or a 5xx; a 429 plan limit too, logged as such): `mixed`
-  refuses calls the local check matches and relays the rest, logged to stderr
-  as unchecked. A rejected key, another 4xx or a malformed answer refuses the
-  call in every mode, and a key the API rejects at startup stops the proxy
-  before it starts the server. Agent messages reach the server as the proxy parsed
-  them, never as the agent's bytes, and an agent line that is not JSON or holds
-  a bare carriage return is dropped, so a server that parses differently
-  cannot see a tool call the proxy did not. Server output and stderr pass
-  through untouched; messages are bounded at 4 MiB and pending requests at 1024. The
-  wrapped server does not inherit `PROMPTGUARD_API_KEY`
-  (acebot712/promptguard#943).
+  `-32600` and never reaches the server.
+  - `--fail-mode open|closed|mixed` (default `mixed`) decides what happens when
+    the API cannot be reached (no answer, a timeout or a 5xx; a 429 plan limit
+    too, logged as such): `mixed` refuses calls the local check matches and
+    relays the rest, logged to stderr as unchecked. A rejected key, another
+    4xx or a malformed answer refuses the call in every mode, and a key the API
+    rejects at startup stops the proxy before it starts the server.
+  - Agent messages reach the server as the proxy parsed them, never as the
+    agent's bytes; an agent line that is not JSON, or holds a bare carriage
+    return, is dropped. A server that parses differently cannot see a tool
+    call the proxy did not check.
+  - Server output and stderr pass through untouched. Messages are bounded at
+    4 MiB; at most 1024 requests may be pending, id-less tool calls included,
+    and a request reusing a pending id (`1` and `1.0` are one id) is refused.
+  - The wrapped server does not inherit `PROMPTGUARD_API_KEY`, and logs name
+    the server's program, never its arguments (acebot712/promptguard#943).
 
 ## [2.1.2] - 2026-10-10
 
