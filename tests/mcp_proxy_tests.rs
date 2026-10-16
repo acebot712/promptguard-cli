@@ -390,7 +390,8 @@ struct Proxy {
     server_log: PathBuf,
     syncs: u32,
     home: PathBuf,
-    _home: Option<TempDir>,
+    /// Removed with the proxy, when the proxy made it.
+    owned_home: Option<TempDir>,
 }
 
 impl Proxy {
@@ -403,7 +404,7 @@ impl Proxy {
     fn start_with_server_args(base_url: &str, flags: &[&str], server_args: &[&str]) -> Self {
         let home = TempDir::new().unwrap();
         let mut proxy = Self::start_in(home.path(), base_url, flags, server_args, &[]);
-        proxy._home = Some(home);
+        proxy.owned_home = Some(home);
         proxy
     }
 
@@ -473,7 +474,7 @@ impl Proxy {
             server_log,
             syncs: 0,
             home: home.to_path_buf(),
-            _home: None,
+            owned_home: None,
         }
     }
 
@@ -1443,16 +1444,19 @@ fn an_oversized_tool_result_is_withheld_only_when_closed() {
     let mut closed = Proxy::start(&api.base_url, &["--fail-mode", "closed"]);
     closed.initialize();
     big(&mut closed, 206);
+    // The log line means the server's answer has been read and handled.
+    closed.wait_stderr("4 MiB");
     assert!(
         !closed.answered_before_a_ping(206),
         "a result too large to inspect reached the agent under --fail-mode closed"
     );
-    closed.wait_stderr("4 MiB");
 
     let mut mixed = Proxy::start(&api.base_url, &[]);
     mixed.initialize();
     big(&mut mixed, 207);
-    assert!(mixed.answered_before_a_ping(207));
+    assert!(mixed.recv_id(207)["result"]["content"][0]["text"]
+        .as_str()
+        .is_some_and(|t| t.starts_with("jane@example.com")));
     mixed.wait_stderr("unredacted");
 }
 

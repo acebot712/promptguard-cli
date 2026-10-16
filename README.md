@@ -131,7 +131,9 @@ Full setup instructions for 13+ clients: [docs.promptguard.co/tools/mcp](https:/
 ## MCP Proxy
 
 `promptguard mcp-proxy` sits between your agent and an MCP server you already
-run, and checks every tool call before the server sees it:
+run. It checks every tool call before the server sees it, redacts every tool
+result before your agent sees it, and scans every tool list for poisoned
+descriptions and for changes since it was pinned:
 
 ```bash
 promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
@@ -209,10 +211,78 @@ Any other answer that is not a verdict refuses the call in every mode: a
 rejected key (`401`/`403`), another `4xx`, or a response that is not a
 verdict. A revoked key must not turn the proxy into a pass-through.
 
+### Tool results are redacted
+
+The text of each `tools/call` result is sent to the PromptGuard API's
+[guard endpoint](https://docs.promptguard.co/api-reference/guard) as output
+(`direction: "output"`), and whatever your project's guardrails mask, such as
+email addresses, card numbers or API keys, is masked in the result your agent
+receives. Only text is sent and only text changes: each text block's `text`,
+an embedded resource's `text`, and the string values of `structuredContent`.
+The JSON-RPC envelope, the order of the blocks and every other block (an image,
+a resource link) arrive as the server sent them, and a result with nothing to
+mask arrives byte for byte. Each result costs one scan against your plan; a
+result with more than 90,000 characters of text is sent in several, at most
+16 (about 1.4 million characters).
+
+If the guard endpoint **blocks** a result, your agent gets a JSON-RPC error
+(`-32600`) in its place, in every fail mode. If the result cannot be redacted:
+
+| Fail mode | Result the API could not redact |
+|-----------|---------------------------------|
+| `mixed` (default) | Relayed as the server sent it, logged as `unredacted` |
+| `open` | Relayed as the server sent it, logged as `unredacted` |
+| `closed` | Withheld: your agent gets a `-32600` error |
+
+"Could not redact" is the same as "could not check" for a tool call (no
+answer, a timeout, a 5xx, a `429`), plus a result larger than the API takes
+(over 16 requests, or a `413`/`422`). `mixed` relays such a result because its
+line is drawn between destructive and other *actions*: a result reports an
+action that has already run, and withholding it would undo nothing. A rejected
+key, another `4xx`, or an answer that is not a verdict withholds the result in
+every mode.
+
+### Tool lists are scanned and pinned
+
+Each `tools/list` result is sent to
+[`POST /api/v1/mcp/manifest-scan`](https://docs.promptguard.co/api-reference/mcp-manifest-scan)
+before your agent sees it. Every finding is logged to stderr with its code,
+severity, tool and reason:
+
+- **A `high` finding on a tool** (`E001` instructions hidden in a description
+  or a parameter's description, `E002` shadowing another tool): the tool is
+  removed from the list your agent receives, in every fail mode, and a
+  `tools/call` to it is refused.
+- **`E301`, a rug-pull:** the list no longer matches the pin stored for this
+  server. The finding names the tools that changed, were added or were removed.
+  The list is still relayed, because a server you upgraded changes its tools
+  too. The old pin is kept, so every run reports the change until you decide
+  you trust the new list: then remove that server's entry from
+  `~/.promptguard/mcp-pins.json`, or delete the file to re-pin every server.
+- **Anything else** (`W021` invisible characters, `W022` duplicate names,
+  `E003` community rules, `E900`) is logged only.
+
+If the list cannot be scanned (the same failures as a result, or a list over
+the endpoint's 500 tools or 131,072 characters), `closed` refuses it with a
+`-32600` error and `mixed` and `open` relay it, logged as `unchecked`; tools a
+scan reports it did not reach are withheld under `closed` and logged under the
+others. A rejected key, another `4xx` or an answer that is not a scan refuses
+the list in every mode.
+
+**Pins** live in `~/.promptguard/mcp-pins.json`, readable by you only. The
+first scan of a server stores its pin; later scans send it back. A server is
+identified by a SHA-256 hash of its command line, so the file holds no
+arguments (which can carry tokens) and nothing from the environment. It is
+written atomically and under a lock, so several proxies can run at once. A
+missing or unreadable file is not an error: the server is pinned again. Only
+the first page of a paginated list is pinned; later pages are scanned for
+findings only.
+
 ### What is relayed, and how
 
 - **From the server to the agent:** everything, byte for byte, including lines
-  that are not JSON (so a server that prints a banner to stdout still works).
+  that are not JSON (so a server that prints a banner to stdout still works),
+  except a tool result or tool list the proxy changed, which is re-serialized.
   The server's stderr is passed through too.
 - **From the agent to the server:** each message as the proxy parsed it, then
   re-serialized on one line, so the server receives exactly what was checked.
@@ -226,7 +296,9 @@ verdict. A revoked key must not turn the proxy into a pass-through.
 
 Messages are bounded at 4 MiB. A larger one from the agent is dropped (it is
 too large to check, so relaying it would be a way around the check); a larger
-one from the server is streamed through. At most 1024 requests may be pending
+one from the server is streamed through unredacted and unscanned, logged, or
+under `--fail-mode closed` dropped (its id cannot be read, so the agent's
+request times out). At most 1024 requests may be pending
 at once; one past that is refused with `-32600`. So is a request whose id is
 already pending (`1`, `1.0` and `1e0` are the same id), and a `tools/call`
 without an id, which MCP does not allow (it is answered with a null id). A
@@ -236,6 +308,8 @@ is refused whole.
 Tool calls are checked concurrently, so other messages can overtake one that
 is still being checked. A `notifications/cancelled` for such a call may reach
 the server before the call does; the server ignores it, and runs the call.
+In the same way, other server messages can overtake a tool result being
+redacted or a tool list being scanned.
 
 The proxy exits when the server does, with the server's exit code.
 

@@ -1,5 +1,6 @@
-//! `promptguard mcp-proxy -- <server command>`: wrap a stdio MCP server and
-//! check every tool call before it runs.
+//! `promptguard mcp-proxy -- <server command>`: wrap a stdio MCP server,
+//! check every tool call before it runs, redact every tool result, and scan
+//! and pin every tool list.
 //!
 //! The proxy spawns the server and relays newline-delimited JSON-RPC both
 //! ways. Each `tools/call` from the client is decided first by the local
@@ -7,35 +8,50 @@
 //! (see [`check::decide`]); a refusal is answered with JSON-RPC `-32600` and
 //! never reaches the server. Client messages are relayed as the proxy parsed
 //! them (re-serialized), never as the client's bytes, and a client line that
-//! is not JSON is dropped: see [`Proxy::handle_client_line`]. The server's
-//! output is relayed byte for byte. The server's stderr is inherited, so it
-//! reaches the client untouched; the proxy's own log lines go there too,
-//! prefixed `promptguard mcp-proxy:`. Nothing but relayed messages is ever
-//! written to stdout.
+//! is not JSON is dropped: see [`Proxy::handle_client_line`].
+//!
+//! The server's output is relayed byte for byte, except two kinds of
+//! response. A `tools/call` result has its text redacted through the guard
+//! endpoint ([`redact::review`]); a `tools/list` result is scanned by the
+//! manifest-scan endpoint against the pin stored for this server
+//! ([`manifest::review`], [`pins`]), and a tool flagged as poisoned is removed
+//! from it. Either is re-serialized only when it changed. The server's stderr
+//! is inherited, so it reaches the client untouched; the proxy's own log
+//! lines go there too, prefixed `promptguard mcp-proxy:`. Nothing but relayed
+//! messages is ever written to stdout.
 //!
 //! Threads: the main thread reads the server; one thread reads the client;
-//! each `tools/call` is checked on its own short-lived thread so a slow API
-//! does not hold up pings, cancellations or other requests. The pending cap
-//! bounds how many of those exist at once. A `tools/call` without an id is
-//! refused at once, so it takes neither a slot nor a check.
+//! each `tools/call` is checked on its own short-lived thread, and each tool
+//! result or tool list is inspected on its own, so a slow API does not hold
+//! up pings, cancellations or other messages. A request keeps its pending
+//! slot until its answer has been written, so the pending cap bounds how many
+//! of those threads exist at once. A `tools/call` without an id is refused at
+//! once, so it takes neither a slot nor a check.
 //!
 //! So messages can overtake a `tools/call` that is still being checked. A
 //! `notifications/cancelled` for that call may reach the server first; the
 //! server ignores a cancellation for an id it does not know, and then runs
 //! the call when it arrives. Keeping order would mean holding every message
-//! behind every check, which is the stall the threads exist to avoid.
+//! behind every check, which is the stall the threads exist to avoid. For the
+//! same reason a server message can overtake a tool result being redacted.
 
 mod check;
 mod destructive;
 mod line;
+mod manifest;
+mod pins;
+mod redact;
 
 pub use check::FailMode;
 
 use crate::api::{PromptGuardClient, RawResponse};
-use crate::auth::resolve_session;
+use crate::auth::{credentials_dir, resolve_session};
 use crate::error::{PromptGuardError, Result};
 use check::{ApiValidator, Decision, Validator};
 use line::{Line, MAX_LINE_BYTES};
+use manifest::{ApiManifestScanner, ManifestScanner};
+use pins::PinStore;
+use redact::{ApiRedactor, Redactor};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Write};
@@ -89,15 +105,30 @@ impl McpProxyCommand {
         };
 
         let (api_key, base_url) = resolve_session()?;
-        let client = PromptGuardClient::new(api_key, Some(base_url))?;
+        let client = Arc::new(PromptGuardClient::new(api_key, Some(base_url))?);
         self.verify_key(&client)?;
+        let agent_id = self
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| default_agent_id(&self.command));
+        let session_id = session_id();
         let validator = ApiValidator {
-            client,
-            agent_id: self
-                .agent_id
-                .clone()
-                .unwrap_or_else(|| default_agent_id(&self.command)),
-            session_id: session_id(),
+            client: Arc::clone(&client),
+            agent_id: agent_id.clone(),
+            session_id: session_id.clone(),
+        };
+        let redactor = ApiRedactor {
+            client: Arc::clone(&client),
+            agent_id,
+            session_id,
+        };
+        let scanner = ApiManifestScanner { client };
+        let pins = match credentials_dir() {
+            Ok(dir) => Some(PinStore::new(dir, &self.command)),
+            Err(e) => {
+                log(&format!("tool lists are scanned but not pinned: {e}"));
+                None
+            },
         };
 
         let mut command = Command::new(program);
@@ -131,6 +162,11 @@ impl McpProxyCommand {
         let proxy = Arc::new(Proxy {
             fail_mode: self.fail_mode,
             validator: Box::new(validator),
+            redactor: Box::new(redactor),
+            scanner: Box::new(scanner),
+            server: default_agent_id(&self.command),
+            pins,
+            withheld: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             to_server: Mutex::new(Some(to_server)),
         });
@@ -250,6 +286,39 @@ fn method_of(message: &Value) -> Option<&str> {
     message.get("method").and_then(Value::as_str)
 }
 
+/// What a client request is waiting for, so its response is inspected for
+/// what it is: a tool result is redacted, a tool list is scanned.
+#[derive(Debug, Clone)]
+enum Awaiting {
+    ToolResult { tool: String },
+    ToolList { first_page: bool },
+    Other,
+}
+
+impl Awaiting {
+    fn of(message: &Value) -> Self {
+        match method_of(message) {
+            Some("tools/list") => Self::ToolList {
+                first_page: message.pointer("/params/cursor").is_none_or(Value::is_null),
+            },
+            _ => Self::Other,
+        }
+    }
+}
+
+struct Pending {
+    since: Instant,
+    awaiting: Awaiting,
+}
+
+/// A server message that needs the API before it is relayed: its index in a
+/// batch (0 for a single message), its pending key, and what it answers.
+struct Inspection {
+    index: usize,
+    key: Option<String>,
+    awaiting: Awaiting,
+}
+
 fn refusal(id: &Value, message: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
@@ -296,8 +365,16 @@ fn parse_tool_call(message: &Value) -> std::result::Result<(String, Value), Stri
 struct Proxy {
     fail_mode: FailMode,
     validator: Box<dyn Validator>,
+    redactor: Box<dyn Redactor>,
+    scanner: Box<dyn ManifestScanner>,
+    /// The server's name in logs and the pins file (`mcp-proxy:<program>`).
+    server: String,
+    /// `None` when there is no home directory to keep pins in.
+    pins: Option<PinStore>,
+    /// Tools removed from a tool list for a finding; a call to one is refused.
+    withheld: Mutex<HashSet<String>>,
     /// Client requests awaiting a server response, by serialized id.
-    pending: Mutex<HashMap<String, Instant>>,
+    pending: Mutex<HashMap<String, Pending>>,
     /// `None` once the client has gone and the server's stdin is closed.
     to_server: Mutex<Option<ChildStdin>>,
 }
@@ -365,7 +442,7 @@ impl Proxy {
 
         if method != "tools/call" {
             if let Some(id) = &id {
-                if let Err(why) = self.track(&[id_key(id)]) {
+                if let Err(why) = self.track(&[(id_key(id), Awaiting::of(message))]) {
                     self.write_client_value(&refusal(id, why));
                     return;
                 }
@@ -394,8 +471,22 @@ impl Proxy {
                 return;
             },
         };
+        if lock(&self.withheld).contains(&tool) {
+            log(&format!(
+                "refused tools/call `{tool}`: the tool was withheld from the tool list"
+            ));
+            self.write_client_value(&refusal(
+                &id,
+                &format!(
+                    "PromptGuard refused tool call `{tool}`: the tool was withheld from this \
+                     server's tool list for a security finding"
+                ),
+            ));
+            return;
+        }
         let key = id_key(&id);
-        if let Err(why) = self.track(std::slice::from_ref(&key)) {
+        let awaiting = Awaiting::ToolResult { tool: tool.clone() };
+        if let Err(why) = self.track(&[(key.clone(), awaiting)]) {
             self.write_client_value(&refusal(&id, why));
             return;
         }
@@ -481,7 +572,11 @@ impl Proxy {
             refuse_all(TOO_MANY_PENDING);
             return;
         }
-        let keys: Vec<String> = requests.iter().copied().map(id_key).collect();
+        let keys: Vec<(String, Awaiting)> = items
+            .iter()
+            .filter(|m| method_of(m).is_some())
+            .filter_map(|m| id_of(m).map(|id| (id_key(id), Awaiting::of(m))))
+            .collect();
         if let Err(why) = self.track(&keys) {
             refuse_all(why);
             return;
@@ -497,13 +592,13 @@ impl Proxy {
     /// controls: the cap is checked first, duplicates are found by hashing,
     /// and expired entries are swept only when the set is otherwise full (an
     /// expired id is not a duplicate, swept or not).
-    fn track(&self, keys: &[String]) -> std::result::Result<(), &'static str> {
+    fn track(&self, keys: &[(String, Awaiting)]) -> std::result::Result<(), &'static str> {
         if keys.len() > MAX_PENDING {
             return Err(TOO_MANY_PENDING);
         }
         let mut pending = lock(&self.pending);
         if pending.len() + keys.len() > MAX_PENDING {
-            pending.retain(|_, since| since.elapsed() < PENDING_TTL);
+            pending.retain(|_, p| p.since.elapsed() < PENDING_TTL);
             if pending.len() + keys.len() > MAX_PENDING {
                 return Err(TOO_MANY_PENDING);
             }
@@ -511,17 +606,28 @@ impl Proxy {
         let live = |key: &String| {
             pending
                 .get(key)
-                .is_some_and(|since| since.elapsed() < PENDING_TTL)
+                .is_some_and(|p| p.since.elapsed() < PENDING_TTL)
         };
         let mut seen = HashSet::with_capacity(keys.len());
-        if keys.iter().any(|key| live(key) || !seen.insert(key)) {
+        if keys.iter().any(|(key, _)| live(key) || !seen.insert(key)) {
             return Err("a request with this id is already pending");
         }
         let now = Instant::now();
-        for key in keys {
-            pending.insert(key.clone(), now);
+        for (key, awaiting) in keys {
+            pending.insert(
+                key.clone(),
+                Pending {
+                    since: now,
+                    awaiting: awaiting.clone(),
+                },
+            );
         }
         Ok(())
+    }
+
+    /// What a pending request is waiting for, leaving it pending.
+    fn awaiting(&self, key: &str) -> Option<Awaiting> {
+        lock(&self.pending).get(key).map(|p| p.awaiting.clone())
     }
 
     fn untrack(&self, key: &str) {
@@ -543,17 +649,33 @@ impl Proxy {
 
     // -- server -> client ---------------------------------------------------
 
-    fn relay_server_to_client(&self, from_server: ChildStdout) {
+    fn relay_server_to_client(self: &Arc<Self>, from_server: ChildStdout) {
         let mut reader = BufReader::new(from_server);
         loop {
             match line::read_line(&mut reader, MAX_LINE_BYTES) {
                 Ok(None) => break,
-                Ok(Some(Line::Complete(raw))) => self.handle_server_line(&raw),
+                Ok(Some(Line::Complete(raw))) => self.handle_server_line(raw),
+                Ok(Some(Line::Oversized(_))) if self.fail_mode == FailMode::Closed => {
+                    // Too large to redact or scan, and its id is unreadable,
+                    // so there is no error to answer with. Its pending slot
+                    // expires after PENDING_TTL; the client times it out.
+                    log(
+                        "dropped a server message over 4 MiB: too large to redact or scan, \
+                         and --fail-mode is closed",
+                    );
+                    if line::finish_line(&mut reader, None).is_err() {
+                        break;
+                    }
+                },
                 Ok(Some(Line::Oversized(prefix))) => {
                     // Streamed through unread, so memory stays bounded and a
                     // large tool result still arrives. Its pending slot, if
                     // any, expires after PENDING_TTL.
-                    log("relayed a server message over 4 MiB without inspecting it");
+                    log(&format!(
+                        "relayed a server message over 4 MiB without inspecting it: a tool \
+                         result in it is unredacted, a tool list unscanned (fail mode {})",
+                        self.fail_mode.as_str()
+                    ));
                     let stdout = io::stdout();
                     let mut out = stdout.lock();
                     let streamed = out.write_all(&prefix).is_ok()
@@ -571,26 +693,218 @@ impl Proxy {
         }
     }
 
-    /// Relay a server line byte for byte, first freeing the pending slot of
-    /// each response in it. (acebot712/promptguard#954 inspects responses
-    /// here, to redact tool results and pin tool lists.)
-    fn handle_server_line(&self, raw: &[u8]) {
-        match serde_json::from_slice::<Value>(raw) {
-            Ok(message @ Value::Object(_)) => self.answered(&message),
-            Ok(Value::Array(items)) => items.iter().for_each(|m| self.answered(m)),
-            _ => {},
+    /// Relay a server line. A line holding a tool result or a tool list is
+    /// inspected on its own thread and relayed when that is done; any other
+    /// line is relayed byte for byte at once. Either way a response frees its
+    /// request's pending slot, once it has been written.
+    fn handle_server_line(self: &Arc<Self>, raw: Vec<u8>) {
+        let parsed = serde_json::from_slice::<Value>(&raw).ok();
+        let items: Vec<&Value> = match &parsed {
+            Some(message @ Value::Object(_)) => vec![message],
+            Some(Value::Array(items)) => items.iter().collect(),
+            _ => Vec::new(),
+        };
+        let mut inspections = Vec::new();
+        for (index, message) in items.into_iter().enumerate() {
+            // A response is an id and no method. Server requests and
+            // notifications carry a method and hold no slot.
+            if method_of(message).is_some() {
+                continue;
+            }
+            let key = id_of(message).map(id_key);
+            let awaiting = key.as_deref().and_then(|k| self.awaiting(k));
+            let Some(result) = message.get("result") else {
+                key.inspect(|k| self.untrack(k));
+                continue;
+            };
+            let awaiting = match awaiting {
+                Some(a @ (Awaiting::ToolResult { .. } | Awaiting::ToolList { .. })) => a,
+                // A result whose request is no longer pending (it expired) is
+                // still redacted if it has a tool result's shape.
+                None if result.get("content").is_some_and(Value::is_array) => {
+                    Awaiting::ToolResult {
+                        tool: "unknown".to_string(),
+                    }
+                },
+                _ => {
+                    key.inspect(|k| self.untrack(k));
+                    continue;
+                },
+            };
+            inspections.push(Inspection {
+                index,
+                key,
+                awaiting,
+            });
         }
-        self.write_client(raw);
+
+        let Some(parsed) = parsed.filter(|_| !inspections.is_empty()) else {
+            self.write_client(&raw);
+            return;
+        };
+        let line = Arc::new((raw, parsed, inspections));
+        let (proxy, work) = (Arc::clone(self), Arc::clone(&line));
+        let spawned = thread::Builder::new()
+            .name("mcp-proxy-inspect".to_string())
+            .spawn(move || proxy.inspect_and_relay(&work.0, work.1.clone(), &work.2));
+        if let Err(e) = spawned {
+            // Inspect it here instead, holding up the server's later lines,
+            // rather than relay it uninspected or not at all.
+            log(&format!("could not start an inspection thread: {e}"));
+            self.inspect_and_relay(&line.0, line.1.clone(), &line.2);
+        }
     }
 
-    /// A response (an id and no method) ends that request's pending slot.
-    /// Server requests and notifications carry a method and hold none.
-    fn answered(&self, message: &Value) {
-        if method_of(message).is_none() {
-            if let Some(id) = id_of(message) {
-                self.untrack(&id_key(id));
+    /// Redact the tool results and review the tool lists in one server line,
+    /// then relay it: as the server sent it when nothing changed.
+    fn inspect_and_relay(&self, raw: &[u8], mut parsed: Value, inspections: &[Inspection]) {
+        let mut changed = false;
+        for inspection in inspections {
+            let message = match &mut parsed {
+                Value::Array(items) => &mut items[inspection.index],
+                single => single,
+            };
+            if let Some(replacement) = self.inspect(message, &inspection.awaiting) {
+                *message = replacement;
+                changed = true;
             }
         }
+        if changed {
+            self.write_client(&canonical(&parsed));
+        } else {
+            self.write_client(raw);
+        }
+        for key in inspections.iter().filter_map(|i| i.key.as_deref()) {
+            self.untrack(key);
+        }
+    }
+
+    /// The message to relay in place of `message`, a response with a result,
+    /// or `None` to relay it as it is.
+    fn inspect(&self, message: &Value, awaiting: &Awaiting) -> Option<Value> {
+        let id = message.get("id").cloned().unwrap_or(Value::Null);
+        let result = message.get("result")?;
+        match awaiting {
+            Awaiting::ToolResult { tool } => {
+                let outcome = redact::review(self.fail_mode, tool, result, self.redactor.as_ref());
+                let with_result = |result: Value| {
+                    let mut out = message.clone();
+                    out["result"] = result;
+                    out
+                };
+                match outcome {
+                    redact::Outcome::Unchanged => None,
+                    redact::Outcome::Redacted(result) => {
+                        log(&format!("redacted the result of tools/call `{tool}`"));
+                        Some(with_result(result))
+                    },
+                    redact::Outcome::Unredacted { result, why } => {
+                        log(&format!(
+                            "unredacted: relayed the result of tools/call `{tool}` without \
+                             PromptGuard redaction (fail mode {}): {why}",
+                            self.fail_mode.as_str()
+                        ));
+                        Some(with_result(result))
+                    },
+                    redact::Outcome::Withhold { reason } => {
+                        log(&format!(
+                            "withheld the result of tools/call `{tool}`: {reason}"
+                        ));
+                        Some(refusal(
+                            &id,
+                            &format!(
+                                "PromptGuard withheld the result of tool call `{tool}`: {reason}"
+                            ),
+                        ))
+                    },
+                }
+            },
+            Awaiting::ToolList { first_page } => self.review_tool_list(&id, message, *first_page),
+            Awaiting::Other => None,
+        }
+    }
+
+    fn review_tool_list(&self, id: &Value, message: &Value, first_page: bool) -> Option<Value> {
+        let tools = message.pointer("/result/tools").and_then(Value::as_array)?;
+        let (stored, problem) = self.pins.as_ref().map_or((None, None), PinStore::load);
+        let pins_path = self.pins.as_ref().map_or_else(
+            || "the pins file".to_string(),
+            |p| p.path().display().to_string(),
+        );
+        if let Some(problem) = problem {
+            log(&format!(
+                "could not read {pins_path} ({problem}); re-pinning this server's tool list"
+            ));
+        }
+        let review = manifest::review(
+            &manifest::Context {
+                mode: self.fail_mode,
+                server: &self.server,
+                pins_path: &pins_path,
+                stored: stored.as_ref(),
+                first_page,
+                now: chrono::Utc::now().to_rfc3339(),
+            },
+            tools,
+            self.scanner.as_ref(),
+        );
+        review.log.iter().for_each(|line| log(line));
+
+        if let Some(reason) = review.refuse {
+            log(&format!("refused tools/list: {reason}"));
+            return Some(refusal(
+                id,
+                &format!("PromptGuard refused this server's tool list: {reason}"),
+            ));
+        }
+        if let (Some(pin), Some(store)) = (&review.new_pin, &self.pins) {
+            match store.save(pin) {
+                Ok(()) => log(&format!(
+                    "pinned the tool list of `{}` ({} tools) in {pins_path}",
+                    self.server,
+                    tools.len()
+                )),
+                Err(e) => log(&format!(
+                    "could not save the tool list's pin to {pins_path}: {e}"
+                )),
+            }
+        }
+        if review.matches_pin {
+            log(&format!(
+                "the tool list of `{}` ({} tools) matches its pin",
+                self.server,
+                tools.len()
+            ));
+        }
+
+        {
+            let mut withheld = lock(&self.withheld);
+            for name in tools
+                .iter()
+                .filter_map(|t| t.get("name").and_then(Value::as_str))
+            {
+                if review.withhold.contains(name) {
+                    withheld.insert(name.to_string());
+                } else {
+                    withheld.remove(name);
+                }
+            }
+        }
+        if review.withhold.is_empty() {
+            return None;
+        }
+        let kept: Vec<Value> = tools
+            .iter()
+            .filter(|t| {
+                !t.get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| review.withhold.contains(n))
+            })
+            .cloned()
+            .collect();
+        let mut out = message.clone();
+        out["result"]["tools"] = Value::Array(kept);
+        Some(out)
     }
 
     fn write_client(&self, raw: &[u8]) {

@@ -36,6 +36,27 @@ survives three releases is a changelog nobody is maintaining.
 
 ### Added
 
+- **`promptguard mcp-proxy` redacts tool results and scans and pins tool
+  lists** (acebot712/promptguard#954).
+  - The text of every `tools/call` result (text blocks, embedded resources'
+    text, string values of `structuredContent`) goes through `POST /guard` as
+    output, and what the project's guardrails mask is masked before the agent
+    sees it; the envelope and every other block are left as they were. A
+    blocked result is replaced by a `-32600` error in every mode. One the API
+    cannot redact (an outage, the plan limit, too large) is relayed and logged
+    as unredacted under `mixed` and `open`, and withheld under `closed`.
+  - Every `tools/list` result goes through `POST /mcp/manifest-scan` with the
+    pin stored for the server, and each finding is logged. A tool with a
+    `high` finding (a poisoned description, shadowing) is removed from the list
+    in every mode, and a call to it is refused. A rug-pull (`E301`) names the
+    tools that changed and is reported on every run until the server's pin is
+    removed; the list is still relayed. A list that cannot be scanned is
+    refused under `closed` and relayed, logged as unchecked, otherwise.
+  - Pins are kept in `~/.promptguard/mcp-pins.json` (owner-only, written
+    atomically under a lock), keyed by a SHA-256 of the server's command line
+    so no argument is stored. A missing or corrupt file re-pins without error.
+  - Under `--fail-mode closed`, a server message over 4 MiB is now dropped
+    rather than relayed uninspected.
 - **`promptguard mcp-proxy -- <server command>`** wraps a stdio MCP server and
   checks every tool call before the server sees it: first a local
   destructive-action check on the arguments (the earlier rule set's pattern, which we

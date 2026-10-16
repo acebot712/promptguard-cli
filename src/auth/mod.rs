@@ -41,7 +41,9 @@ pub struct GlobalCredentials {
     pub active_project: Option<String>,
 }
 
-fn credentials_dir() -> Result<PathBuf> {
+/// `~/.promptguard`, which holds the global credentials and the CLI's other
+/// per-user state (`mcp-proxy`'s tool-list pins).
+pub fn credentials_dir() -> Result<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map_err(|_| PromptGuardError::Config("Cannot determine home directory".to_string()))?;

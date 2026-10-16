@@ -442,14 +442,22 @@ Examples:
     /// and then by the PromptGuard API before the server sees it; a refused
     /// call is answered with JSON-RPC error -32600. Other messages from your
     /// agent are relayed as the proxy parsed them (re-serialized), and a line
-    /// that is not JSON-RPC is dropped. The server's output and stderr pass
-    /// through untouched.
+    /// that is not JSON-RPC is dropped. Each tool result has its text redacted
+    /// by the PromptGuard API before your agent sees it, and each tool list is
+    /// scanned for poisoned descriptions and compared with the pin stored for
+    /// this server in ~/.promptguard/mcp-pins.json. Everything else the server
+    /// writes, and its stderr, passes through untouched.
     #[command(after_help = "\
 Fail modes (what happens when the PromptGuard API cannot be reached):
   mixed   Refuse calls the destructive-action check matches, relay the rest
           logged as unchecked (default)
   open    Relay every call, logged as unchecked
   closed  Refuse every call
+
+  For a tool result or tool list the API cannot redact or scan, closed
+  withholds it, and mixed and open relay it, logged as unredacted or
+  unchecked. A tool the scan flags as poisoned is removed from the tool
+  list in every mode.
 
 Examples:
   promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .

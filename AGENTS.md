@@ -16,8 +16,10 @@ src/
 ├── backup/            # File backup before transforms
 ├── api/               # PromptGuard API client
 └── commands/          # CLI subcommands
-    └── mcp_proxy/     # `mcp-proxy`: wraps a stdio MCP server and checks each
-                       # tools/call (destructive.rs is a safety boundary, ADR-0034)
+    └── mcp_proxy/     # `mcp-proxy`: wraps a stdio MCP server, checks each
+                       # tools/call (destructive.rs is a safety boundary, ADR-0034),
+                       # redacts each tool result (redact.rs) and scans and pins
+                       # each tool list (manifest.rs, pins.rs)
 
 tests/
 ├── runtime_shim_tests.rs
@@ -102,7 +104,8 @@ spec moves. **This repo does not, and that is a decision, not an oversight.**
 Recorded 2026-08-11 after checking the spec rather than guessing.
 
 The response structs live in `src/commands/*.rs` (`SecurityScanResponse`,
-`RedactResponse`, `GuardrailsResponse`, `LogsResponse`, `RedTeamTestResult`) and
+`RedactResponse`, `GuardrailsResponse`, `LogsResponse`, `RedTeamTestResult`,
+and `mcp-proxy`'s `ToolValidation`, `GuardAnswer` and `ManifestScan`) and
 stay hand-written, because generating them would cost machinery and return
 nothing:
 
