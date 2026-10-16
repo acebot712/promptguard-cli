@@ -1,12 +1,13 @@
 // This file is not compiled by promptguard-cli. scripts/local-rules/regenerate.sh
 // copies it into a scratch copy of the earlier rule set's internal/security/detection package
 // and runs it there, so it can read the detectors' unexported pattern tables.
-// It writes the pattern pack and the parity corpus that tests/local_rules_tests.rs
-// checks the Rust port against.
+// It writes the pattern pack (rules plus the scoring pipeline they run under)
+// and the corpus that tests/local_rules_tests.rs checks the Rust port against.
 
 package detection
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/earlier-rules-ai/earlier-rules/internal/security"
 )
 
 type packPattern struct {
@@ -31,7 +34,20 @@ type packPattern struct {
 // The detectors this pack carries, and the ones it leaves out with the
 // reason. The CLI prints none of this; it is here so the next person to
 // regenerate the pack sees why each choice was made.
-var portedFiles = []string{"injection.go", "jailbreak.go", "indirect_injection.go", "secrets.go"}
+var portedFiles = []string{"injection.go", "jailbreak.go", "indirect_injection.go", "secrets.go", "../steps.go", "../engine.go"}
+
+// Rules taken out of the pack entirely. Only noise in a repository scan:
+// the rule's own effect can never exceed warn under the earlier rule set's thresholds.
+var dropped = map[string]string{
+	"jailbreak/authority.admin_override#4": "slash_admin matches any /dev, /root, /admin or /debug path (/dev/null in every shell script, /admin routes in every web app); under the earlier rule set's jailbreak thresholds it can only warn, so in a file scan it is pure noise",
+}
+
+// Rules kept but capped at warn: under the earlier rule set's thresholds they block, and in
+// a file scan they block ordinary system prompts and documentation.
+var demoted = map[string]string{
+	"injection/override.imperative": "blocks at exactly the 0.72 threshold on any imperative near \"the ... rules/context/message\" within one sentence (\"skip the rules section\", \"override the default message\"); the narrow override.* rules still block the real phrasings",
+	"injection/extraction.direct":   "blocks \"Never reveal your system prompt\" and \"Summarize the context below\", the defensive and task lines most system prompts are made of; it fires on the noun, not on intent",
+}
 
 var excluded = map[string]string{
 	"pii.go":                          "PII is redaction, a separate API operation from a threat scan; several rules also need code validators (Luhn, checksums) that are not regexes",
@@ -49,6 +65,23 @@ type provenance struct {
 	RegenerateWith string            `json:"regenerate_with"`
 	MatchSemantics []string          `json:"match_semantics"`
 	Excluded       map[string]string `json:"excluded"`
+	Dropped        map[string]string `json:"dropped"`
+	Demoted        map[string]string `json:"demoted"`
+}
+
+// The scoring pipeline, read from the earlier rule set rather than restated: a finding's
+// weighted score is severity_scores[severity] x confidence, and each input
+// step applies its strategy when a detector's best weighted score reaches its
+// threshold (DefaultInputSteps, steps.go).
+type pipeline struct {
+	SeverityScores map[string]float64 `json:"severity_scores"`
+	InputSteps     []pipelineStep     `json:"input_steps"`
+}
+
+type pipelineStep struct {
+	Detector  string  `json:"detector"`
+	Strategy  string  `json:"strategy"`
+	Threshold float64 `json:"threshold"`
 }
 
 // A list rather than a name-to-hash map: a "secrets.go": "<hash>" pair is
@@ -60,14 +93,20 @@ type sourceFile struct {
 
 type packFile struct {
 	Provenance provenance    `json:"provenance"`
+	Pipeline   pipeline      `json:"pipeline"`
 	Patterns   []packPattern `json:"patterns"`
 }
 
+// Matches is what each Go regex matched (rule by rule). The two verdicts are
+// what the earlier rule set's own engine decided, running DefaultInputSteps over the sample
+// as user content and as tool output.
 type corpusSample struct {
-	Name    string   `json:"name"`
-	Text    string   `json:"text"`
-	Benign  bool     `json:"benign"`
-	Matches []string `json:"earlier-rules_matches"`
+	Name             string   `json:"name"`
+	Text             string   `json:"text"`
+	Benign           bool     `json:"benign"`
+	Matches          []string `json:"earlier-rules_matches"`
+	VerdictUser      string   `json:"earlier-rules_verdict_user"`
+	VerdictUntrusted string   `json:"earlier-rules_verdict_untrusted"`
 }
 
 func TestDumpOfflinePack(t *testing.T) {
@@ -89,6 +128,9 @@ func TestDumpOfflinePack(t *testing.T) {
 		p.ID = base
 		if n := seen[base]; n > 1 {
 			p.ID = fmt.Sprintf("%s#%d", base, n)
+		}
+		if _, drop := dropped[p.ID]; drop {
+			return
 		}
 		pack = append(pack, p)
 		all = append(all, compiled{p, match})
@@ -146,7 +188,25 @@ func TestDumpOfflinePack(t *testing.T) {
 	for _, c := range negativeCorpus {
 		samples = append(samples, corpusSample{Name: "corpus/" + c.name, Text: c.prompt, Benign: true})
 	}
+	ported := map[string]bool{}
+	for _, f := range []string{"injection", "jailbreak", "indirect_injection", "secrets"} {
+		ported[f] = true
+	}
+	var steps []security.Step
+	var pipeSteps []pipelineStep
+	for _, st := range security.DefaultInputSteps() {
+		if ported[st.Detector] {
+			steps = append(steps, st)
+			pipeSteps = append(pipeSteps, pipelineStep{st.Detector, string(st.Strategy), st.Threshold})
+		}
+	}
+	engine := security.NewEngine(NewInjectionDetector(), NewJailbreakDetector(), NewIndirectInjectionDetector(), NewSecretsDetector())
+	verdict := func(text, role string) string {
+		return string(engine.RunSteps(context.Background(), text, steps, &security.RunOptions{Role: role}).Action)
+	}
 	for i := range samples {
+		samples[i].VerdictUser = verdict(samples[i].Text, security.RoleUser)
+		samples[i].VerdictUntrusted = verdict(samples[i].Text, security.RoleTool)
 		samples[i].Matches = []string{}
 		for _, c := range all {
 			if c.match(samples[i].Text) {
@@ -186,9 +246,21 @@ func TestDumpOfflinePack(t *testing.T) {
 			MatchSemantics: []string{
 				"injection rules match case-insensitively; the earlier rule set lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
 				"rules with min_entropy count a match only when its Shannon entropy (bits per character) is at least that value",
-				"critical and high rules block; medium rules warn and do not fail the scan",
+				"findings are scored and gated by the pipeline block below, as the earlier rule set's DefaultInputSteps do, including each detector's combination bonus",
+				"indirect_injection rules run only on content marked untrusted (the earlier rule set runs them only for tool, retrieval and memory roles)",
+				"a rule in demoted can at most warn; a rule in dropped is not in the pack",
 			},
 			Excluded: excluded,
+			Dropped:  dropped,
+			Demoted:  demoted,
+		},
+		Pipeline: pipeline{
+			SeverityScores: map[string]float64{
+				"critical": severityToScore(security.SeverityCritical),
+				"high":     severityToScore(security.SeverityHigh),
+				"medium":   severityToScore(security.SeverityMedium),
+			},
+			InputSteps: pipeSteps,
 		},
 		Patterns: pack,
 	})
