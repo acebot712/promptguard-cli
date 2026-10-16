@@ -40,6 +40,8 @@ enum Verdicts {
     Status(u16),
     /// Answer 200 with a body that is not a verdict.
     Malformed,
+    /// Answer normally, after this long.
+    Slow(Duration),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -163,6 +165,7 @@ fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>, behaviour: Be
     match behaviour.verdicts {
         Verdicts::Status(status) => return respond(stream, status, &error_body(status)),
         Verdicts::Malformed => return respond(stream, 200, r#"{"ok":true}"#),
+        Verdicts::Slow(delay) => thread::sleep(delay),
         Verdicts::Normal => {},
     }
     let verdict = if tool.starts_with("forbidden") {
@@ -304,6 +307,26 @@ impl Proxy {
                 self.stderr()
             )
         })
+    }
+
+    /// The first JSON message on stdout that `pred` accepts, skipping others.
+    fn recv_matching(&self, pred: impl Fn(&Value) -> bool) -> Value {
+        loop {
+            let line = self.recv_line();
+            if let Ok(value) = serde_json::from_str::<Value>(&line) {
+                if pred(&value) {
+                    return value;
+                }
+            }
+        }
+    }
+
+    /// Whether any line the server received contains `needle`.
+    fn server_raw_contains(&mut self, needle: &str) -> bool {
+        self.sync();
+        self.server_received()
+            .iter()
+            .any(|e| e["raw"].as_str().is_some_and(|r| r.contains(needle)))
     }
 
     /// The JSON-RPC message answering `id`, skipping anything else.
@@ -873,6 +896,93 @@ fn pending_requests_are_capped() {
             .contains("pending"),
         "{reply}"
     );
+}
+
+#[test]
+fn id_less_tool_calls_count_within_the_pending_cap() {
+    let api = FakeApi::verdicts(Verdicts::Slow(Duration::from_secs(3)));
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+
+    for id in 100..1123u64 {
+        proxy.send(&json!({"jsonrpc": "2.0", "id": id, "method": "test/hang"}));
+    }
+    // A tools/call notification: no id, but a check thread and a slot until
+    // its (slow) check finishes. It takes the 1024th slot.
+    proxy.send(&json!({
+        "jsonrpc": "2.0", "method": "tools/call",
+        "params": {"name": "read_file", "arguments": {"path": "README.md"}},
+    }));
+    proxy.send(&json!({"jsonrpc": "2.0", "id": 2001, "method": "ping"}));
+    let reply = proxy.recv_id(2001);
+    assert_refused(&reply);
+    assert!(
+        reply["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("pending"),
+        "{reply}"
+    );
+}
+
+#[test]
+fn numeric_ids_are_normalised_and_an_outstanding_id_is_refused() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+    proxy.send(&json!({"jsonrpc": "2.0", "id": 70, "method": "test/hang"}));
+
+    let refused_with_code = |v: &Value| v["error"]["code"] == json!(-32600);
+    for (id, marker) in [("70", "same-id"), ("70.0", "float-id"), ("7e1", "exp-id")] {
+        proxy.send_raw(&format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"read_file","arguments":{{"marker":"{marker}"}}}}}}"#
+        ));
+        let reply = proxy.recv_matching(refused_with_code);
+        assert!(
+            reply["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("already pending"),
+            "id {id}: {reply}"
+        );
+        assert!(
+            !proxy.server_raw_contains(marker),
+            "id {id} reached the server"
+        );
+    }
+
+    // A string id is a different id.
+    proxy.send(&json!({"jsonrpc": "2.0", "id": "70", "method": "tools/call", "params": {"name": "read_file", "arguments": {}}}));
+    let reply = proxy.recv_matching(|v| v["id"] == json!("70"));
+    assert_relayed(&reply, "read_file");
+}
+
+#[test]
+fn a_batch_reusing_an_id_is_refused() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+    proxy.send(&json!({"jsonrpc": "2.0", "id": 75, "method": "test/hang"}));
+
+    for batch in [
+        json!([
+            {"jsonrpc": "2.0", "id": 76, "method": "ping", "params": {"marker": "batch-dup"}},
+            {"jsonrpc": "2.0", "id": 76, "method": "ping"},
+        ]),
+        json!([{"jsonrpc": "2.0", "id": 75.0, "method": "ping", "params": {"marker": "batch-outstanding"}}]),
+    ] {
+        proxy.send(&batch);
+        let line = proxy.recv_line();
+        let replies: Value = serde_json::from_str(&line).unwrap();
+        for reply in replies
+            .as_array()
+            .expect("a batch is answered with a batch")
+        {
+            assert_refused(reply);
+        }
+    }
+    assert!(!proxy.server_raw_contains("batch-dup"));
+    assert!(!proxy.server_raw_contains("batch-outstanding"));
 }
 
 #[test]
