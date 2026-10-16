@@ -31,6 +31,24 @@ struct ApiRequest {
     body: Value,
 }
 
+/// How the fake API answers.
+#[derive(Debug, Clone, Copy)]
+enum Verdicts {
+    /// Refuse tools named `forbidden*`, allow the rest.
+    Normal,
+    /// Answer every validate-tool request with this status and an error body.
+    Status(u16),
+    /// Answer 200 with a body that is not a verdict.
+    Malformed,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Behaviour {
+    /// Status of `GET /projects`, the proxy's startup key check.
+    projects: u16,
+    verdicts: Verdicts,
+}
+
 struct FakeApi {
     base_url: String,
     requests: Arc<Mutex<Vec<ApiRequest>>>,
@@ -38,6 +56,20 @@ struct FakeApi {
 
 impl FakeApi {
     fn start() -> Self {
+        Self::with(Behaviour {
+            projects: 200,
+            verdicts: Verdicts::Normal,
+        })
+    }
+
+    fn verdicts(verdicts: Verdicts) -> Self {
+        Self::with(Behaviour {
+            projects: 200,
+            verdicts,
+        })
+    }
+
+    fn with(behaviour: Behaviour) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let base_url = format!("http://{}/api/v1", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -46,18 +78,42 @@ impl FakeApi {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let recorded = Arc::clone(&recorded);
-                thread::spawn(move || serve_one(stream, &recorded));
+                thread::spawn(move || serve_one(stream, &recorded, behaviour));
             }
         });
         Self { base_url, requests }
     }
 
+    /// The validate-tool requests received (the startup key check excluded).
     fn requests(&self) -> Vec<ApiRequest> {
-        self.requests.lock().unwrap().clone()
+        self.requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.path.ends_with("/agent/validate-tool"))
+            .cloned()
+            .collect()
     }
 }
 
-fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>) {
+fn error_body(status: u16) -> String {
+    let (kind, code) = match status {
+        401 | 403 => ("authentication_error", "invalid_api_key"),
+        429 => ("rate_limit_error", "quota_exceeded"),
+        _ => ("api_error", "server_error"),
+    };
+    json!({"error": {"message": format!("fake {status}"), "type": kind, "code": code}}).to_string()
+}
+
+fn respond(mut stream: TcpStream, status: u16, payload: &str) {
+    let response = format!(
+        "HTTP/1.1 {status} Fake\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
+        payload.len()
+    );
+    let _ = stream.write_all(response.as_bytes());
+}
+
+fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>, behaviour: Behaviour) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() {
@@ -89,11 +145,26 @@ fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>) {
 
     let tool = body["tool_name"].as_str().unwrap_or_default().to_string();
     recorded.lock().unwrap().push(ApiRequest {
-        path,
+        path: path.clone(),
         api_key,
         body,
     });
 
+    if path.ends_with("/projects") {
+        let payload = if behaviour.projects == 200 {
+            "[]".to_string()
+        } else {
+            error_body(behaviour.projects)
+        };
+        respond(stream, behaviour.projects, &payload);
+        return;
+    }
+
+    match behaviour.verdicts {
+        Verdicts::Status(status) => return respond(stream, status, &error_body(status)),
+        Verdicts::Malformed => return respond(stream, 200, r#"{"ok":true}"#),
+        Verdicts::Normal => {},
+    }
     let verdict = if tool.starts_with("forbidden") {
         json!({
             "allowed": false,
@@ -113,13 +184,7 @@ fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>) {
             "blocked_reasons": [],
         })
     };
-    let payload = verdict.to_string();
-    let response = format!(
-        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{payload}",
-        payload.len()
-    );
-    let mut stream = stream;
-    let _ = stream.write_all(response.as_bytes());
+    respond(stream, 200, &verdict.to_string());
 }
 
 /// A base URL on which nothing listens: the connection is refused.
@@ -300,6 +365,19 @@ impl Proxy {
         }));
         let reply = self.recv_id(0);
         assert_eq!(reply["result"]["serverInfo"]["name"], "fake-mcp-server");
+    }
+
+    /// Wait for the proxy to exit on its own.
+    fn wait_exit(&mut self) -> i32 {
+        for _ in 0..400 {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                // Let the stderr reader drain.
+                thread::sleep(Duration::from_millis(100));
+                return status.code().unwrap_or(-1);
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("proxy did not exit\nstderr:\n{}", self.stderr());
     }
 
     fn close_and_wait(mut self) -> i32 {
@@ -536,6 +614,95 @@ fn unknown_fail_mode_is_rejected() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("open") && stderr.contains("closed") && stderr.contains("mixed"));
+}
+
+// ---------------------------------------------------------------------------
+// API errors: only an outage goes to the fail mode
+// ---------------------------------------------------------------------------
+
+const MODES: [&str; 3] = ["open", "mixed", "closed"];
+
+#[test]
+fn startup_exits_when_the_api_rejects_the_key() {
+    for status in [401, 403] {
+        let api = FakeApi::with(Behaviour {
+            projects: status,
+            verdicts: Verdicts::Normal,
+        });
+        let mut proxy = Proxy::start(&api.base_url, &[]);
+        let code = proxy.wait_exit();
+        assert_ne!(
+            code, 0,
+            "{status}: the proxy must not run with a rejected key"
+        );
+        let stderr = proxy.stderr();
+        assert!(
+            stderr.contains("rejected the API key") && stderr.contains("promptguard login"),
+            "{status}: {stderr}"
+        );
+        assert!(
+            proxy.server_received().is_empty(),
+            "{status}: the server was started with a rejected key"
+        );
+    }
+}
+
+#[test]
+fn rejected_key_mid_session_refuses_in_every_mode() {
+    for status in [401, 403] {
+        for mode in MODES {
+            let api = FakeApi::verdicts(Verdicts::Status(status));
+            let mut proxy = Proxy::start(&api.base_url, &["--fail-mode", mode]);
+            proxy.initialize();
+            let (tool, args) = READ_ONLY;
+            assert_refused(&proxy.call(90, tool, &args()));
+            assert!(proxy.never_reached_server(90), "{status} {mode}");
+            proxy.wait_stderr("rejected the API key");
+        }
+    }
+}
+
+#[test]
+fn malformed_or_refusing_api_answers_are_refused_in_every_mode() {
+    for (verdicts, needle) in [
+        (Verdicts::Malformed, "malformed"),
+        (Verdicts::Status(404), "404"),
+        (Verdicts::Status(422), "422"),
+    ] {
+        for mode in MODES {
+            let api = FakeApi::verdicts(verdicts);
+            let mut proxy = Proxy::start(&api.base_url, &["--fail-mode", mode]);
+            proxy.initialize();
+            let (tool, args) = READ_ONLY;
+            assert_refused(&proxy.call(91, tool, &args()));
+            assert!(proxy.never_reached_server(91), "{verdicts:?} {mode}");
+            proxy.wait_stderr(needle);
+        }
+    }
+}
+
+#[test]
+fn server_errors_go_to_the_fail_mode() {
+    for (verdicts, needle, closed_needle) in [
+        (Verdicts::Status(500), "unchecked", "could not be checked"),
+        (Verdicts::Status(503), "unchecked", "could not be checked"),
+        // The plan limit is not an outage, but blocking every tool when a
+        // plan runs out is the outcome ADR-0034 rejects; it follows the fail
+        // mode and says so.
+        (Verdicts::Status(429), "plan limit", "plan limit"),
+    ] {
+        let api = FakeApi::verdicts(verdicts);
+        let mut open = Proxy::start(&api.base_url, &["--fail-mode", "open"]);
+        open.initialize();
+        let (tool, args) = READ_ONLY;
+        assert_relayed(&open.call(92, tool, &args()), tool);
+        open.wait_stderr(needle);
+
+        let mut closed = Proxy::start(&api.base_url, &["--fail-mode", "closed"]);
+        closed.initialize();
+        assert_refused(&closed.call(93, tool, &args()));
+        closed.wait_stderr(closed_needle);
+    }
 }
 
 // ---------------------------------------------------------------------------
