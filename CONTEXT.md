@@ -98,9 +98,10 @@ _Avoid_: MCP server (that is `promptguard mcp`, which serves PromptGuard's own
 tools), firewall, gateway
 
 **Destructive-action check**:
-The local regex over a tool call's arguments, ported from the earlier rule set. Runs with no
-network, so it is what still protects under the `mixed` fail mode during an
-outage.
+The local regex over a tool call's arguments: the earlier rule set's pattern, ported as is,
+plus our own extensions for what it misses (split or long `rm` recursive/force
+flags, `find -delete`, `find -exec rm`, `DROP SCHEMA`). Runs with no network,
+so it is what still protects under the `mixed` fail mode during an outage.
 _Avoid_: dangerous-pattern check (that is the backend's own list)
 
 **Fail mode**:

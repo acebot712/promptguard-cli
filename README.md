@@ -154,9 +154,10 @@ and its fail mode applies.
 Each `tools/call` is checked twice, in order:
 
 1. **Locally**, by a destructive-action check on the call's arguments:
-   recursive forced removal (`rm -rf`), `DROP`/`TRUNCATE TABLE|DATABASE`,
-   `mkfs`, a download piped into a shell, `/etc/shadow`, and `../../` path
-   climbing.
+   recursive forced removal (`rm -rf`, `rm -r -f`, `rm --recursive --force`,
+   in any order), `find ... -delete` and `find ... -exec rm`,
+   `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE TABLE|DATABASE`, `mkfs`, a download
+   piped into a shell, `/etc/shadow`, and `../../` path climbing.
 2. **By the PromptGuard API**, through `POST /api/v1/agent/validate-tool`, which
    applies your project's agent policies and behaviour analysis. Calls are
    reported under the agent ID `mcp-proxy:<server name>`; set your own with

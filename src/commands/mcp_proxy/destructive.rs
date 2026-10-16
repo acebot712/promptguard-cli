@@ -1,5 +1,6 @@
 //! The local destructive-action check, ported from the earlier rule set's
-//! `internal/mcp/inspect.go` (`dangerousAction` / `containsDangerousAction`).
+//! `internal/mcp/inspect.go` (`dangerousAction` / `containsDangerousAction`)
+//! and extended with forms that pattern misses ([`OURS`]).
 //!
 //! ADR-0034 makes this regex a safety boundary of its own: under the default
 //! `mixed` fail mode it is the only thing standing between an agent and a
@@ -18,20 +19,34 @@ use std::sync::OnceLock;
 /// a check that gives up must fail closed.
 const MAX_DEPTH: usize = 32;
 
+/// the earlier rule set's pattern, byte for byte: recursive forced removal in one flag
+/// (`-rf`, `-fr`), dropping or truncating a table or database, making a
+/// filesystem, piping a download into a shell, reading the shadow file, and
+/// climbing two directories at once.
+const ORIGINAL: &str = r"\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b|\b(drop|truncate)\s+(table|database)\b|\bmkfs\b|\b(curl|wget)\b[^\n]*\|\s*(sh|bash)\b|/etc/shadow|\.\.[/\\]\.\.[/\\]";
+
+/// Ours, not the earlier rule set's: forms its pattern misses.
+///
+/// - `rm` with the recursive and force flags as separate words, short or
+///   long, in either order, with anything between them up to a shell
+///   separator (`rm -r -f`, `rm --force --recursive`, `rm -r dir -f`).
+/// - `find ... -delete`, and `find ... -exec rm` / `-execdir rm`.
+/// - `DROP SCHEMA`.
+const OURS: [&str; 4] = [
+    r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--force)\b",
+    r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--force)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b",
+    r"\bfind\b[^\n;&|]*\s-(?:delete\b|exec(?:dir)?\s+rm\b)",
+    r"\bdrop\s+schema\b",
+];
+
 /// The compiled pattern, or `None` if it failed to compile, in which case
 /// every string counts as destructive: the check fails closed.
 fn pattern() -> Option<&'static Regex> {
     static PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     PATTERN
         .get_or_init(|| {
-            // Byte-for-byte the the earlier rule set pattern: recursive forced removal,
-            // dropping or truncating a table or database, making a filesystem,
-            // piping a download into a shell, reading the shadow file, and
-            // climbing two directories at once.
-            Regex::new(
-                r"(?i)(\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b|\b(drop|truncate)\s+(table|database)\b|\bmkfs\b|\b(curl|wget)\b[^\n]*\|\s*(sh|bash)\b|/etc/shadow|\.\.[/\\]\.\.[/\\])",
-            )
-            .ok()
+            let alternatives = std::iter::once(ORIGINAL).chain(OURS).collect::<Vec<_>>();
+            Regex::new(&format!("(?i)(?:{})", alternatives.join("|"))).ok()
         })
         .as_ref()
 }
@@ -42,7 +57,7 @@ fn matches(s: &str) -> bool {
 
 /// Whether any string in a tool call's arguments looks destructive.
 ///
-/// Strings are checked after JSON decoding, so `rm -rf` is caught
+/// Strings are checked after JSON decoding, so `\u0072\u006d -rf` is caught
 /// as `rm -rf`. Object keys are checked as well as values: the earlier rule set checked only
 /// values, and a key is just as able to carry a command to a server that
 /// interpolates it.

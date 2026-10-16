@@ -16,7 +16,9 @@ survives three releases is a changelog nobody is maintaining.
 
 - **`promptguard mcp-proxy -- <server command>`** wraps a stdio MCP server and
   checks every tool call before the server sees it: first a local
-  destructive-action check on the arguments, then the API's
+  destructive-action check on the arguments (the earlier rule set's pattern, which we
+  extended to catch `rm -r -f`, `rm --recursive --force` in any order,
+  `find -delete`, `find -exec rm` and `DROP SCHEMA`), then the API's
   `POST /agent/validate-tool`. A refused call is answered with JSON-RPC
   `-32600` and never reaches the server. `--fail-mode open|closed|mixed`
   (default `mixed`) decides what happens when the API cannot be reached (no
