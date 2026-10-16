@@ -155,14 +155,17 @@ Each `tools/call` is checked twice, in order:
 
 1. **Locally**, by a destructive-action check on the call's arguments:
    recursive forced removal (`rm -rf`, `rm -rfv`, `rm -r -f`,
-   `rm --recursive --force`, in any order), `find ... -delete` and
-   `find ... -exec rm`, PowerShell's `Remove-Item -Recurse -Force`, `del /s`,
-   `rmdir /s`, `git clean -f`; `DROP TABLE|DATABASE|SCHEMA` and `TRUNCATE`
-   (comments between the keywords included), `DELETE FROM <table>` with no
-   `WHERE`; `mkfs`, `wipefs`, and `dd`, `shred` or a redirect onto a disk; a
-   recursive `chmod`/`chown` of `/`; the fork bomb; a download or base64-decoded
-   text piped into a shell or `sudo`, or run through `sh -c "$(curl ...)"` or
-   `bash <(curl ...)`; `/etc/shadow`; and `../../` path climbing. Each string is
+   `rm --recursive --force` or `--rec --forc`, in any order), `find ... -delete`
+   and `find ... -exec rm`, PowerShell's `Remove-Item -Recurse -Force`,
+   `del /s`, `rmdir /s`; `git clean -f`, `git reset --hard` and a forced
+   `git push`; `DROP TABLE|DATABASE|SCHEMA|INDEX`, `ALTER TABLE ... DROP` and
+   `TRUNCATE` (comments between the keywords included), `DELETE FROM <table>`
+   with no `WHERE`; `mkfs`, `wipefs`, and `dd`, `shred` or a redirect onto a
+   disk; a recursive `chmod`/`chown` of `/`; the fork bomb; a download piped
+   into a shell, `sudo`, `python`, `perl`, `ruby` or `node`, base64-decoded text
+   piped into a shell or `sudo`, and a download run through
+   `sh -c "$(curl ...)"` or `bash <(curl ...)`; `/etc/shadow`; and `../../`
+   path climbing. Each string is
    checked after NFKC normalisation with zero-width and other format characters
    removed, so fullwidth `ｒｍ` or a zero-width space inside `rm` is still `rm`.
 2. **By the PromptGuard API**, through `POST /api/v1/agent/validate-tool`, which

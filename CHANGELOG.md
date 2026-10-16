@@ -21,8 +21,10 @@ survives three releases is a changelog nobody is maintaining.
   `rm -rfv`, `find -delete`, `find -exec rm`, `DROP SCHEMA`, `TRUNCATE`,
   `DELETE FROM` with no `WHERE`, `dd`/`shred`/`wipefs` on a disk, a recursive
   `chmod`/`chown` of `/`, the fork bomb, `curl | sudo bash`, `base64 -d | sh`,
-  `sh -c "$(curl ...)"`, `Remove-Item -Recurse -Force`, `del /s`, `rmdir /s`
-  and `git clean -f`, after NFKC normalisation and with zero-width characters
+  `sh -c "$(curl ...)"`, a download piped into `python`/`perl`/`ruby`/`node`,
+  `DROP INDEX`, `ALTER TABLE ... DROP`, `rm --rec --forc`,
+  `Remove-Item -Recurse -Force`, `del /s`, `rmdir /s`, `git clean -f`,
+  `git reset --hard` and a forced `git push`, after NFKC normalisation and with zero-width characters
   removed), then the API's
   `POST /agent/validate-tool`. A refused call is answered with JSON-RPC
   `-32600` and never reaches the server.

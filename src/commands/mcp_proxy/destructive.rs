@@ -61,27 +61,32 @@ macro_rules! sql_name {
 /// Ours, not the earlier rule set's: forms its pattern misses.
 ///
 /// - `rm` with the recursive and force flags as separate words, short or
-///   long, in either order, with anything between them up to a shell
-///   separator (`rm -r -f`, `rm --force --recursive`, `rm -r dir -f`), or in
-///   one cluster with other letters too (`rm -rfv`).
+///   long (abbreviated, as GNU allows: `--rec`, `--forc`), in either order,
+///   with anything between them up to a shell separator (`rm -r -f`,
+///   `rm --force --recursive`, `rm -r dir -f`), or in one cluster with other
+///   letters too (`rm -rfv`).
 /// - `find ... -delete`, and `find ... -exec rm` / `-execdir rm`.
 /// - A download, or base64-decoded text, piped into a shell or `sudo`; a
-///   shell, `eval` or `source` running a download through `$(...)` or `<(...)`.
+///   shell, `eval` or `source` running a download through `$(...)` or `<(...)`;
+///   a download piped into `python`, `perl`, `ruby` or `node`.
 /// - `dd of=`, `shred` or a redirect onto a block device; `wipefs` on one.
 /// - A recursive `chmod`, `chown` or `chgrp` of `/` or `/*`.
 /// - The fork bomb.
 /// - `DROP`/`TRUNCATE` with comments between the keywords, `DROP SCHEMA`,
+///   `DROP INDEX`, `ALTER TABLE ... DROP` (a column or a constraint),
 ///   `TRUNCATE name` without `TABLE`, and `DELETE FROM name` with nothing
 ///   after it (so no `WHERE`).
 /// - PowerShell's `Remove-Item -Recurse -Force`, and `cmd`'s `del /s`,
 ///   `rmdir /s` and `rd /s`.
-/// - `git clean` with `-f`.
-const OURS: [&str; 20] = [
-    r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--force)\b",
-    r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--force)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--recursive)\b",
+/// - `git clean` with `-f`, `git reset --hard`, and a forced `git push`
+///   (`--force`, `--force-with-lease`, `-f`, or a `+refspec`).
+const OURS: [&str; 24] = [
+    r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--r[a-z]*)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--f[a-z]*)\b",
+    r"\brm(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*f[a-z]*|--f[a-z]*)\b(?:\s+[^\s;&|]+)*?\s+(?:-[a-z]*r[a-z]*|--r[a-z]*)\b",
     r"\brm(?:\s+[^\s;&|]+)*?\s+-[a-z]*(?:r[a-z]*f|f[a-z]*r)[a-z]*\b",
     r"\bfind\b[^\n;&|]*\s-(?:delete\b|exec(?:dir)?\s+rm\b)",
     concat!(r"\b(?:curl|wget)\b[^\n]*\|\s*", shell_or_sudo!()),
+    r"\b(?:curl|wget)\b[^\n]*\|\s*(?:python[0-9.]*|perl|ruby|node)\b",
     concat!(
         r"\bbase64\b[^\n|]*\s(?:-[a-z]*d[a-z]*|--decode)\b[^\n]*\|\s*",
         shell_or_sudo!()
@@ -96,8 +101,9 @@ const OURS: [&str; 20] = [
     concat!(
         r"\b(?:drop|truncate)",
         sql_gap!(),
-        r"(?:table|database|schema)\b"
+        r"(?:table|database|schema|index)\b"
     ),
+    concat!(r"\balter", sql_gap!(), r"table\b[^;]*?\bdrop\b"),
     concat!(
         r"\btruncate",
         sql_gap!(),
@@ -117,6 +123,8 @@ const OURS: [&str; 20] = [
     r"\bremove-item\b[^\n;|]*\s-fo[a-z]*\b[^\n;|]*\s-r[a-z]*\b",
     r"\b(?:del|erase|rmdir|rd)\b[^\n&|]*\s/s\b",
     r"\bgit\s+clean\b[^\n;&|]*\s(?:-[a-z]*f[a-z]*|--force)\b",
+    r"\bgit\s+reset\b[^\n;&|]*\s--hard\b",
+    r"\bgit\s+push\b[^\n;&|]*\s(?:--force[a-z-]*|-[a-z]*f[a-z]*\b|\+[^\s;&|])",
 ];
 
 /// The compiled pattern, or `None` if it failed to compile, in which case
