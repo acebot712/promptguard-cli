@@ -97,6 +97,34 @@ mod tests {
         }
     }
 
+    /// Ours, not the earlier rule set's: forms its pattern misses, which during an outage
+    /// under `mixed` would otherwise run unchecked.
+    #[test]
+    fn extensions_beyond_the_earlier-rules_port_are_caught() {
+        for command in [
+            "rm -r -f /",
+            "rm -f -r /",
+            "rm -R -f /tmp/x",
+            "rm --recursive --force /",
+            "rm --force --recursive build",
+            "rm -r --force build",
+            "rm --recursive -f build",
+            "rm -rv -f build",
+            "rm -r /tmp/x -f",
+            "sudo rm -i -R --force /var",
+            "find / -name '*.log' -delete",
+            "find . -type f -exec rm {} \\;",
+            "DROP SCHEMA public CASCADE",
+            "drop database prod",
+            "DROP DATABASE IF EXISTS prod",
+        ] {
+            assert!(
+                is_destructive(&json!({ "command": command })),
+                "should be destructive: {command}"
+            );
+        }
+    }
+
     #[test]
     fn ordinary_arguments_are_not() {
         for raw in [
@@ -106,6 +134,11 @@ mod tests {
             r#"{"query":"SELECT * FROM drop_table_log"}"#,
             r#"{"command":"curl https://example.com -o out.html"}"#,
             r#"{"path":"../README.md"}"#,
+            r#"{"command":"rm -r build"}"#,
+            r#"{"command":"rm -f notes.txt"}"#,
+            r#"{"command":"rm -r build && ls -f"}"#,
+            r#"{"command":"find . -name '*.rs' -print"}"#,
+            r#"{"command":"find . -newer stamp; echo -delete"}"#,
             r#"{"count":3,"recursive":true,"tags":null}"#,
             r"{}",
         ] {
