@@ -12,6 +12,21 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The README lists only install methods that work.** The Homebrew tap it
+  advertised was never published and will not be, so that line is gone. `cargo
+  install promptguard` failed because the crate is not on crates.io; the Cargo
+  method now builds the release tag from this repository (`cargo install
+  --locked --git https://github.com/acebot712/promptguard-cli --tag cli-v2.1.2`).
+  Linux ARM64 was listed as a supported platform but no release builds it, and
+  Windows x86_64, which every release does build, was missing; the README now
+  names each published binary. `promptguard update` and `install.sh` stopped
+  suggesting Homebrew and the crates.io crate too. A new test,
+  `tests/install_methods_tests.rs`, checks the README and `install.sh` against
+  the release workflow's build matrix and fails when they disagree
+  (acebot712/promptguard#962).
+
 ## [2.1.2] - 2026-10-10
 
 **No change to the CLI's own code.** No source file changed since 2.1.1; this

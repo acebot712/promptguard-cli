@@ -56,8 +56,9 @@ if [ "$OS_TYPE" = "linux" ] && [ "$ARCH_TYPE" = "arm64" ]; then
   echo "${RED}Error: No prebuilt binary is available for Linux arm64${NC}"
   echo "Supported prebuilt targets: macOS (x86_64, arm64) and Linux (x86_64)."
   echo ""
-  echo "You can build from source instead:"
-  echo "  cargo install promptguard"
+  echo "You can build from source instead (needs a stable Rust toolchain):"
+  echo "  cargo install --locked --git https://github.com/$REPO --tag cli-v<version>"
+  echo "Release tags are listed at https://github.com/$REPO/releases"
   exit 1
 fi
 

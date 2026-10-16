@@ -112,7 +112,8 @@ cargo audit             # Security audit (run separately)
 Releases are triggered by pushing a tag matching `cli-v*`:
 
 ```bash
-# 1. Update version in Cargo.toml
+# 1. Update version in Cargo.toml, and the README's Cargo install tag to match
+#    (tests/install_methods_tests.rs fails until they agree)
 # 2. Commit and push to main
 git tag cli-v2.1.0
 git push origin cli-v2.1.0

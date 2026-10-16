@@ -6,7 +6,7 @@
 
 > Drop-in LLM security for your applications — built with Rust + Tree-sitter
 
-![Rust](https://img.shields.io/badge/rust-1.70+-orange?logo=rust)
+![Rust](https://img.shields.io/badge/rust-stable-orange?logo=rust)
 ![License](https://img.shields.io/badge/license-Apache%202.0-green)
 
 Single 5.3MB binary. No runtime interpreter required. Real AST transformations. Under 10ms startup.
@@ -15,12 +15,23 @@ Single 5.3MB binary. No runtime interpreter required. Real AST transformations. 
 
 | Method | Command |
 |--------|---------|
-| **Homebrew** | `brew tap promptguard/tap && brew install promptguard` |
-| **Shell script** | `curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh \| sh` |
-| **Cargo** | `cargo install promptguard` |
+| **Shell script** (macOS, Linux x86_64) | `curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh \| sh` |
 | **Binary** | Download from [GitHub Releases](https://github.com/acebot712/promptguard-cli/releases/latest) |
+| **Cargo** (build from source) | `cargo install --locked --git https://github.com/acebot712/promptguard-cli --tag cli-v2.1.2` |
 
-Supported platforms: macOS ARM64 (M1/M2/M3), macOS x86_64, Linux x86_64, Linux ARM64.
+Every release publishes these prebuilt binaries, each with a `.sha256` checksum
+beside it (the shell script verifies it before installing):
+
+| Platform | Release asset |
+|----------|---------------|
+| macOS ARM64 (Apple Silicon) | `promptguard-macos-arm64` |
+| macOS x86_64 (Intel) | `promptguard-macos-x86_64` |
+| Linux x86_64 | `promptguard-linux-x86_64` |
+| Windows x86_64 | `promptguard-windows-x86_64.exe` |
+
+Any other platform, Linux ARM64 included, builds from source with the Cargo
+command, which needs a current stable Rust toolchain. It builds the release tag
+from this repository because the crate is not published to crates.io.
 
 > For an MCP-only install (no Rust required), use `pip install promptguard-mcp-server` instead.
 

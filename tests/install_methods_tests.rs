@@ -187,9 +187,11 @@ fn install_script_sends_unbuilt_platforms_to_the_cargo_method() {
         url.is_none(),
         "no Linux ARM64 binary is published, yet install.sh fetched {url:?}"
     );
+    // The script does not know which release is latest without another
+    // request, so it names the tag form rather than a specific version.
+    let tag_form = format!("cargo install --locked --git {REPO_URL} --tag cli-v");
     assert!(
-        output.contains(&cargo_install_command()),
-        "install.sh should point Linux ARM64 at `{}`, got:\n{output}",
-        cargo_install_command()
+        output.contains(&tag_form),
+        "install.sh should point Linux ARM64 at `{tag_form}<version>`, got:\n{output}"
     );
 }
