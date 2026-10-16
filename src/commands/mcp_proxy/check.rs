@@ -2,7 +2,7 @@
 //! `PromptGuard` API, then the fail mode when the API gives no verdict.
 
 use super::destructive::is_destructive;
-use crate::api::PromptGuardClient;
+use crate::api::{PromptGuardClient, RawResponse};
 use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -60,10 +60,25 @@ pub struct ToolValidation {
     pub blocked_reasons: Vec<String>,
 }
 
+/// Why the API gave no usable verdict.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApiFailure {
+    /// No answer, or a 5xx: an outage. The fail mode decides.
+    Unavailable(String),
+    /// 429, the plan's limit. Not an outage, but blocking every tool when a
+    /// plan runs out is what ADR-0034 rejects, so the fail mode decides; it is
+    /// logged as a plan limit, not as an outage.
+    PlanLimit(String),
+    /// The API answered and the answer cannot be used: a rejected key,
+    /// another 4xx, or a 200 that is not a verdict. Refused in every mode: a
+    /// revoked key must not turn the proxy into a pass-through.
+    Unusable(String),
+}
+
 /// Where a tool call's verdict comes from when the API is consulted.
 pub trait Validator: Send + Sync {
     /// The API's verdict, or why there is none.
-    fn validate(&self, tool: &str, arguments: &Value) -> Result<ToolValidation, String>;
+    fn validate(&self, tool: &str, arguments: &Value) -> Result<ToolValidation, ApiFailure>;
 }
 
 /// The validate-tool endpoint, through the CLI's own HTTP client.
@@ -74,20 +89,57 @@ pub struct ApiValidator {
 }
 
 impl Validator for ApiValidator {
-    fn validate(&self, tool: &str, arguments: &Value) -> Result<ToolValidation, String> {
-        self.client
-            .post_with_timeout(
-                "/agent/validate-tool",
-                &serde_json::json!({
-                    "agent_id": self.agent_id,
-                    "tool_name": tool,
-                    "arguments": arguments,
-                    "session_id": self.session_id,
-                }),
-                CHECK_TIMEOUT,
-            )
-            .map_err(|e| e.to_string())
+    fn validate(&self, tool: &str, arguments: &Value) -> Result<ToolValidation, ApiFailure> {
+        let body = serde_json::json!({
+            "agent_id": self.agent_id,
+            "tool_name": tool,
+            "arguments": arguments,
+            "session_id": self.session_id,
+        });
+        let response = self.client.send_raw(
+            &reqwest::Method::POST,
+            "/agent/validate-tool",
+            Some(&body),
+            CHECK_TIMEOUT,
+        );
+        classify(response)
     }
+}
+
+/// Turn the API's answer into a verdict, or say which kind of failure it is.
+pub fn classify(response: RawResponse) -> Result<ToolValidation, ApiFailure> {
+    let (status, body) = match response {
+        RawResponse::NoAnswer(e) => {
+            return Err(ApiFailure::Unavailable(format!("API unreachable: {e}")))
+        },
+        RawResponse::Answered { status, body } => (status, body),
+    };
+    match status {
+        200..=299 => serde_json::from_str(&body).map_err(|e| {
+            ApiFailure::Unusable(format!("the API's answer was malformed ({status}: {e})"))
+        }),
+        401 | 403 => Err(ApiFailure::Unusable(format!(
+            "PromptGuard rejected the API key ({status}: {}); run `promptguard login` with a valid key",
+            error_message(&body)
+        ))),
+        429 => Err(ApiFailure::PlanLimit(format!(
+            "the plan limit was reached (429: {})",
+            error_message(&body)
+        ))),
+        500..=599 => Err(ApiFailure::Unavailable(format!("the API returned {status}"))),
+        _ => Err(ApiFailure::Unusable(format!(
+            "the API could not check the call ({status}: {})",
+            error_message(&body)
+        ))),
+    }
+}
+
+/// The message of the API's error envelope, or the start of the body.
+fn error_message(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
+        .unwrap_or_else(|| body.chars().take(200).collect())
 }
 
 const DESTRUCTIVE: &str = "the arguments match PromptGuard's destructive-action check";
@@ -103,6 +155,10 @@ const DESTRUCTIVE: &str = "the arguments match PromptGuard's destructive-action 
 /// | no match    | allows       | relay     | relay  | relay     |
 /// | no match    | refuses      | refuse    | refuse | refuse    |
 /// | no match    | unreachable  | unchecked | refuse | unchecked |
+/// | either      | unusable     | refuse    | refuse | refuse    |
+///
+/// "Unreachable" is an outage or the plan limit; "unusable" is a rejected
+/// key, another 4xx, or a malformed answer (see [`ApiFailure`]).
 pub fn decide(mode: FailMode, tool: &str, arguments: &Value, api: &dyn Validator) -> Decision {
     let destructive = is_destructive(arguments);
 
@@ -120,7 +176,8 @@ pub fn decide(mode: FailMode, tool: &str, arguments: &Value, api: &dyn Validator
             reason: DESTRUCTIVE.to_string(),
         },
         Ok(_) => Decision::Relay,
-        Err(e) => match mode {
+        Err(ApiFailure::Unusable(reason)) => Decision::Refuse { reason },
+        Err(ApiFailure::Unavailable(e) | ApiFailure::PlanLimit(e)) => match mode {
             FailMode::Closed => Decision::Refuse {
                 reason: format!("the call could not be checked and --fail-mode is closed ({e})"),
             },
@@ -151,7 +208,7 @@ mod tests {
     }
 
     impl Validator for Fake {
-        fn validate(&self, _: &str, _: &Value) -> Result<ToolValidation, String> {
+        fn validate(&self, _: &str, _: &Value) -> Result<ToolValidation, ApiFailure> {
             self.calls.fetch_add(1, Ordering::Relaxed);
             match self.verdict {
                 Some(allowed) => Ok(ToolValidation {
@@ -159,7 +216,7 @@ mod tests {
                     reason: if allowed { String::new() } else { "no".into() },
                     blocked_reasons: vec![],
                 }),
-                None => Err("connection refused".into()),
+                None => Err(ApiFailure::Unavailable("connection refused".into())),
             }
         }
     }
@@ -200,6 +257,64 @@ mod tests {
                 assert!(ok(&d), "{mode:?} {args} api={verdict:?} gave {d:?}");
             }
         }
+    }
+
+    struct Failing(ApiFailure);
+
+    impl Validator for Failing {
+        fn validate(&self, _: &str, _: &Value) -> Result<ToolValidation, ApiFailure> {
+            Err(self.0.clone())
+        }
+    }
+
+    /// The table's last row, and the plan limit following the fail mode.
+    #[test]
+    fn unusable_answers_are_refused_in_every_mode() {
+        let read = json!({"path": "README.md"});
+        for mode in [FailMode::Open, FailMode::Closed, FailMode::Mixed] {
+            let d = decide(
+                mode,
+                "t",
+                &read,
+                &Failing(ApiFailure::Unusable("401".into())),
+            );
+            assert!(matches!(d, Decision::Refuse { .. }), "{mode:?}: {d:?}");
+            let d = decide(
+                mode,
+                "t",
+                &read,
+                &Failing(ApiFailure::PlanLimit("429".into())),
+            );
+            let refused = matches!(d, Decision::Refuse { .. });
+            assert_eq!(refused, mode == FailMode::Closed, "{mode:?}: {d:?}");
+        }
+    }
+
+    #[test]
+    fn only_an_outage_or_the_plan_limit_is_left_to_the_fail_mode() {
+        let answered = |status: u16, body: &str| {
+            classify(RawResponse::Answered {
+                status,
+                body: body.to_string(),
+            })
+        };
+        let unavailable =
+            |r: &Result<ToolValidation, ApiFailure>| matches!(r, Err(ApiFailure::Unavailable(_)));
+        let unusable =
+            |r: &Result<ToolValidation, ApiFailure>| matches!(r, Err(ApiFailure::Unusable(_)));
+
+        assert!(unavailable(&classify(RawResponse::NoAnswer(
+            "timed out".into()
+        ))));
+        assert!(unavailable(&answered(500, "")));
+        assert!(unavailable(&answered(504, "")));
+        assert!(matches!(answered(429, ""), Err(ApiFailure::PlanLimit(_))));
+        for status in [400, 401, 403, 404, 422] {
+            assert!(unusable(&answered(status, "")), "{status}");
+        }
+        assert!(unusable(&answered(200, r#"{"ok":true}"#)));
+        assert!(unusable(&answered(200, "not json")));
+        assert!(answered(200, r#"{"allowed":true}"#).is_ok_and(|v| v.allowed));
     }
 
     #[test]

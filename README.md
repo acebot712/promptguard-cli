@@ -144,7 +144,10 @@ claude mcp add filesystem -- promptguard mcp-proxy -- npx -y @modelcontextprotoc
 ```
 
 It needs an API key (`promptguard login` or `PROMPTGUARD_API_KEY`), and does
-not pass `PROMPTGUARD_API_KEY` on to the server it wraps.
+not pass `PROMPTGUARD_API_KEY` on to the server it wraps. The key is verified
+once at startup: if the API rejects it, the proxy exits with an error before
+starting the server. If the API cannot be reached then, the proxy starts anyway
+and its fail mode applies.
 
 ### What it checks
 
@@ -165,7 +168,8 @@ code `-32600` and a message naming the reason, and the proxy logs it to stderr.
 ### When the API is unreachable
 
 `--fail-mode` decides what happens to a call the API cannot give a verdict on
-(unreachable, timed out after 10 seconds, or returning an error):
+because it is unreachable, timed out after 10 seconds, or returned a 5xx. A
+`429` (your plan's limit) is treated the same way and logged as a plan limit:
 
 | Fail mode | Call the local check matches | Any other call |
 |-----------|------------------------------|----------------|
@@ -178,6 +182,10 @@ mode. `mixed` is the default because an outage should neither break your agent
 nor let through the actions the proxy exists to stop. Each unchecked call is
 logged to stderr with the word `unchecked`, the tool's name and why the API
 gave no verdict; arguments are never logged.
+
+Any other answer that is not a verdict refuses the call in every mode: a
+rejected key (`401`/`403`), another `4xx`, or a response that is not a
+verdict. A revoked key must not turn the proxy into a pass-through.
 
 ### What is relayed, and how
 

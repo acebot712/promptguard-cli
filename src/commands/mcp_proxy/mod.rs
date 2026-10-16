@@ -25,7 +25,7 @@ mod line;
 
 pub use check::FailMode;
 
-use crate::api::PromptGuardClient;
+use crate::api::{PromptGuardClient, RawResponse};
 use crate::auth::resolve_session;
 use crate::error::{PromptGuardError, Result};
 use check::{ApiValidator, Decision, Validator};
@@ -47,6 +47,9 @@ const MAX_PENDING: usize = 1024;
 /// A pending request older than this is forgotten. Covers servers that never
 /// answer, and answers too large for the proxy to read the id from.
 const PENDING_TTL: Duration = Duration::from_mins(10);
+
+/// How long the startup key check may take. It delays the server's start.
+const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// JSON-RPC "Invalid Request", the code every refusal carries.
 const INVALID_REQUEST: i64 = -32600;
@@ -79,6 +82,7 @@ impl McpProxyCommand {
 
         let (api_key, base_url) = resolve_session()?;
         let client = Arc::new(PromptGuardClient::new(api_key, Some(base_url))?);
+        self.verify_key(&client)?;
         let server = ServerIdentity {
             command: self.command.clone(),
         };
@@ -134,6 +138,45 @@ impl McpProxyCommand {
         proxy.relay_server_to_client(from_server);
         let status = child.wait()?;
         Ok(status.code().unwrap_or(1))
+    }
+}
+
+impl McpProxyCommand {
+    /// Refuse to start with a key the API rejects: every call would then be
+    /// refused, which is a configuration error to report now, not per call.
+    /// An API that cannot be reached is an outage, not a bad key, so the
+    /// proxy starts and its fail mode applies.
+    fn verify_key(&self, client: &PromptGuardClient) -> Result<()> {
+        match client.send_raw(
+            &reqwest::Method::GET,
+            "/projects",
+            None,
+            STARTUP_CHECK_TIMEOUT,
+        ) {
+            RawResponse::Answered {
+                status: 401 | 403, ..
+            } => Err(PromptGuardError::Auth(
+                "PromptGuard rejected the API key, so mcp-proxy did not start the MCP server. \
+                 Run `promptguard login` with a valid key, or set PROMPTGUARD_API_KEY."
+                    .to_string(),
+            )),
+            RawResponse::Answered { status, .. } if (200..300).contains(&status) => Ok(()),
+            RawResponse::Answered { status, .. } => {
+                log(&format!(
+                    "could not verify the API key at startup (the API returned {status}); \
+                     each tool call is still checked"
+                ));
+                Ok(())
+            },
+            RawResponse::NoAnswer(e) => {
+                log(&format!(
+                    "could not verify the API key at startup ({e}); tool calls follow \
+                     --fail-mode {} until the API answers",
+                    self.fail_mode.as_str()
+                ));
+                Ok(())
+            },
+        }
     }
 }
 

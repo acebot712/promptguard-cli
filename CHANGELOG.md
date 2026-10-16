@@ -19,9 +19,12 @@ survives three releases is a changelog nobody is maintaining.
   destructive-action check on the arguments, then the API's
   `POST /agent/validate-tool`. A refused call is answered with JSON-RPC
   `-32600` and never reaches the server. `--fail-mode open|closed|mixed`
-  (default `mixed`) decides what happens when the API cannot be reached:
-  `mixed` refuses calls the local check matches and relays the rest, logged to
-  stderr as unchecked. Agent messages reach the server as the proxy parsed
+  (default `mixed`) decides what happens when the API cannot be reached (no
+  answer, a timeout or a 5xx; a 429 plan limit too, logged as such): `mixed`
+  refuses calls the local check matches and relays the rest, logged to stderr
+  as unchecked. A rejected key, another 4xx or a malformed answer refuses the
+  call in every mode, and a key the API rejects at startup stops the proxy
+  before it starts the server. Agent messages reach the server as the proxy parsed
   them, never as the agent's bytes, and an agent line that is not JSON or holds
   a bare carriage return is dropped, so a server that parses differently
   cannot see a tool call the proxy did not. Server output and stderr pass
