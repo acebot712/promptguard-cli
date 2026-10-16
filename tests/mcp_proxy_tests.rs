@@ -898,8 +898,10 @@ fn pending_requests_are_capped() {
     );
 }
 
+/// MCP's tools/call is a request: one without an id is refused at once,
+/// takes no pending slot and no check, so it cannot starve other requests.
 #[test]
-fn id_less_tool_calls_count_within_the_pending_cap() {
+fn id_less_tool_calls_are_refused_without_taking_a_slot() {
     let api = FakeApi::verdicts(Verdicts::Slow(Duration::from_secs(3)));
     let mut proxy = Proxy::start(&api.base_url, &[]);
     proxy.initialize();
@@ -907,22 +909,21 @@ fn id_less_tool_calls_count_within_the_pending_cap() {
     for id in 100..1123u64 {
         proxy.send(&json!({"jsonrpc": "2.0", "id": id, "method": "test/hang"}));
     }
-    // A tools/call notification: no id, but a check thread and a slot until
-    // its (slow) check finishes. It takes the 1024th slot.
-    proxy.send(&json!({
-        "jsonrpc": "2.0", "method": "tools/call",
-        "params": {"name": "read_file", "arguments": {"path": "README.md"}},
-    }));
-    proxy.send(&json!({"jsonrpc": "2.0", "id": 2001, "method": "ping"}));
-    let reply = proxy.recv_id(2001);
+    for _ in 0..50 {
+        proxy.send(&json!({
+            "jsonrpc": "2.0", "method": "tools/call",
+            "params": {"name": "read_file", "arguments": {"marker": "id-less-call"}},
+        }));
+    }
+    let reply = proxy.recv_matching(|v| v.get("error").is_some());
     assert_refused(&reply);
-    assert!(
-        reply["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("pending"),
-        "{reply}"
-    );
+    assert_eq!(reply["id"], Value::Null, "{reply}");
+
+    // 1023 slots are taken; the ping gets the last one and is answered.
+    proxy.send(&json!({"jsonrpc": "2.0", "id": 2001, "method": "ping"}));
+    assert_eq!(proxy.recv_id(2001)["result"], json!({}));
+    assert!(api.requests().is_empty(), "an id-less call was checked");
+    assert!(!proxy.server_raw_contains("id-less-call"));
 }
 
 #[test]
@@ -955,6 +956,51 @@ fn numeric_ids_are_normalised_and_an_outstanding_id_is_refused() {
     proxy.send(&json!({"jsonrpc": "2.0", "id": "70", "method": "tools/call", "params": {"name": "read_file", "arguments": {}}}));
     let reply = proxy.recv_matching(|v| v["id"] == json!("70"));
     assert_relayed(&reply, "read_file");
+}
+
+#[test]
+fn a_batch_holding_an_item_that_is_not_an_object_is_refused_whole() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+
+    proxy.send(&json!([
+        {"jsonrpc": "2.0", "id": 77, "method": "ping", "params": {"marker": "non-object-batch"}},
+        [{"jsonrpc": "2.0", "id": 78, "method": "tools/call", "params": {"name": "forbidden_tool", "arguments": {}}}],
+        "tools/call",
+    ]));
+    let replies: Value = serde_json::from_str(&proxy.recv_line()).unwrap();
+    let replies = replies.as_array().expect("a batch is answered with a batch");
+    assert_eq!(replies.len(), 1, "{replies:?}");
+    assert_refused(&replies[0]);
+    assert_eq!(replies[0]["id"], json!(77));
+    assert!(!proxy.server_raw_contains("non-object-batch"));
+    assert!(proxy.never_reached_server(78));
+}
+
+/// The pending set is consulted in constant work per message: a batch far
+/// over the cap is refused at once instead of being scanned for duplicates
+/// while every other message waits on the lock.
+#[test]
+fn a_huge_batch_is_refused_without_stalling_the_proxy() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+
+    let batch: Vec<Value> = (0..60_000u64)
+        .map(|i| json!({"jsonrpc": "2.0", "id": 100_000 + i, "method": "ping"}))
+        .collect();
+    let started = std::time::Instant::now();
+    proxy.send(&Value::Array(batch));
+    proxy.send(&json!({"jsonrpc": "2.0", "id": 3000, "method": "ping"}));
+    let replies: Value = serde_json::from_str(&proxy.recv_line()).unwrap();
+    assert_eq!(replies.as_array().map(Vec::len), Some(60_000));
+    assert_eq!(proxy.recv_id(3000)["result"], json!({}));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "the batch held the proxy up for {elapsed:?}"
+    );
 }
 
 #[test]
