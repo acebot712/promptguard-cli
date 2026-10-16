@@ -7,6 +7,12 @@ banner to stdout before speaking JSON-RPC, and writes diagnostics to stderr.
 Every line it receives is appended to the file named by FAKE_MCP_LOG, so a test
 can prove that a refused tool call never reached the server.
 
+It reads stdin the way the official Python MCP SDK does (a TextIOWrapper with
+universal newlines, so a bare \r ends a line) and parses with `json.loads`,
+which accepts NaN, 1e999, lone surrogates and nesting far deeper than
+serde_json does. Those differences are what the proxy must not let a tool
+call hide behind.
+
 Methods:
   initialize, tools/list, ping   answered normally
   tools/call                     answered with "ran <tool name>"
@@ -14,6 +20,7 @@ Methods:
   test/exit                      exits with params["code"]
 """
 
+import io
 import json
 import os
 import sys
@@ -42,8 +49,9 @@ sys.stdout.flush()
 sys.stderr.write("fake-mcp-server: diagnostics go to stderr\n")
 sys.stderr.flush()
 
+stdin = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", errors="replace")
 while True:
-    raw = sys.stdin.readline()
+    raw = stdin.readline()
     if raw == "":
         break
     line = raw.rstrip("\n")
@@ -52,9 +60,12 @@ while True:
     except ValueError:
         log({"event": "raw", "line": line})
         continue
-    log({"event": "message", "message": message})
     if not isinstance(message, dict):
+        log({"event": "message", "raw": line})
         continue
+    # Only plain fields: the parsed message may hold NaN, infinities or lone
+    # surrogates, which the Rust side of the test could not read back.
+    log({"event": "message", "id": message.get("id"), "method": message.get("method"), "raw": line})
 
     method = message.get("method")
     request_id = message.get("id")

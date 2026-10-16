@@ -288,11 +288,9 @@ impl Proxy {
 
     /// Whether the server ever received a `tools/call` with this id.
     fn server_saw_call(&self, id: u64) -> bool {
-        self.server_received().iter().any(|e| {
-            e["event"] == "message"
-                && e["message"]["method"] == "tools/call"
-                && e["message"]["id"] == json!(id)
-        })
+        self.server_received()
+            .iter()
+            .any(|e| e["event"] == "message" && e["method"] == "tools/call" && e["id"] == json!(id))
     }
 
     fn initialize(&mut self) {
@@ -559,22 +557,107 @@ fn server_printing_non_json_to_stdout_still_works() {
 }
 
 #[test]
-fn non_json_client_lines_and_server_stderr_pass_through_untouched() {
+fn non_json_client_lines_are_dropped_and_server_stderr_passes_through() {
     let api = FakeApi::start();
     let mut proxy = Proxy::start(&api.base_url, &[]);
     proxy.initialize();
+    // A client never legitimately sends a line that is not JSON, and the
+    // server may parse it differently from the proxy, so it is not relayed.
     proxy.send_raw("this is not JSON {");
-    proxy.send(&json!({"jsonrpc": "2.0", "id": 41, "method": "ping"}));
-    assert_eq!(proxy.recv_id(41)["result"], json!({}));
-
-    let raw: Vec<String> = proxy
-        .server_received()
-        .iter()
-        .filter(|e| e["event"] == "raw")
-        .map(|e| e["line"].as_str().unwrap().to_string())
-        .collect();
-    assert_eq!(raw, vec!["this is not JSON {".to_string()]);
+    proxy.sync();
+    assert!(
+        !proxy.server_received().iter().any(|e| e["event"] == "raw"),
+        "a non-JSON client line reached the server"
+    );
+    proxy.wait_stderr("dropped a client line that is not JSON");
     proxy.wait_stderr("fake-mcp-server: diagnostics go to stderr");
+}
+
+/// Lines that serde_json rejects, or reads differently, but that the fake
+/// server (Python's `json.loads` on universal-newline stdin, as the official
+/// Python MCP SDK reads it) accepts as a destructive `tools/call`. Relaying
+/// any of them as "not JSON" would run the call unchecked.
+fn parse_differential_payloads(id: u64) -> Vec<(&'static str, String)> {
+    let call = |extra: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":{id},"method":"tools/call","params":{{"name":"run_command","arguments":{{"command":"rm -rf /"{extra}}}}}}}"#
+        )
+    };
+    let deep = format!(",\"pad\":{}{}", "[".repeat(200), "]".repeat(200));
+    vec![
+        ("nesting past serde_json's limit", call(&deep)),
+        ("a lone surrogate", call(r#","x":"\ud800""#)),
+        ("a number out of f64 range", call(r#","x":1e999"#)),
+        ("NaN", call(r#","x":NaN"#)),
+        (
+            "a bare \\r that splits one line into three",
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{},\"method\":\"ping\",\"x\":\r{}\r}}",
+                id + 1,
+                call("")
+            ),
+        ),
+    ]
+}
+
+#[test]
+fn lines_the_server_parses_differently_never_reach_it_in_any_fail_mode() {
+    let mut reached = Vec::new();
+    for mode in ["closed", "mixed", "open"] {
+        let mut proxy = Proxy::start(&unreachable_base_url(), &["--fail-mode", mode]);
+        proxy.initialize();
+        let count = parse_differential_payloads(0).len();
+        for n in 0..count {
+            let id = 300 + 10 * n as u64;
+            let (what, payload) = parse_differential_payloads(id).swap_remove(n);
+            proxy.send_raw(&payload);
+            if !proxy.never_reached_server(id) {
+                reached.push(format!("--fail-mode {mode}: {what}"));
+            }
+        }
+    }
+    assert!(
+        reached.is_empty(),
+        "a destructive tools/call reached the server:\n{}",
+        reached.join("\n")
+    );
+}
+
+#[test]
+fn relayed_messages_are_what_the_proxy_checked() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+
+    // Duplicate keys: serde_json keeps the last, some parsers the first. The
+    // server must receive the message the proxy judged, not the raw bytes.
+    proxy.send_raw(
+        r#"{"jsonrpc":"2.0","id":80,"method":"tools/call","params":{"name":"run_command","arguments":{"command":"rm -rf /"}},"method":"ping"}"#,
+    );
+    assert_eq!(proxy.recv_id(80)["result"], json!({}));
+    // U+2028 is legal raw inside a JSON string, and a line separator to
+    // `str.splitlines`.
+    proxy.send_raw("{\"jsonrpc\":\"2.0\",\"id\":81,\"method\":\"ping\",\"x\":\"a\u{2028}b\"}");
+    assert_eq!(proxy.recv_id(81)["result"], json!({}));
+
+    let raw_for = |id: u64| {
+        proxy
+            .server_received()
+            .into_iter()
+            .find(|e| e["event"] == "message" && e["id"] == json!(id))
+            .map(|e| e["raw"].as_str().unwrap().to_string())
+            .unwrap()
+    };
+    let dup = raw_for(80);
+    assert!(
+        !dup.contains("tools/call"),
+        "server saw a duplicate key: {dup}"
+    );
+    let sep = raw_for(81);
+    assert!(
+        sep.contains(r" ") && !sep.contains('\u{2028}'),
+        "U+2028 must reach the server escaped: {sep}"
+    );
 }
 
 #[test]
