@@ -1,23 +1,13 @@
 # Security Policy
 
-## Reporting a Vulnerability
+Report a vulnerability to [security@promptguard.co](mailto:security@promptguard.co),
+not in a public issue.
 
-If you discover a security vulnerability in PromptGuard, please report it responsibly.
-
-**Email**: [security@promptguard.co](mailto:security@promptguard.co)
-
-Please include:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-
-We will acknowledge your report within 48 hours and aim to provide a fix within 7 days for critical issues.
-
-## Supported Versions
-
-| Version | Supported |
-|---------|-----------|
-| Latest  | Yes       |
+The disclosure policy, which covers the CLI along with the rest of PromptGuard,
+is published at <https://promptguard.co/security#reporting-a-vulnerability>:
+what to include, the disclosure timeline, scope and supported versions, safe
+harbour, and how we credit researchers. This file links to it rather than
+keeping a copy, so the two cannot disagree.
 
 ## Security Practices
 
