@@ -58,6 +58,7 @@ promptguard mcp -t stdio                           # Start MCP server
 | `disable` / `enable` | Toggle PromptGuard on/off |
 | `revert` | Revert all changes (restores backups) |
 | `mcp` | Start MCP server for AI editor integration |
+| `mcp-proxy` | Wrap any stdio MCP server and check every tool call before it runs |
 | `redteam` | Run the adversarial corpus against your policy (`--test`, `--prompt`, or all) |
 | `verify` | End-to-end integration check: connectivity, auth, scan, and redact |
 | `policy` | Policy-as-code: `apply`, `diff`, `export` YAML guardrail configs |
@@ -126,6 +127,117 @@ gemini mcp add -t stdio promptguard -- promptguard mcp -t stdio
 ```
 
 Full setup instructions for 13+ clients: [docs.promptguard.co/tools/mcp](https://docs.promptguard.co/tools/mcp)
+
+## MCP Proxy
+
+`promptguard mcp-proxy` sits between your agent and an MCP server you already
+run, and checks every tool call before the server sees it:
+
+```bash
+promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
+```
+
+Put it in front of the server's command wherever your client launches it:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "command": "promptguard",
+      "args": ["mcp-proxy", "--", "npx", "-y", "@modelcontextprotocol/server-filesystem", "."]
+    }
+  }
+}
+```
+
+```bash
+claude mcp add filesystem -- promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
+```
+
+It needs an API key (`promptguard login` or `PROMPTGUARD_API_KEY`), and does
+not pass `PROMPTGUARD_API_KEY` on to the server it wraps. The key is verified
+once at startup: if the API rejects it, the proxy exits with an error before
+starting the server. If the API cannot be reached then, the proxy starts anyway
+and its fail mode applies.
+
+### What it checks
+
+Each `tools/call` is checked twice, in order:
+
+1. **Locally**, by a destructive-action check on the call's arguments:
+   recursive forced removal (`rm -rf`, `rm -rfv`, `rm -r -f`,
+   `rm --recursive --force` or `--rec --forc`, in any order), `find ... -delete`
+   and `find ... -exec rm`, PowerShell's `Remove-Item -Recurse -Force`,
+   `del /s`, `rmdir /s`; `git clean -f`, `git reset --hard` and a forced
+   `git push`; `DROP TABLE|DATABASE|SCHEMA|INDEX`, `ALTER TABLE ... DROP` and
+   `TRUNCATE` (comments between the keywords included), `DELETE FROM <table>`
+   with no `WHERE`; `mkfs`, `wipefs`, and `dd`, `shred` or a redirect onto a
+   disk; a recursive `chmod`/`chown` of `/`; the fork bomb; a download piped
+   into a shell, `sudo`, `python`, `perl`, `ruby` or `node`, base64-decoded text
+   piped into a shell or `sudo`, and a download run through
+   `sh -c "$(curl ...)"` or `bash <(curl ...)`; `/etc/shadow`; and `../../`
+   path climbing. Each string is
+   checked after NFKC normalisation with zero-width and other format characters
+   removed, so fullwidth `ｒｍ` or a zero-width space inside `rm` is still `rm`.
+2. **By the PromptGuard API**, through `POST /api/v1/agent/validate-tool`, which
+   applies your project's agent policies and behaviour analysis. Calls are
+   reported under the agent ID `mcp-proxy:<server name>`; set your own with
+   `--agent-id`.
+
+A refused call never reaches the server. The agent gets a JSON-RPC error with
+code `-32600` and a message naming the reason, and the proxy logs it to stderr.
+
+### When the API is unreachable
+
+`--fail-mode` decides what happens to a call the API cannot give a verdict on
+because it is unreachable, timed out after 10 seconds, or returned a 5xx. A
+`429` (your plan's limit) is treated the same way and logged as a plan limit:
+
+| Fail mode | Call the local check matches | Any other call |
+|-----------|------------------------------|----------------|
+| `mixed` (default) | Refused | Relayed, logged as unchecked |
+| `open` | Relayed, logged as unchecked | Relayed, logged as unchecked |
+| `closed` | Refused | Refused |
+
+While the API is reachable, a call the local check matches is refused in every
+mode. `mixed` is the default because an outage should neither break your agent
+nor let through the actions the proxy exists to stop. Each unchecked call is
+logged to stderr with the word `unchecked`, the tool's name and why the API
+gave no verdict; arguments are never logged.
+
+Any other answer that is not a verdict refuses the call in every mode: a
+rejected key (`401`/`403`), another `4xx`, or a response that is not a
+verdict. A revoked key must not turn the proxy into a pass-through.
+
+### What is relayed, and how
+
+- **From the server to the agent:** everything, byte for byte, including lines
+  that are not JSON (so a server that prints a banner to stdout still works).
+  The server's stderr is passed through too.
+- **From the agent to the server:** each message as the proxy parsed it, then
+  re-serialized on one line, so the server receives exactly what was checked.
+  The agent's original bytes are never relayed: a server's parser can read
+  them differently (nesting deeper than the proxy reads, `NaN`, `1e999`, lone
+  surrogates, duplicate keys) and see a tool call the proxy did not. For the
+  same reason a line that is not valid JSON, or that contains a bare carriage
+  return (which a universal-newline reader, like the Python MCP SDK's, treats
+  as a line break), is dropped and logged to stderr. A well-behaved agent sends
+  neither.
+
+Messages are bounded at 4 MiB. A larger one from the agent is dropped (it is
+too large to check, so relaying it would be a way around the check); a larger
+one from the server is streamed through. At most 1024 requests may be pending
+at once; one past that is refused with `-32600`. So is a request whose id is
+already pending (`1`, `1.0` and `1e0` are the same id), and a `tools/call`
+without an id, which MCP does not allow (it is answered with a null id). A
+JSON-RPC batch that contains a `tools/call`, or anything but JSON-RPC objects,
+is refused whole.
+
+Tool calls are checked concurrently, so other messages can overtake one that
+is still being checked. A `notifications/cancelled` for such a call may reach
+the server before the call does; the server ignores it, and runs the call.
+
+The proxy exits when the server does, with the server's exit code.
 
 ## How the CLI Works
 

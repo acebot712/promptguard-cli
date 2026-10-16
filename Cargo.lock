@@ -1020,6 +1020,7 @@ dependencies = [
  "clap",
  "colored",
  "glob",
+ "icu_normalizer",
  "open",
  "regex",
  "reqwest",

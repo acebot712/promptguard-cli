@@ -38,6 +38,9 @@ glob = "0.3"
 anyhow = "1.0"
 thiserror = "2.0"
 regex = "1.11"
+# NFKC for mcp-proxy's destructive-action check. Already in the tree through
+# url -> idna, with the same features, so it adds no crate.
+icu_normalizer = { version = "2.2", default-features = false, features = ["compiled_data"] }
 open = "5.3"
 url = "2.5"
 

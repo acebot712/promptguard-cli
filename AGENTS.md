@@ -16,12 +16,16 @@ src/
 ├── backup/            # File backup before transforms
 ├── api/               # PromptGuard API client
 └── commands/          # CLI subcommands
+    └── mcp_proxy/     # `mcp-proxy`: wraps a stdio MCP server and checks each
+                       # tools/call (destructive.rs is a safety boundary, ADR-0034)
 
 tests/
 ├── runtime_shim_tests.rs
 ├── environment_scanner_tests.rs
 ├── command_tests.rs
 ├── api_command_tests.rs
+├── mcp_proxy_tests.rs  # mcp-proxy against support/fake_mcp_server.py
+├── support/           # Test helpers that are not scanner fixtures
 └── fixtures/          # Test project fixtures
     ├── openai-hello-world/
     └── anthropic-hello-world/

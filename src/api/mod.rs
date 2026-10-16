@@ -33,6 +33,16 @@ struct ErrorDetail {
     requests_limit: Option<u64>,
 }
 
+/// One request's outcome before any interpretation; see
+/// [`PromptGuardClient::send_raw`].
+#[derive(Debug)]
+pub enum RawResponse {
+    /// The API answered, with this status and body.
+    Answered { status: u16, body: String },
+    /// No answer: the connection failed, or the request timed out.
+    NoAnswer(String),
+}
+
 pub struct PromptGuardClient {
     client: Client,
     base_url: String,
@@ -81,6 +91,64 @@ impl PromptGuardClient {
             || status == reqwest::StatusCode::GATEWAY_TIMEOUT
     }
 
+    /// A request to `url` carrying the API key and the CLI's user agent.
+    fn authenticated(
+        &self,
+        method: &reqwest::Method,
+        url: &str,
+    ) -> reqwest::blocking::RequestBuilder {
+        self.client
+            .request(method.clone(), url)
+            .header("X-API-Key", &self.api_key)
+            .header(
+                "User-Agent",
+                format!("promptguard-cli/{}", env!("CARGO_PKG_VERSION")),
+            )
+    }
+
+    /// Send one request and return what came back, uninterpreted.
+    ///
+    /// For a caller that must tell an outage apart from a refusal, which
+    /// [`request`](Self::request) folds into one `PromptGuardError::Api`:
+    /// `mcp-proxy` lets an outage follow its fail mode but must refuse a call
+    /// when the key is rejected. Only connection failures are retried, as for
+    /// any mutating request; nothing else is, so the caller's `timeout` bounds
+    /// the wait.
+    pub fn send_raw(
+        &self,
+        method: &reqwest::Method,
+        endpoint: &str,
+        body: Option<&serde_json::Value>,
+        timeout: Duration,
+    ) -> RawResponse {
+        let url = format!("{}{}", self.base_url, endpoint);
+        let mut attempt = 0;
+        loop {
+            let mut request = self.authenticated(method, &url).timeout(timeout);
+            if let Some(body) = body {
+                request = request.json(body);
+            }
+            match request.send() {
+                Ok(response) => {
+                    let status = response.status().as_u16();
+                    return match response.text() {
+                        Ok(body) => RawResponse::Answered { status, body },
+                        Err(e) => {
+                            RawResponse::NoAnswer(format!("reading the response failed: {e}"))
+                        },
+                    };
+                },
+                Err(e) if Self::is_retryable_mutation_error(&e) && attempt < MAX_RETRIES => {
+                    attempt += 1;
+                    thread::sleep(Duration::from_millis(
+                        RETRY_BASE_DELAY_MS * (1 << (attempt - 1)),
+                    ));
+                },
+                Err(e) => return RawResponse::NoAnswer(format!("request failed: {e}")),
+            }
+        }
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn request<T: serde::de::DeserializeOwned>(
         &self,
@@ -112,14 +180,7 @@ impl PromptGuardClient {
                 thread::sleep(Duration::from_millis(delay_ms));
             }
 
-            let mut request = self
-                .client
-                .request(method.clone(), &url)
-                .header("X-API-Key", &self.api_key)
-                .header(
-                    "User-Agent",
-                    format!("promptguard-cli/{}", env!("CARGO_PKG_VERSION")),
-                );
+            let mut request = self.authenticated(method, &url);
 
             if let Some(ref body) = body {
                 request = request.json(body);
