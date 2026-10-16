@@ -121,6 +121,13 @@ never a substitute for it, and it says so in its output. Still a threat scan,
 not detection: it is about content, not call sites.
 _Avoid_: local scan, offline mode (unqualified), lite scan
 
+**Untrusted content**:
+Content the operator did not write: tool output, retrieved documents, web
+pages, memory. An offline threat scan runs its indirect-injection rules only
+on content marked untrusted (`--untrusted`), because the same words are
+normal in a system prompt.
+_Avoid_: external content, third-party input
+
 **Local rule pack**:
 The regex rules an offline threat scan matches, vendored in
 `src/local_rules/pack.json` and generated from upstream Go detectors. Never

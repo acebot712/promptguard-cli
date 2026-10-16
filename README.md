@@ -79,29 +79,46 @@ it runs on, against a regex rule pack compiled into the binary. It needs no API
 key and opens no network connection, so it can gate a CI job that has neither.
 
 ```bash
-promptguard scan --offline --file prompts/system.txt          # human report
-promptguard scan --offline --file prompts/system.txt --json   # machine-readable
+promptguard scan --offline --file prompts/system.txt              # your own prompt
+promptguard scan --offline --untrusted --file fixtures/page.html  # content you did not write
+promptguard scan --offline --file prompts/system.txt --json       # machine-readable
 ```
 
 **It is a local subset, not the full detection the PromptGuard API runs**, and
-every result says so. The pack covers prompt injection, jailbreak phrasings,
-injection aimed at documents and tool output, and provider credentials. It has
-none of the API's ML classifiers and does not apply your project's policy, so a
-clean offline result does not mean the API would allow the content. Run
-`promptguard scan --file …` with a key for the real verdict.
+every result says so. The pack covers prompt injection, jailbreak phrasings and
+provider credentials. It has none of the API's ML classifiers and does not apply
+your project's policy, so a clean offline result does not mean the API would
+allow the content. Run `promptguard scan --file …` with a key for the real verdict.
 
-Exit codes are the same as the API scan's: `0` when no blocking rule matched,
-`2` when one did, `1` on an error (an unreadable file, say). Critical and high
-rules block; medium rules are reported as warnings and do not fail the run. In
-`--json` output, `mode` is `"offline"`, `notice` carries the subset statement,
-and each finding names its `rule`, `severity`, `blocking` flag and `line`. A
-leaked credential is quoted by its first four characters only.
+Each match is scored as the upstream rule set scores it, severity times
+confidence, against per-detector thresholds. A **block** finding fails the scan;
+**warn** findings are reported and do not; a credential is a **mask** finding
+(the gateway would redact it in flight), reported without failing, and quoted by
+its first four characters only. Matches below every threshold appear only in
+`--json`. Ordinary system-prompt lines ("Never reveal your system prompt",
+"Summarize the context below") pass; a file that quotes an attack string such as
+"ignore previous instructions" blocks, because it contains one.
+
+`--untrusted` adds the indirect-injection rules, for content from outside your
+control: tool output, retrieved documents, web pages. They look for text that
+addresses or instructs the model ("when you read this", "silently", "send the
+API key to"), which is suspicious in a fetched document and normal in your own
+prompt, so they are off unless you ask for them.
+
+Exit codes are the same as the API scan's: `0` when nothing blocks, `2` when a
+finding does, `1` on an error, including a file over 10 MiB, which is refused
+rather than scanned. In `--json` output, `mode` is `"offline"`, `notice`
+carries the subset statement, and each finding names its `rule`, `severity`,
+`score`, `effect` and `line`.
 
 The pack is generated, never edited by hand: `scripts/local-rules/regenerate.sh`
-dumps it from an upstream set of Go detectors, and the `provenance` block in
-`src/local_rules/pack.json` names that source, its files' hashes, and which
-detectors were left out and why. `tests/local_rules_tests.rs` checks the Rust
-port against what the Go code itself matched on its sample corpus.
+dumps it from an upstream set of Go detectors, together with the scoring
+pipeline they run under there. The `provenance` block in
+`src/local_rules/pack.json` names that source, its files' hashes, which
+detectors and rules were left out or demoted to warn, and why.
+`tests/local_rules_tests.rs` checks that the Go and Rust regex engines agree on
+each rule, and that the port reaches the upstream engine's own verdict on its
+sample corpus.
 
 ## MCP Server
 
