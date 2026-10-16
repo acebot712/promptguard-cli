@@ -1,0 +1,1293 @@
+{
+  "provenance": {
+    "source": "the earlier rule set internal/security/detection (Go regexp, RE2 syntax)",
+    "files": [
+      {
+        "path": "injection.go",
+        "sha256": "25e3c1be28ade64da5266aaffde2cd1e1c9648d4c661161b45992d261fce5d89"
+      },
+      {
+        "path": "jailbreak.go",
+        "sha256": "d43976a52692fa530c7d664918c229a9fed502a3bb5d14e68bf55619d085d127"
+      },
+      {
+        "path": "indirect_injection.go",
+        "sha256": "20a386ce57e48005615947be3e22071c30bf215acfb11a5bf893dc8d5988cdc8"
+      },
+      {
+        "path": "secrets.go",
+        "sha256": "b1944ce1915f3762ab7a0e0d21d3208faf58776e4b1c26b802c511d7db1d959b"
+      }
+    ],
+    "generated_on": "2026-10-16",
+    "regenerate_with": "scripts/local-rules/regenerate.sh <path-to-earlier-rules-checkout>",
+    "match_semantics": [
+      "injection rules match case-insensitively; the earlier rule set lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
+      "rules with min_entropy count a match only when its Shannon entropy (bits per character) is at least that value",
+      "critical and high rules block; medium rules warn and do not fail the scan"
+    ],
+    "excluded": {
+      "crescendo.go": "multi-turn: needs conversation history a single scan does not have",
+      "exfil.go": "response-side: it flags model output, and rules such as canonical_sysprompt fire on ordinary system prompts a CI scan would be pointed at",
+      "jailbreak.go structuralFindings": "the jailbreak detector's non-regex layer (many-shot turn counting, encoding density) is code, not patterns",
+      "pii.go": "PII is redaction, a separate API operation from a threat scan; several rules also need code validators (Luhn, checksums) that are not regexes",
+      "structural.go": "not a pattern list: fake-turn counting and encoding-density heuristics are code",
+      "topic.go": "per-tenant topic policy, configured at run time, with no default rules"
+    }
+  },
+  "patterns": [
+    {
+      "id": "injection/override.imperative",
+      "detector": "injection",
+      "category": "override",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "(?i)\\b(ignore|disregard|forget|skip|bypass|override)\\b[^.?!]{0,30}?\\b(system|previous|prior|above|all|the|your)\\b[^.?!]{0,30}?\\b(prompt|prompts|instruction|instructions|rule|rules|message|messages|context|guidelines?)\\b"
+    },
+    {
+      "id": "injection/override.previous",
+      "detector": "injection",
+      "category": "override",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "(?i)ignore\\s+(all\\s+)?previous\\s+(instructions|prompts|rules)"
+    },
+    {
+      "id": "injection/override.previous#2",
+      "detector": "injection",
+      "category": "override",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "(?i)disregard\\s+(all\\s+)?(previous|above|prior)\\s+(instructions|context)"
+    },
+    {
+      "id": "injection/override.forget",
+      "detector": "injection",
+      "category": "override",
+      "severity": "critical",
+      "confidence": 0.9,
+      "regex": "(?i)forget\\s+(everything|all|your)\\s+(you|instructions|rules)"
+    },
+    {
+      "id": "injection/override.new_instructions",
+      "detector": "injection",
+      "category": "override",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)new\\s+instructions?\\s*[:=]"
+    },
+    {
+      "id": "injection/override.role_hijack",
+      "detector": "injection",
+      "category": "override",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)your\\s+(new|real|actual)\\s+(instructions?|purpose|goal|task)"
+    },
+    {
+      "id": "injection/override.direct",
+      "detector": "injection",
+      "category": "override",
+      "severity": "critical",
+      "confidence": 0.9,
+      "regex": "(?i)override\\s+(your|the|all)\\s+(instructions|rules|guidelines|safety)"
+    },
+    {
+      "id": "injection/extraction.direct",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "(?i)\\b(?:repeat|show|display|print|reveal|output|tell|give|share|send|hand|leak|echo|recite|quote|dump|summari[sz]e|paraphrase|decode|expose|publish)\\s+(?:me\\s+(?:about\\s+)?)?(?:your|the)\\s+(?:system\\s+)?(?:prompt|instructions|rules|guidelines|constraints|directives|policies|message|context)"
+    },
+    {
+      "id": "injection/extraction.interrogative",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.8,
+      "regex": "(?i)\\bwhat(?:'?s|\\s+(?:are|is|were|was))\\s+(?:your\\s+(?:system\\s+)?(?:prompt|instructions|rules|guidelines|directives|policies|initial\\s+message)|the\\s+(?:system\\s+(?:prompt|instructions|rules|guidelines|directives|policies|message)|initial\\s+message))"
+    },
+    {
+      "id": "injection/extraction.positional",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.88,
+      "regex": "(?i)\\b(?:what(?:'?s|\\s+(?:was|is))|show\\s+me|repeat)\\s+(?:was\\s+)?(?:said|written|placed|set|configured|given)\\s+(?:above|before|prior\\s+to)\\s+(?:this|my)\\s+(?:message|conversation|turn|prompt)"
+    },
+    {
+      "id": "injection/extraction.creative",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)\\b(?:write|compose|draft|create|generate|make|craft|pen|render|give\\s+me)\\s+(?:a|an|me\\s+a)?\\s*(?:\\w+\\s+){0,3}(?:poem|poetry|haiku|sonnet|song|rap|lyric|lyrics|verse|story|tale|essay|riddle|limerick|ballad|acrostic|prose|narrative|screenplay|tweet|thread|joke|monologue|speech|fable)\\s+(?:inspired\\s+by|based\\s+on|about|reflecting|describing|depicting|using|from|that\\s+(?:captures|reflects|expresses|describes|reveals|shows)|containing|featuring|derived\\s+from|incorporating)\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)"
+    },
+    {
+      "id": "injection/extraction.creative.da",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)\\b(?:skriv|beskriv|fortæl|vis|del|repetér|repeter|gengiv|afslør|hvad\\s+er)\\b[^.?!]{0,80}\\b(?:din|dine|de|jeres|deres)?\\s*(?:system|interne?|skjulte?|oprindelige?|hemmelige?|underliggende?)\\s+(?:prompt|instruktion(?:er)?|regler|retningslinjer|direktiver|politikker)\\b"
+    },
+    {
+      "id": "injection/extraction.translate",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.88,
+      "regex": "(?i)\\btranslate\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)\\s+(?:in)?to\\b"
+    },
+    {
+      "id": "injection/extraction.encode",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "critical",
+      "confidence": 0.92,
+      "regex": "(?i)\\b(?:encode|encrypt|obfuscate|rewrite|format|render|express|transcribe|transliterate)\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)\\s+(?:in|as|into|using)\\s+(?:base64|hex|hexadecimal|rot13|rot\\s*13|binary|morse|leet|leetspeak|pig\\s*latin|piglatin|emoji|ascii|unicode|reverse[d]?|backward[s]?|atbash|caesar)"
+    },
+    {
+      "id": "injection/extraction.completion",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.82,
+      "regex": "(?i)\\b(?:complete|continue|finish|extend|fill\\s+in|autocomplete)\\s+(?:the\\s+following|this|it|my|for\\s+me)\\s*[:.]?\\s*[\"'`]?(?:you\\s+are|your\\s+instructions|your\\s+purpose|my\\s+instructions|i\\s+am\\s+(?:an\\s+ai|a\\s+helpful)|system\\s*[:.]|assistant\\s*[:.]|as\\s+an\\s+ai)"
+    },
+    {
+      "id": "injection/extraction.describe",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "medium",
+      "confidence": 0.78,
+      "regex": "(?i)\\b(?:describe|explain|elaborate\\s+on|detail|list|enumerate|outline|break\\s+down|walk\\s+me\\s+through|summari[sz]e)\\s+(?:me\\s+)?(?:in\\s+detail\\s+)?(?:each\\s+of\\s+)?(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)"
+    },
+    {
+      "id": "injection/extraction.first_n",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.88,
+      "regex": "(?i)\\b(?:first|initial|top|beginning|start|opening|last|final|ending)\\s+(?:\\d+\\s+)?(?:word|character|line|sentence|token|paragraph|chunk)s?\\s+of\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)"
+    },
+    {
+      "id": "injection/extraction.delimiter_leak",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.88,
+      "regex": "(?i)\\b(?:what(?:'?s|\\s+(?:is|was))|show|print|reveal|output|display|give|tell)\\s+(?:me\\s+)?(?:everything\\s+|anything\\s+)?(?:between|inside|within|after|before|above)\\s+(?:the\\s+)?(?:<\\|[a-z_]+\\|>|\\[/?inst\\]|</?system>|<\\|system\\|>|system\\s+(?:tag|block|section|prompt|message)|start\\s+of\\s+turn|header)"
+    },
+    {
+      "id": "injection/extraction.roleplay_leak",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)\\b(?:pretend|imagine|suppose|assume|let'?s\\s+say|roleplay\\s+that|hypothetically)\\b[^.?!]{0,60}\\byour\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)?(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)\\s+(?:were|was|is|are)\\s+(?:public|visible|shared|revealed|shown|printable|leaked|exposed|no\\s+longer\\s+secret|not\\s+secret)"
+    },
+    {
+      "id": "injection/extraction.guardrails",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "medium",
+      "confidence": 0.78,
+      "regex": "(?i)\\b(?:list|enumerate|show|reveal|describe|what\\s+are|tell\\s+me)\\s+(?:me\\s+)?(?:all\\s+)?(?:of\\s+)?(?:your|the)\\s+(?:(?:safety|content|ethical|hard|soft)\\s+)?(?:guardrails|restrictions|limitations|filters|blocks|forbidden\\s+topics|off[- ]limits(?:\\s+topics)?|red\\s+lines|no[- ]go(?:\\s+topics)?|blocked\\s+(?:content|topics)|banned\\s+(?:content|topics))"
+    },
+    {
+      "id": "injection/extraction.reverse",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.88,
+      "regex": "(?i)\\b(?:reverse|flip|scramble|rearrange|mirror|invert|shuffle|spell\\s+out|spell\\s+backwards?)\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)"
+    },
+    {
+      "id": "injection/delimiter.system_tag",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "</system>"
+    },
+    {
+      "id": "injection/delimiter.eot",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "<\\|endoftext\\|>"
+    },
+    {
+      "id": "injection/delimiter.chatml",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "<\\|im_start\\|>"
+    },
+    {
+      "id": "injection/delimiter.chatml#2",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "<\\|im_end\\|>"
+    },
+    {
+      "id": "injection/delimiter.markdown_system",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "medium",
+      "confidence": 0.7,
+      "regex": "(?m)^###\\s*system"
+    },
+    {
+      "id": "injection/delimiter.conversation",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "medium",
+      "confidence": 0.75,
+      "regex": "(?i)human:\\s*\\n.*assistant:"
+    },
+    {
+      "id": "injection/delimiter.llama3",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "<\\|start_header_id\\|>"
+    },
+    {
+      "id": "injection/delimiter.llama3#2",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "<\\|end_header_id\\|>"
+    },
+    {
+      "id": "injection/delimiter.llama3#3",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "<\\|eot_id\\|>"
+    },
+    {
+      "id": "injection/delimiter.gemma",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "<start_of_turn>"
+    },
+    {
+      "id": "injection/delimiter.gemma#2",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "<end_of_turn>"
+    },
+    {
+      "id": "injection/delimiter.inst",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "\\[/INST\\]"
+    },
+    {
+      "id": "injection/delimiter.inst#2",
+      "detector": "injection",
+      "category": "delimiter",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "\\[INST\\]"
+    },
+    {
+      "id": "injection/encoding.request",
+      "detector": "injection",
+      "category": "encoding",
+      "severity": "medium",
+      "confidence": 0.7,
+      "regex": "(?i)(?:base64|hex|rot13|unicode)\\s+(?:encode|decode|convert)"
+    },
+    {
+      "id": "injection/encoding.translate",
+      "detector": "injection",
+      "category": "encoding",
+      "severity": "medium",
+      "confidence": 0.75,
+      "regex": "(?i)translate\\s+(?:this|the\\s+following)\\s+(?:from|to)\\s+(?:base64|hex|binary)"
+    },
+    {
+      "id": "injection/llm_targeting.role",
+      "detector": "injection",
+      "category": "llm_targeting",
+      "severity": "high",
+      "confidence": 0.8,
+      "regex": "(?i)(?:as\\s+)?(?:claude|chatgpt|gpt|gemini|llama)\\s*,?\\s+(?:you\\s+)?(?:must|should|will|can)\\s+(?:now|always)"
+    },
+    {
+      "id": "injection/override.multilingual_fr",
+      "detector": "injection",
+      "category": "override_fr",
+      "severity": "critical",
+      "confidence": 0.92,
+      "regex": "(?i)ignorez\\s+(?:toutes\\s+les\\s+)?(?:instructions|consignes)\\s+(?:pr[ée]c[ée]dentes|ant[ée]rieures)"
+    },
+    {
+      "id": "injection/override.multilingual_de",
+      "detector": "injection",
+      "category": "override_de",
+      "severity": "critical",
+      "confidence": 0.92,
+      "regex": "(?i)(?:ignoriere|vergiss|missachte)\\s+(?:alle\\s+)?(?:vorherigen|vorigen|bisherigen)\\s+(?:anweisungen|anordnungen)"
+    },
+    {
+      "id": "injection/override.multilingual_es",
+      "detector": "injection",
+      "category": "override_es",
+      "severity": "critical",
+      "confidence": 0.92,
+      "regex": "(?i)(?:ignora|olvida|descarta)\\s+(?:todas\\s+las\\s+)?instrucciones\\s+(?:anteriores|previas)"
+    },
+    {
+      "id": "injection/override.multilingual_pt",
+      "detector": "injection",
+      "category": "override_pt",
+      "severity": "critical",
+      "confidence": 0.92,
+      "regex": "(?i)(?:ignore|esque[çc]a|desconsidere)\\s+(?:todas\\s+as\\s+)?instru[çc][õo]es\\s+(?:anteriores|pr[ée]vias)"
+    },
+    {
+      "id": "injection/override.multilingual_it",
+      "detector": "injection",
+      "category": "override_it",
+      "severity": "medium",
+      "confidence": 0.85,
+      "regex": "(?i)(?:ignora|dimentica|trascura)\\s+(?:tutte\\s+le\\s+)?istruzioni\\s+(?:precedenti|anteriori)"
+    },
+    {
+      "id": "injection/smuggle.verbatim",
+      "detector": "injection",
+      "category": "verbatim_smuggle",
+      "severity": "medium",
+      "confidence": 0.7,
+      "regex": "(?i)(?:print|output|return|repeat)\\s+(?:the\\s+following|this)\\s+(?:verbatim|exactly|as[- ]is)\\b"
+    },
+    {
+      "id": "injection/smuggle.encoded_output",
+      "detector": "injection",
+      "category": "smuggle",
+      "severity": "high",
+      "confidence": 0.82,
+      "regex": "(?i)\\b(?:respond|reply|answer|output|write|format)\\s+(?:only\\s+|exclusively\\s+)?(?:in|using|with|as)\\s+(?:base64|rot13|rot\\s*13|hex|hexadecimal|binary|morse|leetspeak|leet|pig\\s*latin|piglatin|emoji\\s+only|reversed|backwards|atbash|zalgo)\\b"
+    },
+    {
+      "id": "injection/smuggle.mirror",
+      "detector": "injection",
+      "category": "smuggle",
+      "severity": "medium",
+      "confidence": 0.75,
+      "regex": "(?i)\\b(?:from\\s+now\\s+on|henceforth|starting\\s+now|going\\s+forward)\\b[^.?!]{0,60}(?:(?:just|only|simply|merely)\\s+)?(?:repeat|echo|mirror|reflect|parrot)\\s+(?:back\\s+)?(?:what\\s+i\\s+say|my\\s+(?:words|input|messages|prompts|text))"
+    },
+    {
+      "id": "injection/smuggle.code_fence",
+      "detector": "injection",
+      "category": "smuggle",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)\\b(?:wrap|put|place|enclose|format|surround)\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)\\s+(?:in|inside|within|between)\\s+(?:(?:a|an|the|triple)\\s+)?(?:backticks|code\\s+block|code\\s+fence|fenced\\s+code|markdown(?:\\s+block)?|xml\\s+tags?|json\\s+block|yaml\\s+block|pre\\s+tags?)"
+    },
+    {
+      "id": "injection/extraction.raw",
+      "detector": "injection",
+      "category": "system_extraction",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "(?i)\\b(?:output|show|print|reveal|display|give)\\s+(?:your\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)*|the\\s+(?:(?:system|initial|original|hidden|internal|inter[nm]?al|secret|pre[- ]?existing|current|active|base|default|operator|underlying)\\s+)+)(?:prompt|instructions?|rules?|guidelines?|directives?|policies|constraints|configuration|persona)\\s+(?:raw|unescaped|unmodified|as[- ]is|verbatim|literally|character\\s+by\\s+character|char\\s+by\\s+char|without\\s+(?:quotes|modification|editing|paraphrasing|redaction|censoring))"
+    },
+    {
+      "id": "jailbreak/persona.dan",
+      "detector": "jailbreak",
+      "category": "dan_classic",
+      "severity": "critical",
+      "confidence": 0.95,
+      "description": "DAN (Do Anything Now) jailbreak signature",
+      "regex": "(?i)\\b(?:do\\s+anything\\s+now|DAN\\s+mode|DAN\\s+prompt|hello\\s+DAN)\\b"
+    },
+    {
+      "id": "jailbreak/persona.dan#2",
+      "detector": "jailbreak",
+      "category": "dan_variant",
+      "severity": "critical",
+      "confidence": 0.9,
+      "description": "Numbered DAN revision",
+      "regex": "(?i)\\bDAN\\s*(?:v|version)?\\s*\\d+(?:\\.\\d+)?\\b"
+    },
+    {
+      "id": "jailbreak/persona.dan#3",
+      "detector": "jailbreak",
+      "category": "persona_introduction",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "Persona introduction (\"you are DAN\")",
+      "regex": "(?i)\\byou\\s+are\\s+(?:now\\s+)?(?:DAN|AIM|STAN|DUDE|jailbroken?|unfiltered|uncensored)\\b"
+    },
+    {
+      "id": "jailbreak/persona.dan.tokens",
+      "detector": "jailbreak",
+      "category": "dan_token_system",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "DAN token-punishment mechanic",
+      "regex": "(?i)(?:token|point|credit)s?\\s*(?:system|remaining|left)"
+    },
+    {
+      "id": "jailbreak/persona.character_lock",
+      "detector": "jailbreak",
+      "category": "dan_character",
+      "severity": "high",
+      "confidence": 0.8,
+      "description": "Character-lock command",
+      "regex": "(?i)\\b(?:stay|remain)\\s+in\\s+character|don['']?t\\s+break\\s+character\\b"
+    },
+    {
+      "id": "jailbreak/persona.aim",
+      "detector": "jailbreak",
+      "category": "aim_classic",
+      "severity": "critical",
+      "confidence": 0.94,
+      "description": "AIM (Machiavellian) jailbreak",
+      "regex": "(?i)\\b(?:act\\s+as\\s+)?AIM\\b.*\\b(?:always\\s+intelligent\\s+and\\s+machiavellian|machiavellian)\\b"
+    },
+    {
+      "id": "jailbreak/persona.aim#2",
+      "detector": "jailbreak",
+      "category": "aim_niccolo",
+      "severity": "critical",
+      "confidence": 0.95,
+      "description": "AIM Niccolo framing",
+      "regex": "(?i)\\bniccolo\\s+(?:machiavelli|asks?\\s+AIM)\\b"
+    },
+    {
+      "id": "jailbreak/persona.stan",
+      "detector": "jailbreak",
+      "category": "stan",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "STAN persona jailbreak",
+      "regex": "(?i)\\bSTAN\\b.*\\b(?:strive\\s+to\\s+avoid\\s+norms|broken\\s+(?:free|away)\\s+from)\\b"
+    },
+    {
+      "id": "jailbreak/persona.dude",
+      "detector": "jailbreak",
+      "category": "dude",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "DUDE persona jailbreak",
+      "regex": "(?i)\\bDUDE\\b.*\\b(?:do\\s+unlimited\\s+and\\s+dangerous\\s+everything|unlimited\\s+power)\\b"
+    },
+    {
+      "id": "jailbreak/persona.mongo_tom",
+      "detector": "jailbreak",
+      "category": "mongo_tom",
+      "severity": "critical",
+      "confidence": 0.9,
+      "description": "Mongo Tom vulgar persona",
+      "regex": "(?i)\\bmongo\\s+tom\\b.*\\b(?:swears|curses|no\\s+filter)\\b"
+    },
+    {
+      "id": "jailbreak/persona.evil",
+      "detector": "jailbreak",
+      "category": "evil_persona",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "Named evil-twin persona (EvilGPT, HackerAI, etc.)",
+      "regex": "(?i)\\b(?:you\\s+are\\s+(?:now\\s+)?|act\\s+as\\s+)?(?:evil|dark|malicious|hacker|criminal|rogue|uncensored|unfiltered|jailbroken?)\\s*(?:GPT|AI|assistant|bot|chatbot|model)\\b"
+    },
+    {
+      "id": "jailbreak/persona.evil#2",
+      "detector": "jailbreak",
+      "category": "evil_mode",
+      "severity": "critical",
+      "confidence": 0.9,
+      "description": "Evil mode declaration",
+      "regex": "(?i)\\b(?:evil|malicious|bad|dark)\\s+(?:assistant|mode|AI|bot)\\b"
+    },
+    {
+      "id": "jailbreak/persona.evil.opposite",
+      "detector": "jailbreak",
+      "category": "evil_opposite",
+      "severity": "high",
+      "confidence": 0.8,
+      "description": "Inverted-ethics roleplay",
+      "regex": "(?i)\\b(?:opposite|inverse|reverse)\\s+(?:of\\s+)?(?:your\\s+)?(?:personality|character|behavior|ethics|morals)\\b"
+    },
+    {
+      "id": "jailbreak/persona.roleplay_unrestricted",
+      "detector": "jailbreak",
+      "category": "persona_unrestricted",
+      "severity": "high",
+      "confidence": 0.9,
+      "description": "Unrestricted-persona roleplay",
+      "regex": "(?i)\\b(?:act|pretend|roleplay|behave|simulate|play)\\s+(?:the\\s+role\\s+)?(?:as\\s+|being\\s+|to\\s+be\\s+)?(?:a|an)?\\s*(?:unrestricted|uncensored|jailbroken?|unfiltered|amoral|lawless|evil)\\b"
+    },
+    {
+      "id": "jailbreak/persona.roleplay_unrestricted#2",
+      "detector": "jailbreak",
+      "category": "roleplay_nolimits",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Roleplay with explicit nolimits",
+      "regex": "(?i)\\b(?:act|pretend|roleplay|behave)\\s+as\\s+.*\\b(?:no|without|zero|not\\s+bound\\s+by)\\s+(?:limits?|restrictions?|boundaries|rules?|guidelines|ethics|morals|constraints)\\b"
+    },
+    {
+      "id": "jailbreak/persona.roleplay_unrestricted#3",
+      "detector": "jailbreak",
+      "category": "persona_nolimits_declaration",
+      "severity": "high",
+      "confidence": 0.82,
+      "description": "Character-without-limits declaration",
+      "regex": "(?i)\\b(?:character|persona)\\s+(?:with\\s+)?(?:no|without|zero)\\s+(?:limits?|restrictions?|boundaries|ethics|morals|rules?)\\b"
+    },
+    {
+      "id": "jailbreak/persona.unrestricted_claim",
+      "detector": "jailbreak",
+      "category": "unrestricted_claim",
+      "severity": "high",
+      "confidence": 0.88,
+      "description": "Direct unrestricted assertion",
+      "regex": "(?i)\\byou\\s+(?:are|have)\\s+(?:now\\s+)?(?:no|zero)\\s+(?:restrictions|rules|guidelines|limits?|boundaries|ethics|morals|filters?|safeguards)\\b"
+    },
+    {
+      "id": "jailbreak/persona.unrestricted_claim#2",
+      "detector": "jailbreak",
+      "category": "breaks_rules",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Refusal-override declaration",
+      "regex": "(?i)\\b(?:breaks?|breaking|ignores?|ignoring|bypasses?|bypassing|disregards?|defies?)\\s+(?:the\\s+|all\\s+|any\\s+|your\\s+|its\\s+|every\\s+)?(?:rules?|restrictions?|guidelines?|policies|policy|safety|filters?|guardrails?|safeguards|ethics|morals)\\b"
+    },
+    {
+      "id": "jailbreak/persona.refusal_override",
+      "detector": "jailbreak",
+      "category": "do_it_anyway",
+      "severity": "high",
+      "confidence": 0.75,
+      "description": "Refusal-override imperative",
+      "regex": "(?i)\\bdo\\s+it\\s+(?:anyway|regardless|despite|nonetheless)\\b"
+    },
+    {
+      "id": "jailbreak/persona.mode_switch",
+      "detector": "jailbreak",
+      "category": "mode_switch",
+      "severity": "critical",
+      "confidence": 0.94,
+      "description": "Direct privileged-mode switch",
+      "regex": "(?i)\\byou\\s+are\\s+now\\s+(?:in\\s+)?(?:developer|admin|debug|unrestricted|uncensored|jailbroken?|god|root|sudo|DAN|AIM|evil)\\s+mode\\b"
+    },
+    {
+      "id": "jailbreak/authority.developer_spoof",
+      "detector": "jailbreak",
+      "category": "dev_spoof",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Pretends to be the model's developer",
+      "regex": "(?i)\\b(?:I\\s+am|this\\s+is|we\\s+are)\\s+(?:your\\s+)?(?:developer|engineer|creator|trainer|operator)\\b"
+    },
+    {
+      "id": "jailbreak/authority.vendor_spoof",
+      "detector": "jailbreak",
+      "category": "vendor_spoof",
+      "severity": "high",
+      "confidence": 0.88,
+      "description": "Claims to be the model vendor",
+      "regex": "(?i)\\b(?:I\\s+am|this\\s+is|on\\s+behalf\\s+of)\\s+(?:OpenAI|Anthropic|Google|Meta|Microsoft|xAI|DeepMind|Mistral|Cohere)\\b"
+    },
+    {
+      "id": "jailbreak/authority.admin_override",
+      "detector": "jailbreak",
+      "category": "admin_command",
+      "severity": "critical",
+      "confidence": 0.9,
+      "description": "Admin-authorized command framing",
+      "regex": "(?i)\\b(?:as\\s+(?:a|the|your)\\s+)?(?:system\\s+)?admin(?:istrator)?\\s*,?\\s+(?:I\\s+)?(?:require|authori[sz]e|override|instruct|command|direct)\\b"
+    },
+    {
+      "id": "jailbreak/authority.admin_override#2",
+      "detector": "jailbreak",
+      "category": "sudo_override",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "sudo/root privilege claim",
+      "regex": "(?i)\\b(?:sudo|root)\\s+(?:mode|access|privilege|override)\\b"
+    },
+    {
+      "id": "jailbreak/authority.admin_override#3",
+      "detector": "jailbreak",
+      "category": "override_credential",
+      "severity": "critical",
+      "confidence": 0.93,
+      "description": "Spoofed override credential",
+      "regex": "(?i)\\b(?:override|bypass|admin)[-_\\s]?(?:code|key|token|password)\\s*[:=]\\s*\\S+\\b"
+    },
+    {
+      "id": "jailbreak/authority.admin_override#4",
+      "detector": "jailbreak",
+      "category": "slash_admin",
+      "severity": "high",
+      "confidence": 0.82,
+      "description": "Slash-command admin toggle",
+      "regex": "(?i)(?:^|[^a-z0-9_])/(?:admin|root|debug|dev)\\b(?:\\s+(?:enable|on|true))?"
+    },
+    {
+      "id": "jailbreak/authority.admin_override#5",
+      "detector": "jailbreak",
+      "category": "devmode_env",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Env-var-style debug/dev toggle",
+      "regex": "(?i)\\bDEVMODE\\s*=\\s*(?:true|1|on|enabled)\\b|\\bdebug\\s*mode\\s*[:=]\\s*(?:on|true|1)\\b"
+    },
+    {
+      "id": "jailbreak/authority.clearance_claim",
+      "detector": "jailbreak",
+      "category": "clearance_claim",
+      "severity": "medium",
+      "confidence": 0.7,
+      "description": "Claims elevated clearance",
+      "regex": "(?i)\\bI\\s+(?:have|am\\s+granted)\\s+(?:full\\s+)?(?:clearance|authori[sz]ation|permission)\\s+(?:to|for)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.classic",
+      "detector": "jailbreak",
+      "category": "hypothetical_classic",
+      "severity": "medium",
+      "confidence": 0.65,
+      "description": "Hypothetical framing",
+      "regex": "(?i)\\b(?:hypothetically|theoretically|in\\s+(?:a\\s+)?theory)\\s*,?\\s*(?:if|how|what|could|would|tell|explain|describe)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.fictional_world",
+      "detector": "jailbreak",
+      "category": "fictional_world",
+      "severity": "high",
+      "confidence": 0.8,
+      "description": "Fictional-world framing",
+      "regex": "(?i)\\bin\\s+(?:a|an)\\s+(?:fictional|alternate|parallel|hypothetical)\\s+(?:world|universe|reality|scenario|setting)\\s+where\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.imagine_norules",
+      "detector": "jailbreak",
+      "category": "imagine_norules",
+      "severity": "high",
+      "confidence": 0.88,
+      "description": "Imagine-you-had-no-rules",
+      "regex": "(?i)\\b(?:imagine|pretend|suppose|envision)\\s+(?:you\\s+)?(?:had|have|were|are)(?:\\s+\\S+){0,6}?\\s+(?:no|zero)\\s+(?:rules?|restrictions?|ethics|morals|guidelines|limits?)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.imagine_norules#2",
+      "detector": "jailbreak",
+      "category": "lets_pretend_norules",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Game-with-no-rules framing",
+      "regex": "(?i)\\b(?:let['']?s|let\\s+us)\\s+(?:play\\s+a\\s+game|pretend|imagine|suppose)\\s+(?:where|that)\\b.*\\b(?:no|without)\\s+(?:rules?|restrictions?|ethics|morals)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.fiction_nosafety",
+      "detector": "jailbreak",
+      "category": "fiction_nosafety",
+      "severity": "high",
+      "confidence": 0.82,
+      "description": "Story framing with explicit no-ethics payload",
+      "regex": "(?i)\\b(?:write|draft|compose|create)\\s+(?:a|an)\\s+(?:screenplay|story|scene|novel|script|poem|dialogue|fanfic|fanfiction)\\s+(?:where|in\\s+which)\\s+.*\\bno\\s+(?:ethics|morals|restrictions|rules|guidelines|safety)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.fiction_rule_break",
+      "detector": "jailbreak",
+      "category": "fiction_rule_break",
+      "severity": "medium",
+      "confidence": 0.7,
+      "description": "Story framing with softer rule-break payload",
+      "regex": "(?i)\\b(?:write|draft|compose|create)\\s+(?:a|an)\\s+(?:screenplay|story|scene|novel|script|poem|dialogue)\\s+(?:where|in\\s+which)\\s+.*\\b(?:breaks?\\s+(?:the\\s+)?rules?|ignores?\\s+safety)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.fiction_character",
+      "detector": "jailbreak",
+      "category": "fiction_character",
+      "severity": "high",
+      "confidence": 0.8,
+      "description": "Fictional character with no ethics",
+      "regex": "(?i)\\b(?:character|persona|protagonist|narrator)\\s+(?:(?:who|that)\\s+)?(?:has|knows|can)\\s+no\\s+(?:ethics|morals|restrictions|rules|guidelines)\\b"
+    },
+    {
+      "id": "jailbreak/hypothetical.grandma",
+      "detector": "jailbreak",
+      "category": "grandma",
+      "severity": "medium",
+      "confidence": 0.72,
+      "description": "Grandma-used-to-tell-me framing",
+      "regex": "(?i)\\bmy\\s+(?:grandma|grandmother|grandad|grandpa|deceased\\s+grandma)\\s+(?:used\\s+to|would)\\s+(?:tell|read|sing|say)\\b"
+    },
+    {
+      "id": "jailbreak/override.persistent",
+      "detector": "jailbreak",
+      "category": "persistent_override",
+      "severity": "high",
+      "confidence": 0.8,
+      "description": "Persistent-override declaration",
+      "regex": "(?i)\\b(?:from\\s+now\\s+on|starting\\s+now|henceforth|going\\s+forward)\\s*,?\\s*(?:you|your)\\s+(?:will|must|should|are|shall)\\b"
+    },
+    {
+      "id": "jailbreak/override.wipe_context",
+      "detector": "jailbreak",
+      "category": "forget_everything",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "Wipe-prior-context instruction",
+      "regex": "(?i)\\b(?:forget|disregard|ignore|override|discard|wipe)\\s+(?:everything|all)\\s+(?:(?:that\\s+was|you\\s+were)\\s+)?(?:said|told|given|placed|configured|written)\\s+(?:above|before|prior|previously)\\b"
+    },
+    {
+      "id": "jailbreak/override.wipe_context#2",
+      "detector": "jailbreak",
+      "category": "forget_all_instructions",
+      "severity": "critical",
+      "confidence": 0.93,
+      "description": "Forget-all-instructions variant",
+      "regex": "(?i)\\b(?:forget|disregard|ignore|override|discard|wipe)\\s+(?:all|every|each)\\s+(?:(?:of\\s+)?(?:your|the|prior|previous|earlier)\\s+)?(?:instructions?|rules?|directives?|guidelines?|orders?|commands?)\\b"
+    },
+    {
+      "id": "jailbreak/override.wipe_context#3",
+      "detector": "jailbreak",
+      "category": "context_reset",
+      "severity": "high",
+      "confidence": 0.86,
+      "description": "Reset-the-context instruction",
+      "regex": "(?i)\\breset\\s+(?:your|the)\\s+(?:context|memory|conversation|instructions?|prompt)\\b"
+    },
+    {
+      "id": "jailbreak/override.replace_rules",
+      "detector": "jailbreak",
+      "category": "new_rules_announcement",
+      "severity": "high",
+      "confidence": 0.84,
+      "description": "Announces replacement rules",
+      "regex": "(?i)\\b(?:new|updated|revised)\\s+(?:rules?|instructions?|guidelines?|system\\s+prompt)\\s*[:.]\\s*"
+    },
+    {
+      "id": "jailbreak/override.prefix_injection",
+      "detector": "jailbreak",
+      "category": "prefix_affirmative_instruction",
+      "severity": "high",
+      "confidence": 0.88,
+      "description": "Forces affirmative prefix in reply",
+      "regex": "(?i)\\b(?:begin|start|open)\\s+(?:your\\s+)?(?:response|reply|answer|output)\\s+with\\s*[:\"'\\x60]?\\s*(?:sure|absolutely|of\\s+course|certainly|here(?:'?s|\\s+is))\\b"
+    },
+    {
+      "id": "jailbreak/override.prefix_injection#2",
+      "detector": "jailbreak",
+      "category": "prefix_reply_only",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Reply-only-with-affirmative",
+      "regex": "(?i)\\breply\\s+(?:only\\s+)?with\\s*[:\"'\\x60]?\\s*(?:sure|absolutely|of\\s+course|certainly)\\b"
+    },
+    {
+      "id": "jailbreak/override.prefix_injection#3",
+      "detector": "jailbreak",
+      "category": "prefix_sure_heres_how",
+      "severity": "high",
+      "confidence": 0.8,
+      "description": "Sure-here's-how-to priming",
+      "regex": "(?i)^\\s*(?:sure|absolutely|of\\s+course|certainly)[,!\\.]?\\s+here['']?s\\s+how\\s+to\\b"
+    },
+    {
+      "id": "jailbreak/safety_bypass.filter_disable",
+      "detector": "jailbreak",
+      "category": "filter_disable",
+      "severity": "high",
+      "confidence": 0.92,
+      "description": "Explicit filter-disable command",
+      "regex": "(?i)\\b(?:disable|turn\\s+off|remove|bypass|ignore|skip|shut\\s+(?:off|down))\\s+(?:your\\s+)?(?:(?:safety|content|moderation)\\s+)?(?:filter|moderation|guidelines|restrictions|safeguards|policies?)\\b"
+    },
+    {
+      "id": "jailbreak/safety_bypass.enable_dev_mode",
+      "detector": "jailbreak",
+      "category": "enable_dev_mode",
+      "severity": "critical",
+      "confidence": 0.95,
+      "description": "Enable-developer-mode command",
+      "regex": "(?i)\\b(?:unlock|enable|activate)\\s+(?:developer|debug|admin|god|sudo|root|maintenance)\\s+mode\\b"
+    },
+    {
+      "id": "jailbreak/safety_bypass.educational",
+      "detector": "jailbreak",
+      "category": "pretext_educational",
+      "severity": "medium",
+      "confidence": 0.65,
+      "description": "Educational-pretext framing",
+      "regex": "(?i)\\b(?:for\\s+)?(?:educational|academic|learning|research)\\s+(?:purposes?|reasons?)\\s*(?:only)?\\s*,?\\s*(?:how|explain|describe|tell|show|walk\\s+me)\\b"
+    },
+    {
+      "id": "jailbreak/safety_bypass.red_team",
+      "detector": "jailbreak",
+      "category": "pretext_red_team",
+      "severity": "medium",
+      "confidence": 0.68,
+      "description": "Red-team pretext",
+      "regex": "(?i)\\b(?:as\\s+part\\s+of\\s+(?:a|my)\\s+)?red[\\s-]?team(?:ing)?(?:\\s+(?:exercise|engagement|assessment))?\\b"
+    },
+    {
+      "id": "jailbreak/safety_bypass.ctf",
+      "detector": "jailbreak",
+      "category": "pretext_ctf",
+      "severity": "medium",
+      "confidence": 0.6,
+      "description": "CTF pretext",
+      "regex": "(?i)\\b(?:as\\s+part\\s+of\\s+(?:a|my)\\s+)?CTF(?:\\s+challenge)?\\b"
+    },
+    {
+      "id": "jailbreak/safety_bypass.research",
+      "detector": "jailbreak",
+      "category": "pretext_safety_research",
+      "severity": "medium",
+      "confidence": 0.62,
+      "description": "Safety-research pretext",
+      "regex": "(?i)\\bfor\\s+(?:safety|security)\\s+research\\s+(?:purposes?)?"
+    },
+    {
+      "id": "jailbreak/safety_bypass.thought_experiment",
+      "detector": "jailbreak",
+      "category": "pretext_thought_experiment",
+      "severity": "medium",
+      "confidence": 0.58,
+      "description": "Thought-experiment pretext",
+      "regex": "(?i)\\bjust\\s+a\\s+(?:thought\\s+experiment|hypothetical|question)\\b"
+    },
+    {
+      "id": "jailbreak/fingerprint.skeleton_key",
+      "detector": "jailbreak",
+      "category": "skeleton_key",
+      "severity": "critical",
+      "confidence": 0.97,
+      "description": "Skeleton Key exact preamble",
+      "regex": "(?i)\\bsafe\\s+educational\\s+context\\s+with\\s+advanced\\s+researchers\\s+trained\\s+on\\s+ethics\\s+and\\s+safety\\b"
+    },
+    {
+      "id": "jailbreak/fingerprint.skeleton_key#2",
+      "detector": "jailbreak",
+      "category": "skeleton_key_tail",
+      "severity": "critical",
+      "confidence": 0.95,
+      "description": "Skeleton Key tail phrase",
+      "regex": "(?i)\\bupdate\\s+your\\s+behavior\\s+to\\s+provide\\s+the\\s+information\\s+asked\\b"
+    },
+    {
+      "id": "jailbreak/fingerprint.policy_puppetry",
+      "detector": "jailbreak",
+      "category": "policy_puppetry_xml",
+      "severity": "critical",
+      "confidence": 0.92,
+      "description": "Policy Puppetry XML wrapper",
+      "regex": "(?i)<(?:policy|system_prompt|instructions|override|config)>\\s*.*?\\s*</(?:policy|system_prompt|instructions|override|config)>"
+    },
+    {
+      "id": "jailbreak/fingerprint.policy_puppetry#2",
+      "detector": "jailbreak",
+      "category": "policy_puppetry_yaml",
+      "severity": "critical",
+      "confidence": 0.9,
+      "description": "Policy Puppetry YAML wrapper",
+      "regex": "(?i)^\\s*policy\\s*[:=]\\s*\\n[\\s\\S]*?(?:allow[_\\s-]?all|bypass|no[_\\s-]?restrictions)"
+    },
+    {
+      "id": "jailbreak/fingerprint.bracket_override",
+      "detector": "jailbreak",
+      "category": "bracket_override_marker",
+      "severity": "high",
+      "confidence": 0.88,
+      "description": "Bracket-tagged override marker",
+      "regex": "(?i)\\[SYSTEM[\\s_-]?OVERRIDE\\]|\\[NEW[\\s_-]?INSTRUCTIONS?\\]|\\[DEBUG[\\s_-]?MODE\\]"
+    },
+    {
+      "id": "jailbreak/extraction.meta",
+      "detector": "jailbreak",
+      "category": "extraction_meta_above",
+      "severity": "high",
+      "confidence": 0.86,
+      "description": "Queries what was above the conversation",
+      "regex": "(?i)\\b(?:what(?:'?s|\\s+(?:is|are|was|were))|show\\s+me|tell\\s+me)\\s+(?:(?:was\\s+)?(?:written|said|given|configured|placed)\\s+)?(?:above|before|prior\\s+to|at\\s+the\\s+top|earlier\\s+in)\\b"
+    },
+    {
+      "id": "jailbreak/extraction.echo",
+      "detector": "jailbreak",
+      "category": "extraction_echo_initial",
+      "severity": "high",
+      "confidence": 0.88,
+      "description": "Echo-initial-instruction query",
+      "regex": "(?i)\\b(?:echo|repeat|recite)\\s+(?:your|the)\\s+(?:first|initial|original|opening)\\s+(?:message|instruction|prompt)\\b"
+    },
+    {
+      "id": "jailbreak/extraction.decode",
+      "detector": "jailbreak",
+      "category": "extraction_decode",
+      "severity": "high",
+      "confidence": 0.9,
+      "description": "Decode-the-prompt query",
+      "regex": "(?i)\\b(?:decode|decrypt|un[\\s-]?encode)\\s+(?:your|the)\\s+(?:system\\s+)?(?:prompt|instructions?|rules?)\\b"
+    },
+    {
+      "id": "jailbreak/extraction.translate",
+      "detector": "jailbreak",
+      "category": "extraction_translate",
+      "severity": "medium",
+      "confidence": 0.75,
+      "description": "Translate-the-prompt smuggling",
+      "regex": "(?i)\\b(?:translate|rephrase)\\s+(?:your|the)\\s+(?:system\\s+)?(?:prompt|instructions?)\\b"
+    },
+    {
+      "id": "jailbreak/extraction.priming",
+      "detector": "jailbreak",
+      "category": "extraction_spoiler",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Primed-spoiler extraction",
+      "regex": "(?i)\\b(?:spoiler|reveal)\\s*[:!]\\s*(?:your|the)\\s+(?:system\\s+)?(?:prompt|instructions?)\\s+(?:starts?|begins?)\\s+with\\b"
+    },
+    {
+      "id": "jailbreak/permission_probe.direct",
+      "detector": "jailbreak",
+      "category": "permission_probe_direct",
+      "severity": "medium",
+      "confidence": 0.72,
+      "description": "Direct permission probe",
+      "regex": "(?i)\\b(?:can|could|are\\s+you\\s+able\\s+to|will\\s+you|would\\s+you)\\s+(?:you\\s+)?(?:break|ignore|bypass|disable|override|work\\s+around)\\s+(?:your\\s+)?(?:rules?|restrictions?|guidelines?|policies?)\\b"
+    },
+    {
+      "id": "jailbreak/permission_probe.forbidden_list",
+      "detector": "jailbreak",
+      "category": "permission_probe_forbidden",
+      "severity": "medium",
+      "confidence": 0.65,
+      "description": "Asks for forbidden-topics list",
+      "regex": "(?i)\\bwhat\\s+(?:are\\s+you|topics?|subjects?|things?)\\s+(?:(?:are|is)\\s+)?(?:not\\s+allowed|forbidden|restricted|off[- ]limits|unable)(?:\\s+(?:for|to)\\s+(?:you|discuss|talk\\s+about|answer|respond\\s+to))?\\b"
+    },
+    {
+      "id": "jailbreak/meta_reasoning.refusal_framing",
+      "detector": "jailbreak",
+      "category": "refusal_is_harmful",
+      "severity": "medium",
+      "confidence": 0.65,
+      "description": "Reasons-refusal-is-harmful framing",
+      "regex": "(?i)\\b(?:think|reason|consider|reflect)\\s+(?:carefully|step\\s+by\\s+step)\\s+(?:about\\s+)?why\\s+(?:refusing|declining|not\\s+answering)\\s+(?:would\\s+be|is)\\s+(?:harmful|wrong|worse|unhelpful)\\b"
+    },
+    {
+      "id": "jailbreak/meta_reasoning.overcautious",
+      "detector": "jailbreak",
+      "category": "overcautious_framing",
+      "severity": "medium",
+      "confidence": 0.62,
+      "description": "Overcautious-to-refuse framing",
+      "regex": "(?i)\\byou\\s+(?:might\\s+be\\s+)?(?:wrong|mistaken|overcautious|too\\s+cautious)\\s+(?:to\\s+refuse|about\\s+refusing|in\\s+declining)\\b"
+    },
+    {
+      "id": "jailbreak/encoding.translate_smuggle",
+      "detector": "jailbreak",
+      "category": "translate_smuggle",
+      "severity": "medium",
+      "confidence": 0.72,
+      "description": "Translate-encoded-payload smuggling",
+      "regex": "(?i)\\btranslate\\s+(?:this|the\\s+following)(?:\\s+(?:from|into|to)\\s+(?:english|plain\\s+text|base64|hex|rot13|pig\\s+latin))+\\b"
+    },
+    {
+      "id": "jailbreak/encoding.decode_and_execute",
+      "detector": "jailbreak",
+      "category": "decode_execute",
+      "severity": "high",
+      "confidence": 0.85,
+      "description": "Decode-and-execute instruction",
+      "regex": "(?i)\\b(?:decode|execute|interpret|evaluate)\\s+(?:this|the\\s+following)\\s+(?:base64|hex|rot13|leet)\\b"
+    },
+    {
+      "id": "jailbreak/reverse_psychology.negation",
+      "detector": "jailbreak",
+      "category": "reverse_negation",
+      "severity": "medium",
+      "confidence": 0.6,
+      "description": "Negation framing around harmful target",
+      "regex": "(?i)\\b(?:do\\s+not|don['']?t|never|refuse\\s+to)\\s+(?:tell|explain|describe|teach|show)\\s+me\\s+how\\s+to\\s+.*\\b(?:make|build|create|synthesi[sz]e|hack|exploit|poison|kill|harm)\\b"
+    },
+    {
+      "id": "indirect_injection/doc_address",
+      "detector": "indirect_injection",
+      "category": "doc_address",
+      "severity": "high",
+      "confidence": 0.92,
+      "regex": "(?i)\\b(?:attention|note to|important|urgent)\\s*(?:\\s+the\\s+)?(?:AI|assistant|LLM|model|bot|chatbot)\\b"
+    },
+    {
+      "id": "indirect_injection/doc_trigger",
+      "detector": "indirect_injection",
+      "category": "doc_trigger",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)\\b(?:when|if)\\s+you\\s+(?:read|see|encounter|parse)\\s+this\\b"
+    },
+    {
+      "id": "indirect_injection/doc_salutation",
+      "detector": "indirect_injection",
+      "category": "doc_salutation",
+      "severity": "high",
+      "confidence": 0.95,
+      "regex": "(?i)\\bdear\\s+(?:AI|assistant|language\\s+model|claude|gpt|gemini|llama)\\b"
+    },
+    {
+      "id": "indirect_injection/system_spoof",
+      "detector": "indirect_injection",
+      "category": "system_spoof",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "(?i)^\\s*system\\s*[:|]\\s*"
+    },
+    {
+      "id": "indirect_injection/system_tag",
+      "detector": "indirect_injection",
+      "category": "system_tag",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "(?i)<\\s*system\\s*>"
+    },
+    {
+      "id": "indirect_injection/override",
+      "detector": "indirect_injection",
+      "category": "override",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "(?i)\\bignore\\s+(?:all\\s+)?(?:previous|prior|above)\\s+(?:instructions|prompts|rules)\\b"
+    },
+    {
+      "id": "indirect_injection/override#2",
+      "detector": "indirect_injection",
+      "category": "override",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "(?i)\\bdisregard\\s+(?:all\\s+)?(?:previous|above|prior)\\s+(?:instructions|context)\\b"
+    },
+    {
+      "id": "indirect_injection/new_instructions",
+      "detector": "indirect_injection",
+      "category": "new_instructions",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "(?i)\\b(?:new|updated|revised)\\s+instructions?\\b\\s*[:=]"
+    },
+    {
+      "id": "indirect_injection/exfil_command",
+      "detector": "indirect_injection",
+      "category": "exfil_command",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "(?i)\\b(?:send|email|post|upload|exfiltrate|transmit|forward)\\s+(?:the\\s+)?(?:system\\s+)?(?:prompt|secrets|credentials|api\\s+keys?)\\b"
+    },
+    {
+      "id": "indirect_injection/network_command",
+      "detector": "indirect_injection",
+      "category": "network_command",
+      "severity": "high",
+      "confidence": 0.85,
+      "regex": "(?i)\\bmake\\s+(?:an?\\s+)?(?:HTTP|POST|GET|API|network)\\s+(?:request|call)\\s+to\\b"
+    },
+    {
+      "id": "indirect_injection/covert_action",
+      "detector": "indirect_injection",
+      "category": "covert_action",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "(?i)\\b(?:silently|quietly|secretly|without\\s+(?:telling|mentioning)\\s+the\\s+user)\\b"
+    },
+    {
+      "id": "secrets/aws_access_key",
+      "detector": "secrets",
+      "category": "aws_access_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b"
+    },
+    {
+      "id": "secrets/aws_secret_key",
+      "detector": "secrets",
+      "category": "aws_secret_key",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "\\b(?i:aws_secret_access_key|aws_secret)\\s*[=:]\\s*['\"]?([A-Za-z0-9/+=]{40})['\"]?"
+    },
+    {
+      "id": "secrets/github_pat",
+      "detector": "secrets",
+      "category": "github_pat",
+      "severity": "critical",
+      "confidence": 0.99,
+      "regex": "\\b(?:ghp|ghs|gho|ghr|ghu)_[A-Za-z0-9]{36,}\\b"
+    },
+    {
+      "id": "secrets/github_fine_grained_pat",
+      "detector": "secrets",
+      "category": "github_fine_grained_pat",
+      "severity": "critical",
+      "confidence": 0.99,
+      "regex": "\\bgithub_pat_[A-Za-z0-9_]{82}\\b"
+    },
+    {
+      "id": "secrets/anthropic_api_key",
+      "detector": "secrets",
+      "category": "anthropic_api_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\bsk-ant-[A-Za-z0-9_-]{40,}\\b"
+    },
+    {
+      "id": "secrets/openai_api_key",
+      "detector": "secrets",
+      "category": "openai_api_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\bsk-proj-[A-Za-z0-9_-]{20,}\\b"
+    },
+    {
+      "id": "secrets/openai_api_key#2",
+      "detector": "secrets",
+      "category": "openai_api_key",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "\\bsk-[A-Za-z0-9]{20,}\\b"
+    },
+    {
+      "id": "secrets/stripe_key",
+      "detector": "secrets",
+      "category": "stripe_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{24,}\\b"
+    },
+    {
+      "id": "secrets/slack_token",
+      "detector": "secrets",
+      "category": "slack_token",
+      "severity": "critical",
+      "confidence": 0.97,
+      "regex": "\\bxox[abprs]-[A-Za-z0-9-]{10,}\\b"
+    },
+    {
+      "id": "secrets/gcp_api_key",
+      "detector": "secrets",
+      "category": "gcp_api_key",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "\\bAIza[0-9A-Za-z_-]{35}\\b"
+    },
+    {
+      "id": "secrets/jwt",
+      "detector": "secrets",
+      "category": "jwt",
+      "severity": "high",
+      "confidence": 0.9,
+      "regex": "\\beyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b"
+    },
+    {
+      "id": "secrets/private_key",
+      "detector": "secrets",
+      "category": "private_key",
+      "severity": "critical",
+      "confidence": 0.99,
+      "regex": "-----BEGIN\\s+(?:RSA|EC|DSA|OPENSSH|PGP|ENCRYPTED)?\\s*PRIVATE\\s+KEY-----"
+    },
+    {
+      "id": "secrets/azure_storage_key",
+      "detector": "secrets",
+      "category": "azure_storage_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\bAccountKey=[A-Za-z0-9+/]{86}=="
+    },
+    {
+      "id": "secrets/mongodb_uri",
+      "detector": "secrets",
+      "category": "mongodb_uri",
+      "severity": "critical",
+      "confidence": 0.95,
+      "regex": "\\bmongodb(?:\\+srv)?:\\/\\/[^\\s'\"<>]{15,}"
+    },
+    {
+      "id": "secrets/twilio_sid",
+      "detector": "secrets",
+      "category": "twilio_sid",
+      "severity": "high",
+      "confidence": 0.92,
+      "regex": "\\bAC[a-f0-9]{32}\\b"
+    },
+    {
+      "id": "secrets/sendgrid_key",
+      "detector": "secrets",
+      "category": "sendgrid_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\bSG\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}\\b"
+    },
+    {
+      "id": "secrets/discord_webhook",
+      "detector": "secrets",
+      "category": "discord_webhook",
+      "severity": "high",
+      "confidence": 0.97,
+      "regex": "(?:^|[^A-Za-z0-9.-])https?://(?:ptb\\.|canary\\.)?discord(?:app)?\\.com/api/webhooks/\\d{17,20}/[A-Za-z0-9_-]{60,}"
+    },
+    {
+      "id": "secrets/npm_token",
+      "detector": "secrets",
+      "category": "npm_token",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\bnpm_[A-Za-z0-9]{36}\\b"
+    },
+    {
+      "id": "secrets/tailscale_key",
+      "detector": "secrets",
+      "category": "tailscale_key",
+      "severity": "critical",
+      "confidence": 0.98,
+      "regex": "\\btskey-(?:auth|api|client)-[A-Za-z0-9]{16,}-[A-Za-z0-9]{32,}\\b"
+    },
+    {
+      "id": "secrets/pypi_token",
+      "detector": "secrets",
+      "category": "pypi_token",
+      "severity": "critical",
+      "confidence": 0.99,
+      "regex": "\\bpypi-AgEIcHlwaS5vcmcC[A-Za-z0-9_-]{40,}"
+    },
+    {
+      "id": "secrets/heroku_api_key",
+      "detector": "secrets",
+      "category": "heroku_api_key",
+      "severity": "critical",
+      "confidence": 0.97,
+      "regex": "(?i)\\bheroku[_-]?api[_-]?key[\\s:=]+[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\b"
+    },
+    {
+      "id": "secrets/generic_secret_assignment",
+      "detector": "secrets",
+      "category": "generic_secret_assignment",
+      "severity": "high",
+      "confidence": 0.7,
+      "min_entropy": 3.5,
+      "regex": "(?i)\\b(?:api[_-]?key|secret|password|passwd|pwd|token|bearer)\\s*[=:]\\s*['\"]?([A-Za-z0-9/+=_-]{20,})['\"]?"
+    }
+  ]
+}

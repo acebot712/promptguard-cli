@@ -2,6 +2,7 @@ use crate::api::PromptGuardClient;
 use crate::auth::resolve_session;
 use crate::detector::detect_all_providers;
 use crate::error::{PromptGuardError, Result};
+use crate::local_rules;
 use crate::output::Output;
 use crate::scanner::FileScanner;
 use crate::types::{DetectionInstance, Provider};
@@ -39,12 +40,18 @@ pub struct ScanCommand {
     pub text: Option<String>,
     /// File path to scan for security threats via the API
     pub file: Option<String>,
+    /// Scan `text`/`file` with the bundled local rule pack, not the API
+    pub offline: bool,
 }
 
 impl ScanCommand {
     /// Returns the process exit code: 0 = allow/clean, 2 = block/findings.
     /// Errors map to exit code 1 in main.
     pub fn execute(&self) -> Result<i32> {
+        if self.offline {
+            return self.execute_offline_scan();
+        }
+
         // If --text or --file is provided, do an API security scan instead of local SDK detection
         if self.text.is_some() || self.file.is_some() {
             return self.execute_api_scan();
@@ -54,17 +61,90 @@ impl ScanCommand {
         self.execute_local_scan()
     }
 
+    /// The content named by --text or --file.
+    fn content(&self) -> Result<String> {
+        if let Some(ref text) = self.text {
+            Ok(text.clone())
+        } else if let Some(ref file_path) = self.file {
+            super::read_file_friendly(file_path)
+        } else {
+            Err(PromptGuardError::Custom(
+                "Either --text or --file must be provided".to_string(),
+            ))
+        }
+    }
+
+    /// Scan text or file content against the bundled local rule pack. Opens
+    /// no connection and needs no key; says on every run that it is a local
+    /// subset of what the API detects.
+    fn execute_offline_scan(&self) -> Result<i32> {
+        let content = self.content()?;
+        let pack = local_rules::bundled()?;
+        let findings = pack.scan(&content);
+        let blocked = findings.iter().any(|f| f.blocking);
+        let notice = local_rules::notice(pack.rules().len());
+
+        if self.json {
+            let findings_json: Vec<serde_json::Value> = findings
+                .iter()
+                .map(|f| {
+                    serde_json::json!({
+                        "rule": f.rule_id,
+                        "detector": f.detector,
+                        "category": f.category,
+                        "severity": f.severity.as_str(),
+                        "blocking": f.blocking,
+                        "line": f.line,
+                        "excerpt": f.excerpt,
+                    })
+                })
+                .collect();
+            let output = serde_json::json!({
+                "mode": "offline",
+                "notice": notice,
+                "rules": pack.rules().len(),
+                "blocked": blocked,
+                "decision": if blocked { "block" } else { "allow" },
+                "findings": findings_json,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            Output::header(&format!(
+                "🛡️ PromptGuard CLI v{}",
+                env!("CARGO_PKG_VERSION")
+            ));
+            Output::section("Offline Threat Scan (local subset)", "🔍");
+            // Printed directly, not through Output, so --quiet cannot hide it.
+            println!("{notice}");
+            Output::info(&format!("Scanning {} characters...", content.len()));
+            println!();
+            if blocked {
+                println!("Decision: 🚫 BLOCKED by the local rules");
+            } else {
+                println!("Decision: ✅ ALLOWED by the local rules");
+            }
+            for f in &findings {
+                let effect = if f.blocking { "blocking" } else { "warning" };
+                println!(
+                    "  • [{}] {} (line {}, {effect}): {:?}",
+                    f.severity.as_str(),
+                    f.rule_id,
+                    f.line,
+                    f.excerpt
+                );
+            }
+            if !blocked && !findings.is_empty() {
+                println!("Medium-severity matches are warnings and do not fail the scan.");
+            }
+            println!("For full detection, run the same scan without --offline.");
+        }
+
+        Ok(if blocked { EXIT_FINDINGS } else { EXIT_CLEAN })
+    }
+
     /// Scan text or file content for security threats via the backend API
     fn execute_api_scan(&self) -> Result<i32> {
-        let content = if let Some(ref text) = self.text {
-            text.clone()
-        } else if let Some(ref file_path) = self.file {
-            super::read_file_friendly(file_path)?
-        } else {
-            return Err(PromptGuardError::Custom(
-                "Either --text or --file must be provided".to_string(),
-            ));
-        };
+        let content = self.content()?;
 
         // Resolve credentials from env var, project config, or global login —
         // this command works without a project being initialized.

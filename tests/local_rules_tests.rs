@@ -21,7 +21,7 @@ const REVIVED_RULES: &[&str] = &["injection/delimiter.inst", "injection/delimite
 /// checkout with `autocrlf` produces the same value. Not a security hash: it
 /// only makes a hand edit of the pack fail here until the pin is updated on
 /// purpose, alongside a regenerated corpus.
-const PACK_FINGERPRINT: u64 = 0;
+const PACK_FINGERPRINT: u64 = 0x71c1_b08f_ecb5_0886;
 
 fn fingerprint(text: &str) -> u64 {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
