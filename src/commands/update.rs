@@ -148,14 +148,14 @@ impl UpdateCommand {
     }
 
     fn print_update_instructions(&self, latest_tag: Option<&str>) {
-        print!("{}", update_instructions(latest_tag));
+        print!("{}", update_instructions(latest_tag, cfg!(windows)));
     }
 }
 
 /// How to update, for each install method the README offers. There is no
 /// Homebrew tap and no crates.io crate, so neither appears here; the Cargo
 /// route builds a release tag from the repository, named when it is known.
-fn update_instructions(latest_tag: Option<&str>) -> String {
+fn update_instructions(latest_tag: Option<&str>, _windows: bool) -> String {
     let tag = latest_tag.unwrap_or("cli-v<version>");
     format!(
         "  • Using curl (recommended):\n      \
@@ -204,13 +204,32 @@ mod tests {
     /// send anyone to either (acebot712/promptguard#962).
     #[test]
     fn update_instructions_offer_only_published_methods() {
-        let known = update_instructions(Some("cli-v2.2.0"));
+        let known = update_instructions(Some("cli-v2.2.0"), false);
         assert!(!known.to_lowercase().contains("brew"));
         assert!(known.contains(
             "cargo install --locked --force --git https://github.com/acebot712/promptguard-cli --tag cli-v2.2.0"
         ));
         assert!(!known.contains("--force promptguard"));
-        assert!(update_instructions(None).contains("--tag cli-v<version>"));
+        assert!(update_instructions(None, false).contains("--tag cli-v<version>"));
+    }
+
+    /// install.sh is a POSIX shell script; Windows has no `sh` to pipe it
+    /// into, so Windows is sent to the release binary instead.
+    #[test]
+    fn windows_is_sent_to_the_release_binary_not_the_shell_script() {
+        let windows = update_instructions(Some("cli-v2.2.0"), true);
+        assert!(!windows.contains("| sh"), "{windows}");
+        assert!(
+            windows.contains("promptguard-windows-x86_64.exe"),
+            "{windows}"
+        );
+        assert!(
+            windows.contains("https://github.com/acebot712/promptguard-cli/releases/latest"),
+            "{windows}"
+        );
+        // The cargo route works on Windows too.
+        assert!(windows.contains("--tag cli-v2.2.0"), "{windows}");
+        assert!(update_instructions(None, false).contains("install.sh | sh"));
     }
 
     #[test]
