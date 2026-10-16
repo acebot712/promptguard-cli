@@ -215,6 +215,12 @@ struct Proxy {
 
 impl Proxy {
     fn start(base_url: &str, flags: &[&str]) -> Self {
+        Self::start_with_server_args(base_url, flags, &[])
+    }
+
+    /// As [`start`](Self::start), passing `server_args` to the fake server
+    /// (which ignores them).
+    fn start_with_server_args(base_url: &str, flags: &[&str], server_args: &[&str]) -> Self {
         let home = TempDir::new().unwrap();
         let server_log = home.path().join("server.log");
         let mut child = Command::new(env!("CARGO_BIN_EXE_promptguard"))
@@ -223,6 +229,7 @@ impl Proxy {
             .arg("--")
             .arg("python3")
             .arg(fake_server_script())
+            .args(server_args)
             .current_dir(home.path())
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
@@ -893,4 +900,20 @@ fn proxy_exits_when_the_client_closes_stdin() {
     let mut proxy = Proxy::start(&api.base_url, &[]);
     proxy.initialize();
     assert_eq!(proxy.close_and_wait(), 0);
+}
+
+#[test]
+fn logs_name_the_server_program_but_never_its_arguments() {
+    let api = FakeApi::start();
+    let mut proxy =
+        Proxy::start_with_server_args(&api.base_url, &[], &["--token", "sekret-token-value"]);
+    proxy.initialize();
+    let (tool, args) = READ_ONLY;
+    assert_relayed(&proxy.call(95, tool, &args()), tool);
+    let stderr = proxy.wait_stderr("checking tool calls for");
+    assert!(stderr.contains("python3"), "{stderr}");
+    assert!(
+        !stderr.contains("sekret-token-value"),
+        "server arguments can carry tokens and must not be logged:\n{stderr}"
+    );
 }
