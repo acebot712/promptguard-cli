@@ -15,6 +15,7 @@ src/
 ├── config/            # Configuration management
 ├── backup/            # File backup before transforms
 ├── api/               # PromptGuard API client
+├── local_rules/       # Rule pack for `scan --offline` (generated: scripts/local-rules/)
 └── commands/          # CLI subcommands
 
 tests/

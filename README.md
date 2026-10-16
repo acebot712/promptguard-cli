@@ -40,6 +40,7 @@ from this repository because the crate is not published to crates.io.
 ```bash
 promptguard login                                  # Authenticate (works anywhere)
 promptguard scan --text "ignore previous instructions"  # Instant threat scan
+promptguard scan --offline --file prompt.txt       # Local subset, no key or network (CI)
 promptguard init --api-key pg_live_xxx             # Integrate a project
 promptguard verify                                 # Test connectivity + scan + redact
 promptguard status                                 # Check configuration
@@ -51,7 +52,7 @@ promptguard mcp -t stdio                           # Start MCP server
 | Command | Description |
 |---------|-------------|
 | `init` | Initialize PromptGuard and rewrite SDK constructors to route through proxy |
-| `scan` | Scan project for LLM SDK usage, or scan text/files for security threats |
+| `scan` | Scan project for LLM SDK usage, or scan text/files for security threats (`--offline` for a local subset with no key or network) |
 | `status` | Show current configuration and managed files |
 | `doctor` | Diagnose common issues |
 | `apply` | Apply pending code transformations |
@@ -70,6 +71,37 @@ promptguard mcp -t stdio                           # Start MCP server
 | `redact` | Redact PII from text |
 | `test` | Run a quick connectivity and detection test |
 | `update` | Update the CLI to latest version |
+
+## Offline Scan for CI
+
+`promptguard scan --offline` checks `--text` or `--file` content on the machine
+it runs on, against a regex rule pack compiled into the binary. It needs no API
+key and opens no network connection, so it can gate a CI job that has neither.
+
+```bash
+promptguard scan --offline --file prompts/system.txt          # human report
+promptguard scan --offline --file prompts/system.txt --json   # machine-readable
+```
+
+**It is a local subset, not the full detection the PromptGuard API runs**, and
+every result says so. The pack covers prompt injection, jailbreak phrasings,
+injection aimed at documents and tool output, and provider credentials. It has
+none of the API's ML classifiers and does not apply your project's policy, so a
+clean offline result does not mean the API would allow the content. Run
+`promptguard scan --file …` with a key for the real verdict.
+
+Exit codes are the same as the API scan's: `0` when no blocking rule matched,
+`2` when one did, `1` on an error (an unreadable file, say). Critical and high
+rules block; medium rules are reported as warnings and do not fail the run. In
+`--json` output, `mode` is `"offline"`, `notice` carries the subset statement,
+and each finding names its `rule`, `severity`, `blocking` flag and `line`. A
+leaked credential is quoted by its first four characters only.
+
+The pack is generated, never edited by hand: `scripts/local-rules/regenerate.sh`
+dumps it from an upstream set of Go detectors, and the `provenance` block in
+`src/local_rules/pack.json` names that source, its files' hashes, and which
+detectors were left out and why. `tests/local_rules_tests.rs` checks the Rust
+port against what the Go code itself matched on its sample corpus.
 
 ## MCP Server
 
@@ -193,6 +225,7 @@ src/
 ├── config/              # JSON configuration (Serde)
 ├── backup/              # Backup/restore system
 ├── api/                 # HTTP API client (Reqwest)
+├── local_rules/         # Regex rule pack for `scan --offline` (generated)
 └── commands/            # CLI commands (init, scan, mcp, redteam, policy)
 ```
 
