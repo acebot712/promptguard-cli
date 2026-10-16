@@ -2,8 +2,8 @@
 /target/
 **/*.rs.bk
 
-# Cargo.lock IS tracked: this crate ships a binary (`cargo install promptguard`
-# --locked` reads it) and a library, and a tracked lockfile gives `cargo audit`
+# Cargo.lock IS tracked: this crate ships a binary (`cargo install --locked
+# --git ... --tag cli-vX.Y.Z` reads it) and a library, and a tracked lockfile gives `cargo audit`
 # deterministic input across local + CI runs.
 
 # Distribution

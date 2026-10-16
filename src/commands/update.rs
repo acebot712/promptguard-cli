@@ -98,7 +98,7 @@ impl UpdateCommand {
 
                     println!("To update, run one of the following:");
                     println!();
-                    self.print_update_instructions();
+                    self.print_update_instructions(Some(&release.tag_name));
 
                     println!("Release notes: {}", release.html_url);
                 } else {
@@ -112,7 +112,7 @@ impl UpdateCommand {
                 println!("You can manually check for updates at:");
                 println!("  https://github.com/acebot712/promptguard-cli/releases");
                 println!();
-                self.print_update_instructions();
+                self.print_update_instructions(None);
             },
         }
 
@@ -147,17 +147,34 @@ impl UpdateCommand {
             .map_err(|e| PromptGuardError::Api(format!("Failed to parse GitHub response: {e}")))
     }
 
-    fn print_update_instructions(&self) {
-        println!("  • Using curl (recommended):");
-        println!("      curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh");
-        println!();
-        println!("  • Using Homebrew:");
-        println!("      brew upgrade promptguard");
-        println!();
-        println!("  • Using cargo:");
-        println!("      cargo install --force promptguard");
-        println!();
+    fn print_update_instructions(&self, latest_tag: Option<&str>) {
+        print!("{}", update_instructions(latest_tag, cfg!(windows)));
     }
+}
+
+/// How to update, for each install method the README offers on this
+/// platform. There is no Homebrew tap and no crates.io crate, so neither
+/// appears here; the Cargo route builds a release tag from the repository,
+/// named when it is known. install.sh is a POSIX shell script, so Windows is
+/// sent to the release binary instead.
+fn update_instructions(latest_tag: Option<&str>, windows: bool) -> String {
+    const REPO: &str = "https://github.com/acebot712/promptguard-cli";
+    let tag = latest_tag.unwrap_or("cli-v<version>");
+    let first = if windows {
+        format!(
+            "  • Download the release binary (recommended):\n      \
+             {REPO}/releases/latest -> promptguard-windows-x86_64.exe\n      \
+             then replace your promptguard.exe with it\n\n"
+        )
+    } else {
+        "  • Using curl (recommended):\n      \
+         curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh | sh\n\n"
+            .to_string()
+    };
+    format!(
+        "{first}  • Using cargo (build from source):\n      \
+         cargo install --locked --force --git {REPO} --tag {tag}\n\n"
+    )
 }
 
 #[cfg(test)]
@@ -193,6 +210,38 @@ mod tests {
         assert!(!is_newer_version("1.0.0", "not-a-version"));
         assert!(!is_newer_version("1.0.0", ""));
         assert!(!is_newer_version("garbage", "2.0.0"));
+    }
+
+    /// No Homebrew tap and no crates.io crate exist, so `update` must not
+    /// send anyone to either (acebot712/promptguard#962).
+    #[test]
+    fn update_instructions_offer_only_published_methods() {
+        let known = update_instructions(Some("cli-v2.2.0"), false);
+        assert!(!known.to_lowercase().contains("brew"));
+        assert!(known.contains(
+            "cargo install --locked --force --git https://github.com/acebot712/promptguard-cli --tag cli-v2.2.0"
+        ));
+        assert!(!known.contains("--force promptguard"));
+        assert!(update_instructions(None, false).contains("--tag cli-v<version>"));
+    }
+
+    /// install.sh is a POSIX shell script; Windows has no `sh` to pipe it
+    /// into, so Windows is sent to the release binary instead.
+    #[test]
+    fn windows_is_sent_to_the_release_binary_not_the_shell_script() {
+        let windows = update_instructions(Some("cli-v2.2.0"), true);
+        assert!(!windows.contains("| sh"), "{windows}");
+        assert!(
+            windows.contains("promptguard-windows-x86_64.exe"),
+            "{windows}"
+        );
+        assert!(
+            windows.contains("https://github.com/acebot712/promptguard-cli/releases/latest"),
+            "{windows}"
+        );
+        // The cargo route works on Windows too.
+        assert!(windows.contains("--tag cli-v2.2.0"), "{windows}");
+        assert!(update_instructions(None, false).contains("install.sh | sh"));
     }
 
     #[test]
