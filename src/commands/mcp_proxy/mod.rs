@@ -115,9 +115,12 @@ impl McpProxyCommand {
             ));
         };
 
+        // The program's name only: arguments can carry tokens.
+        let program_name = Path::new(program)
+            .file_name()
+            .map_or_else(|| program.clone(), |n| n.to_string_lossy().into_owned());
         log(&format!(
-            "checking tool calls for `{}` (fail mode: {})",
-            self.command.join(" "),
+            "checking tool calls for `{program_name}` (fail mode: {})",
             self.fail_mode.as_str()
         ));
 
