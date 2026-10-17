@@ -124,6 +124,15 @@ survives three releases is a changelog nobody is maintaining.
   - The wrapped server does not inherit `PROMPTGUARD_API_KEY`, and logs name
     the server's program, never its arguments (acebot712/promptguard#943).
 
+### Fixed
+
+- **`promptguard scan --text` no longer reports a flagged result as clean.**
+  When a detector's warn threshold flags content (promptguard#970), the API
+  answers `allow` with `flagged: true`; the CLI printed "No security threats
+  detected." It now prints `⚠️ FLAGGED` and says the content was allowed but
+  flagged for review. The exit code is unchanged (clean), since nothing was
+  blocked. `--json` passes the new `flagged` and `threshold` fields through.
+
 ## [2.1.2] - 2026-10-10
 
 **No change to the CLI's own code.** No source file changed since 2.1.1; this
