@@ -943,7 +943,7 @@ impl Proxy {
                 continue;
             }
             let awaiting = match awaiting {
-                Some(a @ (Awaiting::ToolResult { .. } | Awaiting::ToolList { .. })) => a,
+                Some(a @ (Awaiting::ToolResult { .. } | Awaiting::ToolList)) => a,
                 // A result whose request is no longer pending (it expired) is
                 // still redacted if it has a tool result's shape.
                 None if result

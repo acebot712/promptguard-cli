@@ -264,13 +264,12 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
     if scans.outage.is_some() {
         return review;
     }
-    let sha256 = match scans.whole_sha256 {
-        Some(sha) => sha,
-        None => {
-            let sha = list_sha256(&current);
-            rug_pull |= stored.is_some_and(|p| p.sha256 != sha);
-            sha
-        },
+    let sha256 = if let Some(sha) = scans.whole_sha256 {
+        sha
+    } else {
+        let sha = list_sha256(&current);
+        rug_pull |= stored.is_some_and(|p| p.sha256 != sha);
+        sha
     };
     if let (true, Some(old)) = (rug_pull, stored) {
         rug_pull_verdict(ctx, old, &current, tools, &mut review);
@@ -278,17 +277,16 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
             return review;
         }
     }
-    match stored {
-        Some(_) => review.matches_pin = !rug_pull,
-        None => {
-            review.repinned = ctx.repin && ctx.stored.is_some();
-            review.new_pin = Some(Pin {
-                server: ctx.server.to_string(),
-                sha256,
-                tools: current,
-                pinned_at: ctx.now.clone(),
-            });
-        },
+    if stored.is_some() {
+        review.matches_pin = !rug_pull;
+    } else {
+        review.repinned = ctx.repin && ctx.stored.is_some();
+        review.new_pin = Some(Pin {
+            server: ctx.server.to_string(),
+            sha256,
+            tools: current,
+            pinned_at: ctx.now.clone(),
+        });
     }
     review
 }
