@@ -10,12 +10,14 @@
 //!   refused tool call. Removing the one tool, rather than refusing the list,
 //!   keeps the rest of the server working; the harm of a poisoned description
 //!   is done when the model reads it, so it must not be relayed at all.
-//! - **A rug-pull (`E301`)** is reported, naming the tools that changed, and
-//!   the list is relayed. The stored pin is kept, so every run reports it
-//!   until the developer trusts the new list by removing the server's entry
-//!   from the pins file. A server upgrade changes its tools too (`npx -y`
-//!   fetches the latest on every start), and withholding every changed tool
-//!   would break the agent on each one, which is how a proxy gets removed.
+//! - **A rug-pull (`E301`)** is reported, naming the server and the tools
+//!   that changed. Under `closed` the changed and added tools are withheld
+//!   from the list; under `open` and `mixed` the list is relayed, since a
+//!   server upgrade changes its tools too (`npx -y` fetches the latest on
+//!   every start) and withholding every changed tool would break the agent on
+//!   each one, which is how a proxy gets removed. The stored pin is kept, so
+//!   every run reports it until the developer accepts the new list: `--repin`
+//!   on one run, or removing the server's entry from the pins file.
 //! - **Other findings** (`W021`, `W022`, `E003`, `E900`) are reported only.
 //! - **A tool the scan cannot take** (one that breaks the shape rules, such
 //!   as a description that is not text; one too large to scan alone; one the
@@ -110,6 +112,8 @@ pub struct Review {
     pub new_pin: Option<Pin>,
     /// The scan answered, and the list matches its stored pin.
     pub matches_pin: bool,
+    /// `new_pin` replaces a stored pin, as `--repin` asked.
+    pub repinned: bool,
 }
 
 /// Where the scan's context comes from: which server, and its stored pin.
@@ -120,6 +124,9 @@ pub struct Context<'a> {
     pub pins_path: &'a str,
     pub stored: Option<&'a Pin>,
     pub now: String,
+    /// `--repin`: store this list's pin over the stored one instead of
+    /// comparing with it.
+    pub repin: bool,
 }
 
 /// One scan request: positions in the list, and why it is sent.
@@ -181,8 +188,8 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
     }
 
     let plan = plan(&scannable);
-    let pin = ctx
-        .stored
+    let stored = ctx.stored.filter(|_| !ctx.repin);
+    let pin = stored
         .filter(|_| plan.len() == 1)
         .map(|p| p.sha256.as_str());
     let scans = match scan_all(ctx, tools, plan, pin, api, &mut review) {
@@ -261,27 +268,20 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
         Some(sha) => sha,
         None => {
             let sha = list_sha256(&current);
-            rug_pull |= ctx.stored.is_some_and(|p| p.sha256 != sha);
+            rug_pull |= stored.is_some_and(|p| p.sha256 != sha);
             sha
         },
     };
-    if rug_pull {
-        let mut line = "tool list finding E301 (high) on `*`: Tool list changed since it was \
-                        pinned (possible rug-pull)"
-            .to_string();
-        if let Some(stored) = ctx.stored {
-            line.push_str(&changes(&stored.tools, &current));
+    if let (true, Some(old)) = (rug_pull, stored) {
+        rug_pull_verdict(ctx, old, &current, tools, &mut review);
+        if review.refuse.is_some() {
+            return review;
         }
-        let _ = write!(
-            line,
-            ". The list is relayed and the old pin kept; if you trust the new list, \
-             remove the `{}` entry from {} (or delete the file to re-pin every server)",
-            ctx.server, ctx.pins_path
-        );
-        review.log.push(line);
     }
-    match ctx.stored {
+    match stored {
+        Some(_) => review.matches_pin = !rug_pull,
         None => {
+            review.repinned = ctx.repin && ctx.stored.is_some();
             review.new_pin = Some(Pin {
                 server: ctx.server.to_string(),
                 sha256,
@@ -289,9 +289,77 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
                 pinned_at: ctx.now.clone(),
             });
         },
-        Some(_) => review.matches_pin = !rug_pull,
     }
     review
+}
+
+/// Report a rug-pull, and under `closed` withhold every tool it changed or
+/// added (by the per-tool hashes), so a tool the developer never approved
+/// does not reach the agent. Under `open` and `mixed` it is reported only: a
+/// server upgrade changes its tools too, and withholding them would break the
+/// agent on each one. The stored pin is kept either way, so every run reports
+/// it until the developer accepts the change.
+fn rug_pull_verdict(
+    ctx: &Context,
+    stored: &Pin,
+    current: &[ToolHash],
+    tools: &[Value],
+    review: &mut Review,
+) {
+    let moved = moved(&stored.tools, current);
+    let mut line = format!(
+        "tool list finding E301 (high) on `*`: the tool list of `{}` changed since it was \
+         pinned (possible rug-pull){}",
+        ctx.server,
+        changes(&stored.tools, current)
+    );
+    if ctx.mode == FailMode::Closed {
+        if moved.is_empty() {
+            review.refuse = Some(format!(
+                "the tool list of `{}` changed since it was pinned and the changed tools \
+                 cannot be named, so under --fail-mode closed it is refused",
+                ctx.server
+            ));
+        } else {
+            for (i, tool) in tools.iter().enumerate() {
+                if tool
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_some_and(|n| moved.contains(n))
+                {
+                    review.withhold.insert(i);
+                }
+            }
+            line.push_str(
+                ". As --fail-mode is closed, the changed and added tools were withheld from \
+                 the agent",
+            );
+        }
+    } else {
+        line.push_str(". The list is relayed");
+    }
+    let _ = write!(
+        line,
+        ", and the old pin is kept, so every run reports this. Once you have checked the \
+         change, accept it by running this server once with `promptguard mcp-proxy --repin \
+         -- <its command>`, or by deleting the entry whose \"server\" is \"{}\" from {} \
+         (deleting the file re-pins every server)",
+        ctx.server, ctx.pins_path
+    );
+    review.log.push(line);
+}
+
+/// The names of the tools in `current` that are new or changed since `pinned`.
+fn moved(pinned: &[ToolHash], current: &[ToolHash]) -> BTreeSet<String> {
+    current
+        .iter()
+        .filter(|t| {
+            !pinned
+                .iter()
+                .any(|p| p.name == t.name && p.sha256 == t.sha256)
+        })
+        .map(|t| t.name.clone())
+        .collect()
 }
 
 /// Send every scan the list needs. `Err` is a reason to refuse the list in

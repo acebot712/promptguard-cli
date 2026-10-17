@@ -60,7 +60,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -118,6 +118,9 @@ const PACKAGE_RUNNERS: &[&str] = &["npx", "pnpx", "bunx", "uvx"];
 pub struct McpProxyCommand {
     pub fail_mode: FailMode,
     pub agent_id: Option<String>,
+    /// Accept the server's current tool list: replace its pin on the first
+    /// complete scan instead of comparing with it.
+    pub repin: bool,
     /// The server command and its arguments.
     pub command: Vec<String>,
 }
@@ -198,6 +201,7 @@ impl McpProxyCommand {
             withheld: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             to_server: Mutex::new(Some(to_server)),
+            repin: AtomicBool::new(self.repin),
             inspections: Permits::new(MAX_INSPECTIONS),
             internal: Mutex::new(HashMap::new()),
             next_internal: AtomicU64::new(0),
@@ -451,6 +455,8 @@ struct Proxy {
     pending: Mutex<HashMap<String, Pending>>,
     /// `None` once the client has gone and the server's stdin is closed.
     to_server: Mutex<Option<ChildStdin>>,
+    /// `--repin`, until the first complete scan has replaced the pin.
+    repin: AtomicBool,
     /// Bounds the inspection threads ([`MAX_INSPECTIONS`]).
     inspections: Arc<Permits>,
     /// Requests the proxy sent the server itself, by id, and where their
@@ -1048,6 +1054,7 @@ impl Proxy {
                 pins_path: &pins_path,
                 stored: stored.as_ref(),
                 now: chrono::Utc::now().to_rfc3339(),
+                repin: self.repin.load(Ordering::Relaxed),
             },
             tools,
             self.scanner.as_ref(),
@@ -1063,11 +1070,25 @@ impl Proxy {
         }
         if let (Some(pin), Some(store)) = (&review.new_pin, &self.pins) {
             match store.save(pin) {
-                Ok(()) => log(&format!(
-                    "pinned the tool list of `{}` ({} tools) in {pins_path}",
-                    self.server,
-                    tools.len()
-                )),
+                Ok(()) if review.repinned => {
+                    // Once per run: a change later in the session is compared
+                    // with the list just accepted.
+                    self.repin.store(false, Ordering::Relaxed);
+                    log(&format!(
+                        "re-pinned the tool list of `{}` ({} tools) in {pins_path}, as --repin \
+                         asked: its old pin was replaced; no other server's pin changed",
+                        self.server,
+                        tools.len()
+                    ));
+                },
+                Ok(()) => {
+                    self.repin.store(false, Ordering::Relaxed);
+                    log(&format!(
+                        "pinned the tool list of `{}` ({} tools) in {pins_path}",
+                        self.server,
+                        tools.len()
+                    ));
+                },
                 Err(e) => log(&format!(
                     "could not save the tool list's pin to {pins_path}: {e}"
                 )),

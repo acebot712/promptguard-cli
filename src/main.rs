@@ -477,7 +477,9 @@ Fail modes (what happens when the PromptGuard API cannot be reached):
   For a tool result or tool list the API cannot redact or scan, closed
   withholds it, and mixed and open relay it, logged as unredacted or
   unchecked. A tool the scan flags as poisoned is removed from the tool
-  list in every mode.
+  list in every mode. A tool list that changed since it was pinned (E301)
+  is reported; under closed its changed and added tools are withheld until
+  you accept the change with --repin.
 
 Examples:
   promptguard mcp-proxy -- npx -y @modelcontextprotocol/server-filesystem .
@@ -491,6 +493,12 @@ Examples:
         /// Agent ID the calls are reported under (default: mcp-proxy:<server name>)
         #[arg(long)]
         agent_id: Option<String>,
+
+        /// Accept this server's current tool list: replace its stored pin
+        /// (this server's only) instead of reporting the change. Use it once
+        /// you have checked a reported rug-pull (E301)
+        #[arg(long)]
+        repin: bool,
 
         /// The MCP server's command and arguments, after `--`
         #[arg(last = true, required = true, value_name = "SERVER_COMMAND")]
@@ -777,10 +785,12 @@ fn main() {
         Commands::McpProxy {
             fail_mode,
             agent_id,
+            repin,
             command,
         } => McpProxyCommand {
             fail_mode,
             agent_id,
+            repin,
             command,
         }
         .execute()
