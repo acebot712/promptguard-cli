@@ -24,9 +24,12 @@
 //! each `tools/call` is checked on its own short-lived thread, and each tool
 //! result or tool list is inspected on its own, so a slow API does not hold
 //! up pings, cancellations or other messages. A request keeps its pending
-//! slot until its answer has been written, so the pending cap bounds how many
-//! of those threads exist at once. A `tools/call` without an id is refused at
-//! once, so it takes neither a slot nor a check.
+//! slot until its answer has been written, so the pending cap bounds the
+//! check threads. Inspections are bounded on their own, since a server can
+//! send results nobody asked for: at most [`MAX_INSPECTIONS`] run at once,
+//! and while that many do the main thread stops reading the server, which
+//! slows the server down rather than dropping anything. A `tools/call`
+//! without an id is refused at once, so it takes neither a slot nor a check.
 //!
 //! So messages can overtake a `tools/call` that is still being checked. A
 //! `notifications/cancelled` for that call may reach the server first; the
@@ -57,7 +60,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -68,6 +71,12 @@ const MAX_PENDING: usize = 1024;
 /// A pending request older than this is forgotten. Covers servers that never
 /// answer, and answers too large for the proxy to read the id from.
 const PENDING_TTL: Duration = Duration::from_mins(10);
+
+/// Tool results and tool lists inspected at once. Each inspection is a thread
+/// waiting on the API; past this the proxy stops reading the server until one
+/// finishes, so a server flooding results slows itself down instead of
+/// starting a thread apiece, and nothing is dropped.
+const MAX_INSPECTIONS: usize = 64;
 
 /// How long the startup key check may take. It delays the server's start.
 const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
@@ -169,6 +178,7 @@ impl McpProxyCommand {
             withheld: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             to_server: Mutex::new(Some(to_server)),
+            inspections: Permits::new(MAX_INSPECTIONS),
         });
 
         let client_side = Arc::clone(&proxy);
@@ -362,6 +372,42 @@ fn parse_tool_call(message: &Value) -> std::result::Result<(String, Value), Stri
     Ok((name.to_string(), arguments))
 }
 
+/// A counting semaphore: [`Permits::acquire`] blocks while `cap` permits are
+/// out, and a [`Permit`] gives its slot back when dropped.
+struct Permits {
+    out: Mutex<usize>,
+    freed: Condvar,
+    cap: usize,
+}
+
+struct Permit(Arc<Permits>);
+
+impl Permits {
+    fn new(cap: usize) -> Arc<Self> {
+        Arc::new(Self {
+            out: Mutex::new(0),
+            freed: Condvar::new(),
+            cap,
+        })
+    }
+
+    fn acquire(self: &Arc<Self>) -> Permit {
+        let mut out = lock(&self.out);
+        while *out >= self.cap {
+            out = self.freed.wait(out).unwrap_or_else(PoisonError::into_inner);
+        }
+        *out += 1;
+        Permit(Arc::clone(self))
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        *lock(&self.0.out) -= 1;
+        self.0.freed.notify_one();
+    }
+}
+
 struct Proxy {
     fail_mode: FailMode,
     validator: Box<dyn Validator>,
@@ -377,6 +423,8 @@ struct Proxy {
     pending: Mutex<HashMap<String, Pending>>,
     /// `None` once the client has gone and the server's stdin is closed.
     to_server: Mutex<Option<ChildStdin>>,
+    /// Bounds the inspection threads ([`MAX_INSPECTIONS`]).
+    inspections: Arc<Permits>,
 }
 
 impl Proxy {
@@ -745,11 +793,17 @@ impl Proxy {
             self.write_client(&raw);
             return;
         };
+        // Blocks the server reader while MAX_INSPECTIONS are running: the
+        // backpressure that bounds the threads below.
+        let permit = self.inspections.acquire();
         let line = Arc::new((raw, parsed, inspections));
         let (proxy, work) = (Arc::clone(self), Arc::clone(&line));
         let spawned = thread::Builder::new()
             .name("mcp-proxy-inspect".to_string())
-            .spawn(move || proxy.inspect_and_relay(&work.0, work.1.clone(), &work.2));
+            .spawn(move || {
+                proxy.inspect_and_relay(&work.0, work.1.clone(), &work.2);
+                drop(permit);
+            });
         if let Err(e) = spawned {
             // Inspect it here instead, holding up the server's later lines,
             // rather than relay it uninspected or not at all.
