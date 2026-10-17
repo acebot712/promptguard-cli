@@ -22,11 +22,17 @@ use crate::api::PromptGuardClient;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Characters per guard request, separators included. The endpoint takes
 /// 100,000 per message and 100,000 in all; the margin covers counting
 /// differences between the two sides.
 const MAX_REQUEST_CHARS: usize = 90_000;
+
+/// How long one result may take to redact, all its requests together, on
+/// top of each request's own [`CHECK_TIMEOUT`]. An agent waits on every tool
+/// result; past this, the text not yet redacted is the fail mode's call.
+pub const RESULT_DEADLINE: Duration = Duration::from_secs(20);
 
 /// Messages per guard request; the endpoint takes 512.
 const MAX_REQUEST_MESSAGES: usize = 512;
@@ -70,8 +76,14 @@ pub struct GuardMessage {
 
 /// Where a tool result's text is sent.
 pub trait Redactor: Send + Sync {
-    /// The guard endpoint's answer for these texts, one message each.
-    fn redact(&self, tool: &str, texts: &[String]) -> Result<GuardAnswer, ApiFailure>;
+    /// The guard endpoint's answer for these texts, one message each, or a
+    /// failure if none came within `timeout`.
+    fn redact(
+        &self,
+        tool: &str,
+        texts: &[String],
+        timeout: Duration,
+    ) -> Result<GuardAnswer, ApiFailure>;
 }
 
 /// `POST /guard`, through the CLI's own HTTP client.
@@ -82,7 +94,12 @@ pub struct ApiRedactor {
 }
 
 impl Redactor for ApiRedactor {
-    fn redact(&self, tool: &str, texts: &[String]) -> Result<GuardAnswer, ApiFailure> {
+    fn redact(
+        &self,
+        tool: &str,
+        texts: &[String],
+        timeout: Duration,
+    ) -> Result<GuardAnswer, ApiFailure> {
         let messages: Vec<Value> = texts
             .iter()
             .map(|t| json!({"role": "tool", "content": t}))
@@ -97,9 +114,9 @@ impl Redactor for ApiRedactor {
                 "metadata": {"tool_name": tool},
             },
         });
-        let response =
-            self.client
-                .send_raw(&reqwest::Method::POST, "/guard", Some(&body), CHECK_TIMEOUT);
+        let response = self
+            .client
+            .send_raw(&reqwest::Method::POST, "/guard", Some(&body), timeout);
         classify_answer(response, "redact the result", true)
     }
 }
@@ -119,8 +136,16 @@ pub enum Outcome {
     Withhold { reason: String },
 }
 
-/// Decide what the agent gets for one `tools/call` result.
-pub fn review(mode: FailMode, tool: &str, result: &Value, api: &dyn Redactor) -> Outcome {
+/// Decide what the agent gets for one `tools/call` result, within
+/// `deadline` in all.
+pub fn review(
+    mode: FailMode,
+    tool: &str,
+    result: &Value,
+    api: &dyn Redactor,
+    deadline: Duration,
+) -> Outcome {
+    let started = Instant::now();
     let slots = text_slots(result);
     let pieces: Vec<Piece> = slots
         .iter()
@@ -143,12 +168,28 @@ pub fn review(mode: FailMode, tool: &str, result: &Value, api: &dyn Redactor) ->
     // the fail mode. Sending nothing would skip the guard's block.
     let over = batches.len() > MAX_REQUESTS;
     let mut failure = None;
+    let late = || {
+        ApiFailure::Unavailable(format!(
+            "the result was not redacted within {}s",
+            deadline.as_secs()
+        ))
+    };
     for batch in batches.into_iter().take(MAX_REQUESTS) {
+        let left = deadline.saturating_sub(started.elapsed());
+        if left.is_zero() {
+            failure = Some(late());
+            break;
+        }
         let texts: Vec<String> = pieces[batch.clone()]
             .iter()
             .map(|p| p.original.replace(RECORD_SEPARATOR, "\u{fffd}"))
             .collect();
-        match answer(api.redact(tool, &texts), texts.len()) {
+        let answered = api.redact(tool, &texts, left.min(CHECK_TIMEOUT));
+        let answered = match answered {
+            Err(ApiFailure::Unavailable(_)) if started.elapsed() >= deadline => Err(late()),
+            other => other,
+        };
+        match answer(answered, texts.len()) {
             Ok(Verdict::Allow) => {},
             Ok(Verdict::Redact(redacted)) => {
                 for (piece, text) in pieces[batch].iter_mut().zip(redacted) {
@@ -416,7 +457,12 @@ mod tests {
     struct Upper(Mutex<Vec<Vec<String>>>);
 
     impl Redactor for Upper {
-        fn redact(&self, _: &str, texts: &[String]) -> Result<GuardAnswer, ApiFailure> {
+        fn redact(
+            &self,
+            _: &str,
+            texts: &[String],
+            _: Duration,
+        ) -> Result<GuardAnswer, ApiFailure> {
             self.0.lock().unwrap().push(texts.to_vec());
             Ok(GuardAnswer {
                 decision: "redact".into(),
@@ -440,7 +486,8 @@ mod tests {
         let text = line.repeat(200); // 200,200 characters
         let result = json!({"content": [{"type": "text", "text": text}]});
         let api = Upper(Mutex::new(vec![]));
-        let Outcome::Redacted(out) = review(FailMode::Mixed, "t", &result, &api) else {
+        let Outcome::Redacted(out) = review(FailMode::Mixed, "t", &result, &api, RESULT_DEADLINE)
+        else {
             panic!("expected a redaction");
         };
         assert_eq!(out["content"][0]["text"], text.to_uppercase());
@@ -459,7 +506,7 @@ mod tests {
             {"type": "text", "text": "c"},
         ]});
         let api = Upper(Mutex::new(vec![]));
-        review(FailMode::Mixed, "t", &result, &api);
+        review(FailMode::Mixed, "t", &result, &api, RESULT_DEADLINE);
         let sent = api.0.lock().unwrap();
         assert_eq!(sent[0], ["a\u{fffd}b", "c"]);
     }
@@ -469,7 +516,7 @@ mod tests {
         let api = Upper(Mutex::new(vec![]));
         let result = json!({"content": [{"type": "image", "data": "x", "mimeType": "image/png"}]});
         assert_eq!(
-            review(FailMode::Closed, "t", &result, &api),
+            review(FailMode::Closed, "t", &result, &api, RESULT_DEADLINE),
             Outcome::Unchanged
         );
         assert!(api.0.lock().unwrap().is_empty());
@@ -479,7 +526,12 @@ mod tests {
     fn a_wrong_number_of_redacted_messages_is_unusable() {
         struct Short;
         impl Redactor for Short {
-            fn redact(&self, _: &str, _: &[String]) -> Result<GuardAnswer, ApiFailure> {
+            fn redact(
+                &self,
+                _: &str,
+                _: &[String],
+                _: Duration,
+            ) -> Result<GuardAnswer, ApiFailure> {
                 Ok(GuardAnswer {
                     decision: "redact".into(),
                     threat_type: None,
@@ -491,9 +543,65 @@ mod tests {
         let result = json!({"content": [{"type": "text", "text": "jane@example.com"}]});
         for mode in [FailMode::Open, FailMode::Mixed, FailMode::Closed] {
             assert!(matches!(
-                review(mode, "t", &result, &Short),
+                review(mode, "t", &result, &Short, RESULT_DEADLINE),
                 Outcome::Withhold { .. }
             ));
         }
+    }
+
+    /// Sleeps before answering like `Upper`, and records each timeout given.
+    struct Slow {
+        delay: Duration,
+        timeouts: Mutex<Vec<Duration>>,
+    }
+
+    impl Redactor for Slow {
+        fn redact(
+            &self,
+            tool: &str,
+            texts: &[String],
+            timeout: Duration,
+        ) -> Result<GuardAnswer, ApiFailure> {
+            self.timeouts.lock().unwrap().push(timeout);
+            if self.delay > timeout {
+                std::thread::sleep(timeout);
+                return Err(ApiFailure::Unavailable("timed out".into()));
+            }
+            std::thread::sleep(self.delay);
+            Upper(Mutex::new(vec![])).redact(tool, texts, timeout)
+        }
+    }
+
+    #[test]
+    fn requests_share_one_deadline_and_the_rest_follows_the_fail_mode() {
+        let text = ("x".repeat(1000) + "\n").repeat(300); // 4 requests
+        let result = json!({"content": [{"type": "text", "text": text}]});
+        let deadline = Duration::from_millis(250);
+        let api = Slow {
+            delay: Duration::from_millis(100),
+            timeouts: Mutex::new(vec![]),
+        };
+        let outcome = review(FailMode::Mixed, "t", &result, &api, deadline);
+        let Outcome::Unredacted { result: out, why } = outcome else {
+            panic!("expected the fail mode, got {outcome:?}");
+        };
+        assert!(why.contains("within"), "{why}");
+        let out = out["content"][0]["text"].as_str().unwrap();
+        assert!(
+            out.starts_with('X') && out.ends_with("x\n"),
+            "the first requests are kept"
+        );
+        let timeouts = api.timeouts.lock().unwrap();
+        assert_eq!(timeouts.len(), 3, "{timeouts:?}");
+        assert!(timeouts.iter().all(|t| *t <= deadline));
+        assert!(
+            timeouts[2] < Duration::from_millis(100),
+            "the last gets what is left"
+        );
+        drop(timeouts);
+        assert!(matches!(
+            review(FailMode::Closed, "t", &result, &api, deadline),
+            Outcome::Withhold { .. }
+        ));
     }
 }

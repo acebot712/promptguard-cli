@@ -1009,7 +1009,13 @@ impl Proxy {
         let result = message.get("result")?;
         match awaiting {
             Awaiting::ToolResult { tool } => {
-                let outcome = redact::review(self.fail_mode, tool, result, self.redactor.as_ref());
+                let outcome = redact::review(
+                    self.fail_mode,
+                    tool,
+                    result,
+                    self.redactor.as_ref(),
+                    redact::RESULT_DEADLINE,
+                );
                 let with_result = |result: Value| {
                     let mut out = message.clone();
                     out["result"] = result;
