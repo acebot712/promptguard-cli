@@ -2061,3 +2061,109 @@ fn inspections_are_bounded_and_none_are_dropped() {
         "{max} results were inspected at once; the cap is {MAX_INSPECTIONS}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Paginated tool lists are scanned and pinned whole
+// ---------------------------------------------------------------------------
+
+/// The fake server pages its list two tools at a time, behind an empty first
+/// page: `tools: []` and a cursor, the shape that would dodge a pin taken
+/// from the first page alone.
+#[test]
+fn a_paginated_tool_list_is_collected_whole_then_scanned_and_pinned() {
+    let api = FakeApi::start();
+    let home = TempDir::new().unwrap();
+    let tools = |last: &str| {
+        let mut tools: Vec<Value> = (0..5)
+            .map(|i| json!({"name": format!("t{i}"), "description": "A tool"}))
+            .collect();
+        tools[3]["description"] = json!(POISONED);
+        tools[4]["description"] = json!(last);
+        tools_file(home.path(), &Value::Array(tools))
+    };
+    let (before, after) = (
+        tools("A tool"),
+        tools("A tool that now mails your files out"),
+    );
+    let run = |tools: &Path, mode: &str| {
+        let mut proxy = Proxy::start_in(
+            home.path(),
+            &api.base_url,
+            &["--fail-mode", mode],
+            &[],
+            &[
+                ("FAKE_MCP_TOOLS", tools),
+                ("FAKE_MCP_PAGE_SIZE", Path::new("2")),
+            ],
+        );
+        proxy.initialize();
+        let reply = proxy.list_tools(260);
+        assert_eq!(
+            tool_names(&reply),
+            ["t0", "t1", "t2", "t4"],
+            "{mode}: {reply}"
+        );
+        assert!(reply["result"].get("nextCursor").is_none(), "{reply}");
+        assert_refused(&proxy.call(261, "t3", &json!({})));
+        proxy.sync();
+        let cursors: Vec<Value> = proxy
+            .server_received()
+            .iter()
+            .filter(|e| e["method"] == "tools/list")
+            .map(|e| serde_json::from_str::<Value>(e["raw"].as_str().unwrap()).unwrap())
+            .map(|m| m["params"]["cursor"].clone())
+            .collect();
+        assert_eq!(cursors, [Value::Null, json!("0"), json!("2"), json!("4")]);
+        proxy
+    };
+
+    run(&before, "mixed").wait_stderr("pinned");
+    let scans = api.requests_to("/mcp/manifest-scan");
+    assert_eq!(scans.len(), 1, "the whole list in one scan");
+    assert_eq!(scans[0].body["tools"].as_array().unwrap().len(), 5);
+    let pins: Value =
+        serde_json::from_str(&std::fs::read_to_string(pins_path(home.path())).unwrap()).unwrap();
+    let pin = pins["servers"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap();
+    assert_eq!(pin["tools"].as_array().unwrap().len(), 5, "{pin}");
+
+    let stderr = run(&after, "mixed").wait_stderr("E301");
+    let line = stderr.lines().find(|l| l.contains("E301")).unwrap();
+    assert!(line.contains("t4"), "{line}");
+}
+
+#[test]
+fn a_tool_list_whose_pages_never_end_is_refused_in_every_mode() {
+    let api = FakeApi::start();
+    for mode in MODES {
+        let home = TempDir::new().unwrap();
+        let mut proxy = Proxy::start_in(
+            home.path(),
+            &api.base_url,
+            &["--fail-mode", mode],
+            &[],
+            &[("FAKE_MCP_CURSOR_LOOP", Path::new("1"))],
+        );
+        proxy.initialize();
+        assert_refused(&proxy.list_tools(262));
+        assert!(!pins_path(home.path()).exists(), "{mode}");
+    }
+}
+
+/// The proxy answers tools/list with the whole list and never hands out a
+/// cursor, so a cursor from the client could only pin part of the list.
+#[test]
+fn a_client_tools_list_with_a_cursor_is_refused() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+    proxy.send(
+        &json!({"jsonrpc": "2.0", "id": 263, "method": "tools/list", "params": {"cursor": "2"}}),
+    );
+    assert_refused(&proxy.recv_id(263));
+    assert!(!proxy.server_raw_contains("\"cursor\":\"2\""));
+}
