@@ -156,6 +156,26 @@ Sending content to the API to be classified as safe or hostile. A network call
 about content, sharing only the word "scan" with detection, which is neither.
 _Avoid_: scan (unqualified), content check, security scan
 
+**Offline threat scan**:
+A threat scan run on the machine (`scan --offline`) against the **local rule
+pack**, with no network and no key. A local subset of what the API detects,
+never a substitute for it, and it says so in its output. Still a threat scan,
+not detection: it is about content, not call sites.
+_Avoid_: local scan, offline mode (unqualified), lite scan
+
+**Untrusted content**:
+Content the operator did not write: tool output, retrieved documents, web
+pages, memory. An offline threat scan runs its indirect-injection rules only
+on content marked untrusted (`--untrusted`), because the same words are
+normal in a system prompt.
+_Avoid_: external content, third-party input
+
+**Local rule pack**:
+The regex rules an offline threat scan matches, vendored in
+`src/local_rules/pack.json` and generated from upstream Go detectors. Never
+hand-edited; regenerated, then re-pinned by its tests.
+_Avoid_: ruleset, signatures, offline rules
+
 **Decision**:
 The API's verdict on scanned content — allow or block.
 _Avoid_: result, verdict, outcome

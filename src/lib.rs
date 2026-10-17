@@ -11,6 +11,7 @@ pub mod analyzer;
 pub mod config;
 pub mod detector;
 pub mod error;
+pub mod local_rules;
 pub mod scanner;
 pub mod shim;
 pub mod text;
