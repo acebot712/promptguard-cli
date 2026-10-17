@@ -1343,10 +1343,12 @@ fn a_huge_batch_is_refused_without_stalling_the_proxy() {
     proxy.send(&json!({"jsonrpc": "2.0", "id": 3000, "method": "ping"}));
     let replies = proxy.recv_line();
     let elapsed = started.elapsed();
-    // About 0.5s in a debug build, most of it building the 60k refusals.
-    // Scanning the batch for duplicates before checking the cap took 15s.
+    // About 0.5s in a debug build, most of it building the 60k refusals, and
+    // up to 3s while the rest of this suite runs alongside on a loaded
+    // machine. Scanning the batch for duplicates before checking the cap
+    // took 15s.
     assert!(
-        elapsed < Duration::from_secs(2),
+        elapsed < Duration::from_secs(5),
         "the batch held the proxy up for {elapsed:?}"
     );
     let replies: Value = serde_json::from_str(&replies).unwrap();
