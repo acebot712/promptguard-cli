@@ -1808,11 +1808,14 @@ fn deleting_the_pins_file_re_pins_on_the_next_run_without_error() {
     assert_eq!(pins["servers"].as_object().unwrap().len(), 1);
 }
 
+/// A corrupt file is moved aside, not overwritten, so the developer can see
+/// what was lost; the log says every server's pin was reset.
 #[test]
-fn a_corrupt_pins_file_is_replaced_without_error() {
+fn a_corrupt_pins_file_is_moved_aside_and_all_pins_reset() {
     let api = FakeApi::start();
     let home = TempDir::new().unwrap();
-    std::fs::create_dir_all(home.path().join(".promptguard")).unwrap();
+    let dir = home.path().join(".promptguard");
+    std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(pins_path(home.path()), "{not json").unwrap();
 
     let mut proxy = Proxy::start_in(home.path(), &api.base_url, &[], &[], &[]);
@@ -1823,9 +1826,86 @@ fn a_corrupt_pins_file_is_replaced_without_error() {
     );
     let stderr = proxy.wait_stderr("pinned");
     assert!(!stderr.contains("E301"), "{stderr}");
+    let line = stderr
+        .lines()
+        .find(|l| l.contains("corrupt"))
+        .unwrap_or_else(|| panic!("{stderr}"));
+    assert!(
+        line.contains("ALL"),
+        "the log says every pin was reset: {line}"
+    );
+    let moved: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("mcp-pins.json.corrupt-")
+        })
+        .collect();
+    assert_eq!(moved.len(), 1, "{moved:?}");
+    assert_eq!(std::fs::read_to_string(&moved[0]).unwrap(), "{not json");
     let pins: Value =
         serde_json::from_str(&std::fs::read_to_string(pins_path(home.path())).unwrap()).unwrap();
     assert_eq!(pins["servers"].as_object().unwrap().len(), 1);
+}
+
+/// A file a newer promptguard wrote may hold what this one cannot keep, so
+/// it is read-only here: left as it is, and the server runs unpinned.
+#[test]
+fn a_pins_file_from_a_newer_version_is_left_untouched() {
+    let api = FakeApi::start();
+    let home = TempDir::new().unwrap();
+    std::fs::create_dir_all(home.path().join(".promptguard")).unwrap();
+    let newer = json!({"version": 2, "servers": {}, "something_new": true}).to_string();
+    std::fs::write(pins_path(home.path()), &newer).unwrap();
+
+    let mut proxy = Proxy::start_in(home.path(), &api.base_url, &[], &[], &[]);
+    proxy.initialize();
+    assert_eq!(
+        tool_names(&proxy.list_tools(217)),
+        ["read_file", "run_command"]
+    );
+    proxy.wait_stderr("version 2");
+    proxy.sync();
+    assert_eq!(
+        std::fs::read_to_string(pins_path(home.path())).unwrap(),
+        newer
+    );
+    let scans = api.requests_to("/mcp/manifest-scan");
+    assert!(scans[0].body.get("pin").is_none(), "{}", scans[0].body);
+}
+
+/// The same command in two projects is two servers: `npx server .` serves a
+/// different directory in each.
+#[test]
+fn the_same_command_in_another_directory_is_pinned_separately() {
+    let api = FakeApi::start();
+    let home = TempDir::new().unwrap();
+    for project in ["one", "two"] {
+        let cwd = home.path().join(project);
+        std::fs::create_dir_all(&cwd).unwrap();
+        let mut proxy = Proxy::launch(&Launch {
+            home: home.path(),
+            cwd: &cwd,
+            program: None,
+            base_url: &api.base_url,
+            flags: &[],
+            server_args: &[],
+            env: &[],
+        });
+        proxy.initialize();
+        proxy.list_tools(218);
+        proxy.wait_stderr("pinned");
+    }
+    let pins = std::fs::read_to_string(pins_path(home.path())).unwrap();
+    let pins_json: Value = serde_json::from_str(&pins).unwrap();
+    assert_eq!(pins_json["servers"].as_object().unwrap().len(), 2, "{pins}");
+    assert!(
+        !pins.contains("one") && !pins.contains("two"),
+        "no path is stored: {pins}"
+    );
 }
 
 #[test]
@@ -2360,4 +2440,69 @@ fn a_token_in_a_package_runner_url_never_reaches_the_pins_file_logs_or_api() {
             "the token reached the {what}:\n{text}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// More of a tool result is redacted, within a deadline
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_tool_error_and_a_resource_link_reach_the_agent_redacted() {
+    let api = FakeApi::start();
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+
+    let reply = proxy.call(290, "fail", &json!({"text": EMAIL_TEXT}));
+    assert_eq!(reply["error"]["code"], json!(-32000), "{reply}");
+    assert_eq!(reply["error"]["data"]["detail"], REDACTED_TEXT, "{reply}");
+    assert_eq!(reply["error"]["data"]["n"], json!(1));
+    assert_eq!(
+        reply["error"]["message"],
+        format!("failed: {REDACTED_TEXT}")
+    );
+
+    let reply = proxy.call(291, "link", &json!({"text": EMAIL_TEXT}));
+    let link = &reply["result"]["content"][0];
+    assert_eq!(link["type"], "resource_link", "{reply}");
+    assert_eq!(link["name"], REDACTED_TEXT, "{reply}");
+    assert_eq!(link["description"], REDACTED_TEXT, "{reply}");
+    assert_eq!(link["uri"], "file:///notes.txt");
+}
+
+/// Each guard request may take 10s, but a result as a whole gets 20s. This
+/// one needs eight requests of 9s each, over a minute; at 20s the rest
+/// follows the fail mode.
+#[test]
+fn a_tool_result_still_unredacted_after_20_seconds_follows_the_fail_mode() {
+    let api = FakeApi::guard(Endpoint::Slow(Duration::from_secs(9)));
+    let mut closed = Proxy::start(&api.base_url, &["--fail-mode", "closed"]);
+    let mut mixed = Proxy::start(&api.base_url, &[]);
+    closed.initialize();
+    mixed.initialize();
+    // 300,000 characters, twice: eight requests of 90,000 or less.
+    let call = |id: u64| {
+        json!({
+            "jsonrpc": "2.0", "id": id, "method": "tools/call",
+            "params": {"name": "echo", "arguments": {"text": "jane@example.com ", "repeat": 17_648}},
+        })
+    };
+    let started = std::time::Instant::now();
+    closed.send(&call(292));
+    mixed.send(&call(293));
+    let wait = |proxy: &Proxy, id: u64| loop {
+        let line = proxy
+            .stdout
+            .recv_timeout(Duration::from_secs(40))
+            .unwrap_or_else(|_| panic!("no answer\n{}", proxy.stderr()));
+        let value: Value = serde_json::from_str(&line).unwrap_or(Value::Null);
+        if value["id"] == json!(id) {
+            return value;
+        }
+    };
+    assert_refused(&wait(&closed, 292));
+    let reply = wait(&mixed, 293);
+    assert!(reply.get("result").is_some(), "mixed relays it");
+    mixed.wait_stderr("unredacted");
+    let elapsed = started.elapsed();
+    assert!(elapsed < Duration::from_secs(26), "took {elapsed:?}");
 }
