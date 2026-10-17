@@ -11,7 +11,9 @@
 //! - `POST /api/v1/mcp/manifest-scan` (`developer/mcp/router.py`): a
 //!   description holding `<IMPORTANT>` is an `E001` finding, and a `pin` that
 //!   differs from the list's own is an `E301` rug-pull. Its pins are opaque
-//!   hashes, as the real endpoint's are, though not the same ones.
+//!   hashes, as the real endpoint's are, though not the same ones. It refuses
+//!   with a 422 what the real one refuses: more than 500 tools, more than
+//!   131,072 characters, or a tool whose description is not text.
 //!
 //! "Unreachable" is a port nothing listens on, so the client sees a refused
 //! connection, as in a real outage.
@@ -64,6 +66,11 @@ enum Endpoint {
     Status(u16),
     /// 200 with a body that is not the endpoint's answer.
     Malformed,
+    /// As `Normal`, after this long.
+    Slow(Duration),
+    /// A manifest scan that runs out of budget: every tool it is sent comes
+    /// back in `unscanned_tools`.
+    Unscanned,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -87,9 +94,18 @@ impl Default for Behaviour {
     }
 }
 
+/// How many `/guard` requests the fake API is answering at once, and the most
+/// it ever answered at once.
+#[derive(Debug, Default)]
+struct Concurrency {
+    now: std::sync::atomic::AtomicUsize,
+    max: std::sync::atomic::AtomicUsize,
+}
+
 struct FakeApi {
     base_url: String,
     requests: Arc<Mutex<Vec<ApiRequest>>>,
+    guard_concurrency: Arc<Concurrency>,
 }
 
 impl FakeApi {
@@ -123,14 +139,28 @@ impl FakeApi {
         let base_url = format!("http://{}/api/v1", listener.local_addr().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&requests);
+        let guard_concurrency = Arc::new(Concurrency::default());
+        let concurrency = Arc::clone(&guard_concurrency);
         thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
                 let recorded = Arc::clone(&recorded);
-                thread::spawn(move || serve_one(stream, &recorded, behaviour));
+                let concurrency = Arc::clone(&concurrency);
+                thread::spawn(move || serve_one(stream, &recorded, behaviour, &concurrency));
             }
         });
-        Self { base_url, requests }
+        Self {
+            base_url,
+            requests,
+            guard_concurrency,
+        }
+    }
+
+    /// The most `/guard` requests that were ever in flight at once.
+    fn max_concurrent_guard_requests(&self) -> usize {
+        self.guard_concurrency
+            .max
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// The validate-tool requests received (the startup key check excluded).
@@ -193,6 +223,33 @@ fn guard_answer(body: &Value) -> Value {
         "redacted_messages": (decision == "redact").then_some(redacted),
         "latency_ms": 1.0,
     })
+}
+
+/// The real endpoint's 422s: what it would refuse to scan, or `None`.
+fn manifest_refusal(body: &Value) -> Option<String> {
+    let tools = body["tools"].as_array().cloned().unwrap_or_default();
+    if tools.len() > 500 {
+        return Some(format!("{} tools; at most 500", tools.len()));
+    }
+    let mut chars = 0;
+    for tool in &tools {
+        let description = match tool.get("description") {
+            None | Some(Value::Null) => String::new(),
+            Some(Value::String(d)) => d.clone(),
+            Some(_) => return Some("description must be a string".to_string()),
+        };
+        let canonical = json!({
+            "description": description,
+            "input_schema": tool.get("inputSchema").cloned().unwrap_or(json!({})),
+            "name": tool["name"],
+        })
+        .to_string();
+        chars += canonical
+            .chars()
+            .map(|c| if c.is_ascii() { 1 } else { 6 })
+            .sum::<usize>();
+    }
+    (chars > 131_072).then(|| format!("{chars} characters; at most 131072"))
 }
 
 fn manifest_answer(body: &Value) -> Value {
@@ -258,6 +315,20 @@ fn answer_endpoint(
         Endpoint::Normal => respond(stream, 200, &normal(body).to_string()),
         Endpoint::Status(status) => respond(stream, status, &error_body(status)),
         Endpoint::Malformed => respond(stream, 200, r#"{"ok":true}"#),
+        Endpoint::Slow(delay) => {
+            thread::sleep(delay);
+            respond(stream, 200, &normal(body).to_string());
+        },
+        Endpoint::Unscanned => {
+            let mut answer = normal(body);
+            let names: Vec<Value> = body["tools"]
+                .as_array()
+                .map(|t| t.iter().map(|t| t["name"].clone()).collect())
+                .unwrap_or_default();
+            answer["incomplete"] = json!(!names.is_empty());
+            answer["unscanned_tools"] = Value::Array(names);
+            respond(stream, 200, &answer.to_string());
+        },
     }
 }
 
@@ -278,7 +349,12 @@ fn respond(mut stream: TcpStream, status: u16, payload: &str) {
     let _ = stream.write_all(response.as_bytes());
 }
 
-fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>, behaviour: Behaviour) {
+fn serve_one(
+    stream: TcpStream,
+    recorded: &Mutex<Vec<ApiRequest>>,
+    behaviour: Behaviour,
+    concurrency: &Concurrency,
+) {
     let mut reader = BufReader::new(stream.try_clone().unwrap());
     let mut request_line = String::new();
     if reader.read_line(&mut request_line).is_err() {
@@ -326,9 +402,18 @@ fn serve_one(stream: TcpStream, recorded: &Mutex<Vec<ApiRequest>>, behaviour: Be
     }
 
     if path.ends_with("/guard") {
-        return answer_endpoint(stream, behaviour.guard, &body, guard_answer);
+        use std::sync::atomic::Ordering::SeqCst;
+        let now = concurrency.now.fetch_add(1, SeqCst) + 1;
+        concurrency.max.fetch_max(now, SeqCst);
+        answer_endpoint(stream, behaviour.guard, &body, guard_answer);
+        concurrency.now.fetch_sub(1, SeqCst);
+        return;
     }
     if path.ends_with("/mcp/manifest-scan") {
+        if let Some(why) = manifest_refusal(&body) {
+            let payload = json!({"error": {"message": why, "type": "invalid_request_error", "code": "validation_error"}});
+            return respond(stream, 422, &payload.to_string());
+        }
         return answer_endpoint(stream, behaviour.manifest, &body, manifest_answer);
     }
 
@@ -382,6 +467,41 @@ fn fake_server_script() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/support/fake_mcp_server.py")
 }
 
+/// Everything [`Proxy::launch`] can vary.
+#[derive(Clone, Copy)]
+struct Launch<'a> {
+    home: &'a Path,
+    /// The proxy's working directory.
+    cwd: &'a Path,
+    /// Run this instead of `python3 fake_mcp_server.py`; it must start the
+    /// fake server itself (see [`wrapper_script`]).
+    program: Option<&'a Path>,
+    base_url: &'a str,
+    flags: &'a [&'a str],
+    server_args: &'a [&'a str],
+    env: &'a [(&'a str, &'a Path)],
+}
+
+/// An executable named `name` in `dir` that runs the fake server, ignoring
+/// its arguments: it lets a test wrap a "package runner" such as `uvx`.
+#[cfg(unix)]
+fn wrapper_script(dir: &Path, name: &str) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let bin = dir.join(format!("bin-{}", unique()));
+    std::fs::create_dir_all(&bin).unwrap();
+    let path = bin.join(name);
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nexec python3 '{}'\n",
+            fake_server_script().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
 struct Proxy {
     child: Child,
     stdin: Option<ChildStdin>,
@@ -417,16 +537,37 @@ impl Proxy {
         server_args: &[&str],
         env: &[(&str, &Path)],
     ) -> Self {
+        Self::launch(&Launch {
+            home,
+            cwd: home,
+            program: None,
+            base_url,
+            flags,
+            server_args,
+            env,
+        })
+    }
+
+    fn launch(how: &Launch) -> Self {
+        let Launch {
+            home,
+            cwd,
+            program,
+            base_url,
+            flags,
+            server_args,
+            env,
+        } = *how;
         let server_log = home.join(format!("server-{}.log", unique()));
         let mut command = Command::new(env!("CARGO_BIN_EXE_promptguard"));
+        command.arg("mcp-proxy").args(flags).arg("--");
+        match program {
+            Some(program) => command.arg(program),
+            None => command.arg("python3").arg(fake_server_script()),
+        };
         command
-            .arg("mcp-proxy")
-            .args(flags)
-            .arg("--")
-            .arg("python3")
-            .arg(fake_server_script())
             .args(server_args)
-            .current_dir(home)
+            .current_dir(cwd)
             .env("HOME", home)
             .env("USERPROFILE", home)
             .env("PROMPTGUARD_API_KEY", "pg_test_mcp_proxy_fixture")
@@ -1431,33 +1572,79 @@ fn an_unusable_redaction_answer_withholds_the_result_in_every_mode() {
     }
 }
 
+/// A server message over 4 MiB cannot be redacted or scanned, so it is never
+/// relayed, in any mode. The request it answers gets an error instead of
+/// waiting forever, wherever the server put the id.
 #[test]
-fn an_oversized_tool_result_is_withheld_only_when_closed() {
+fn an_oversized_server_message_is_dropped_and_its_request_answered_with_an_error() {
     let api = FakeApi::start();
-    let big = |proxy: &mut Proxy, id: u64| {
-        proxy.send(&json!({
-            "jsonrpc": "2.0", "id": id, "method": "tools/call",
-            "params": {"name": "echo", "arguments": {"text": "jane@example.com ", "repeat": 300_000}},
-        }));
+    for mode in MODES {
+        let mut proxy = Proxy::start(&api.base_url, &["--fail-mode", mode]);
+        proxy.initialize();
+        for (id, id_last) in [(206u64, false), (207, true)] {
+            proxy.send(&json!({
+                "jsonrpc": "2.0", "id": id, "method": "test/huge",
+                "params": {"id_last": id_last},
+            }));
+            let reply = proxy.recv_id(id);
+            assert_refused(&reply);
+            assert!(
+                reply["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("4 MiB"),
+                "{mode} id_last={id_last}: {reply}"
+            );
+            assert!(!reply.to_string().contains("jane@example.com"));
+        }
+        proxy.wait_stderr("4 MiB");
+        // The proxy reads on after the dropped line.
+        let (tool, args) = READ_ONLY;
+        assert_relayed(&proxy.call(208, tool, &args()), tool);
+    }
+}
+
+/// A result needing more than 16 guard requests has its first 16 sent, so a
+/// block in them is enforced; the rest follows the fail mode.
+#[test]
+fn a_tool_result_over_sixteen_redaction_requests_is_still_checked() {
+    let api = FakeApi::start();
+    let echo = |proxy: &mut Proxy, id: u64, text: &str, repeat: u64| {
+        proxy.call(id, "echo", &json!({"text": text, "repeat": repeat}))
     };
+    for mode in MODES {
+        let mut proxy = Proxy::start(&api.base_url, &["--fail-mode", mode]);
+        proxy.initialize();
+        let reply = echo(&mut proxy, 230, "BLOCKME ", 100_000);
+        assert_refused(&reply);
+        assert!(!reply.to_string().contains("BLOCKME"), "{mode}");
+    }
+
+    let api = FakeApi::start();
+    let mut mixed = Proxy::start(&api.base_url, &[]);
+    mixed.initialize();
+    // 765,000 characters, twice (a text block and structuredContent): 18
+    // pieces of up to 90,000, one request each.
+    let reply = echo(&mut mixed, 231, "jane@example.com ", 45_000);
+    let text = reply["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with("[EMAIL_REDACTED]") && !text.contains("jane@example.com"),
+        "the first 16 requests' text is redacted"
+    );
+    assert!(
+        reply["result"]["structuredContent"]["echo"]
+            .as_str()
+            .unwrap()
+            .contains("jane@example.com"),
+        "text past the 16th request is relayed under mixed"
+    );
+    assert_eq!(api.requests_to("/guard").len(), 16);
+    mixed.wait_stderr("unredacted");
 
     let mut closed = Proxy::start(&api.base_url, &["--fail-mode", "closed"]);
     closed.initialize();
-    big(&mut closed, 206);
-    // The log line means the server's answer has been read and handled.
-    closed.wait_stderr("4 MiB");
-    assert!(
-        !closed.answered_before_a_ping(206),
-        "a result too large to inspect reached the agent under --fail-mode closed"
-    );
-
-    let mut mixed = Proxy::start(&api.base_url, &[]);
-    mixed.initialize();
-    big(&mut mixed, 207);
-    assert!(mixed.recv_id(207)["result"]["content"][0]["text"]
-        .as_str()
-        .is_some_and(|t| t.starts_with("jane@example.com")));
-    mixed.wait_stderr("unredacted");
+    let reply = echo(&mut closed, 232, "jane@example.com ", 45_000);
+    assert_refused(&reply);
 }
 
 // ---------------------------------------------------------------------------
@@ -1481,7 +1668,7 @@ fn tool_names(reply: &Value) -> Vec<String> {
         .as_array()
         .unwrap_or_else(|| panic!("no tools in {reply}"))
         .iter()
-        .map(|t| t["name"].as_str().unwrap().to_string())
+        .map(|t| t["name"].as_str().unwrap_or("<no name>").to_string())
         .collect()
 }
 
@@ -1722,5 +1909,131 @@ fn an_unusable_manifest_answer_refuses_the_list_in_every_mode() {
                 "{endpoint:?} {mode}: nothing is pinned without a scan"
             );
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The poisoning scan cannot be skipped
+// ---------------------------------------------------------------------------
+
+/// Starts a proxy whose fake server lists `tools`, in `mode`.
+fn proxy_listing(api: &FakeApi, home: &Path, tools: &Value, mode: &str) -> Proxy {
+    let tools = tools_file(home, tools);
+    let mut proxy = Proxy::start_in(
+        home,
+        &api.base_url,
+        &["--fail-mode", mode],
+        &[],
+        &[("FAKE_MCP_TOOLS", &tools)],
+    );
+    proxy.initialize();
+    proxy
+}
+
+#[test]
+fn a_tool_that_breaks_the_shape_rules_is_withheld_in_every_mode() {
+    let api = FakeApi::start();
+    let tools = json!([
+        {"name": "read_file", "description": "Read a file", "inputSchema": {"type": "object"}},
+        {"name": "add", "description": {"text": POISONED}},
+        {"name": "bad_schema", "description": "fine", "inputSchema": ["not", "an", "object"]},
+        {"description": "a tool with no name"},
+    ]);
+    for mode in MODES {
+        let home = TempDir::new().unwrap();
+        let mut proxy = proxy_listing(&api, home.path(), &tools, mode);
+        assert_eq!(tool_names(&proxy.list_tools(240)), ["read_file"], "{mode}");
+        assert_refused(&proxy.call(241, "add", &json!({})));
+        assert!(proxy.never_reached_server(241), "{mode}");
+        proxy.wait_stderr("shape");
+    }
+}
+
+#[test]
+fn a_tool_list_over_the_endpoint_limits_is_scanned_in_several_requests() {
+    let many: Vec<Value> = (0..600)
+        .map(|i| {
+            let description = if i == 550 { POISONED } else { "A tool" };
+            json!({"name": format!("t{i}"), "description": description})
+        })
+        .collect();
+    let long: Vec<Value> = (0..4)
+        .map(|i| {
+            let description = if i == 3 {
+                format!("{} {POISONED}", "a".repeat(50_000))
+            } else {
+                "a".repeat(50_000)
+            };
+            json!({"name": format!("long{i}"), "description": description})
+        })
+        .collect();
+    for (tools, poisoned) in [(many, "t550"), (long, "long3")] {
+        for mode in MODES {
+            let api = FakeApi::start();
+            let home = TempDir::new().unwrap();
+            let mut proxy = proxy_listing(&api, home.path(), &Value::Array(tools.clone()), mode);
+            let names = tool_names(&proxy.list_tools(242));
+            assert_eq!(names.len(), tools.len() - 1, "{mode} {poisoned}");
+            assert!(
+                !names.iter().any(|n| n == poisoned),
+                "{mode}: {poisoned} relayed"
+            );
+            let scans = api.requests_to("/mcp/manifest-scan");
+            assert!(scans.len() >= 2, "{mode} {poisoned}: {} scans", scans.len());
+            for scan in &scans {
+                assert!(
+                    manifest_refusal(&scan.body).is_none(),
+                    "{mode}: a scan over the limits"
+                );
+            }
+            let scanned: usize = scans
+                .iter()
+                .map(|s| s.body["tools"].as_array().unwrap().len())
+                .sum();
+            assert_eq!(scanned, tools.len(), "{mode}: every tool is scanned once");
+        }
+    }
+}
+
+#[test]
+fn a_tool_too_large_to_scan_alone_is_withheld_in_every_mode() {
+    let api = FakeApi::start();
+    let tools = json!([
+        {"name": "read_file", "description": "Read a file"},
+        {"name": "huge", "description": "a".repeat(140_000)},
+    ]);
+    for mode in MODES {
+        let home = TempDir::new().unwrap();
+        let mut proxy = proxy_listing(&api, home.path(), &tools, mode);
+        assert_eq!(tool_names(&proxy.list_tools(243)), ["read_file"], "{mode}");
+    }
+}
+
+#[test]
+fn a_tool_list_the_endpoint_refuses_is_withheld_in_every_mode() {
+    for status in [413, 422] {
+        let api = FakeApi::manifest(Endpoint::Status(status));
+        for mode in MODES {
+            let mut proxy = Proxy::start(&api.base_url, &["--fail-mode", mode]);
+            proxy.initialize();
+            let reply = proxy.list_tools(244);
+            assert!(
+                tool_names(&reply).is_empty(),
+                "{status} {mode}: an unscannable tool reached the agent: {reply}"
+            );
+            assert_refused(&proxy.call(245, "read_file", &json!({})));
+            assert!(proxy.never_reached_server(245), "{status} {mode}");
+        }
+    }
+}
+
+#[test]
+fn tools_a_scan_never_reaches_are_withheld_in_every_mode() {
+    let api = FakeApi::manifest(Endpoint::Unscanned);
+    for mode in MODES {
+        let mut proxy = Proxy::start(&api.base_url, &["--fail-mode", mode]);
+        proxy.initialize();
+        assert!(tool_names(&proxy.list_tools(246)).is_empty(), "{mode}");
+        proxy.wait_stderr("did not reach");
     }
 }
