@@ -60,7 +60,8 @@ use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -78,11 +79,30 @@ const PENDING_TTL: Duration = Duration::from_mins(10);
 /// starting a thread apiece, and nothing is dropped.
 const MAX_INSPECTIONS: usize = 64;
 
+/// `tools/list` requests the client may have in flight at once. Each can hold
+/// an inspection while it waits on the server for later pages, which only
+/// the main thread reads, so this keeps most of [`MAX_INSPECTIONS`] free for
+/// inspections that finish on their own and the main thread never waits on
+/// itself.
+const MAX_LIST_REQUESTS: usize = 8;
+
+/// Pages and tools one tool list may have before it is refused: more than
+/// any real server lists, and a bound on what the proxy holds.
+const MAX_PAGES: usize = 100;
+const MAX_LISTED_TOOLS: usize = 10_000;
+
 /// How long the startup key check may take. It delays the server's start.
 const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The refusal for a request past [`MAX_PENDING`].
 const TOO_MANY_PENDING: &str = "too many pending requests (limit 1024)";
+
+/// The refusal for a `tools/list` past [`MAX_LIST_REQUESTS`].
+const TOO_MANY_LISTS: &str = "too many pending tools/list requests (limit 8)";
+
+/// The refusal for a `tools/list` that sends a cursor.
+const CURSOR_REFUSED: &str = "mcp-proxy answers tools/list with the whole list in one page and \
+                              hands out no cursor, so it does not accept one";
 
 /// JSON-RPC "Invalid Request", the code every refusal carries.
 const INVALID_REQUEST: i64 = -32600;
@@ -129,7 +149,7 @@ impl McpProxyCommand {
         let redactor = ApiRedactor {
             client: Arc::clone(&client),
             agent_id,
-            session_id,
+            session_id: session_id.clone(),
         };
         let scanner = ApiManifestScanner { client };
         let pins = match credentials_dir() {
@@ -179,6 +199,9 @@ impl McpProxyCommand {
             pending: Mutex::new(HashMap::new()),
             to_server: Mutex::new(Some(to_server)),
             inspections: Permits::new(MAX_INSPECTIONS),
+            internal: Mutex::new(HashMap::new()),
+            next_internal: AtomicU64::new(0),
+            session_id: session_id.clone(),
         });
 
         let client_side = Arc::clone(&proxy);
@@ -292,6 +315,13 @@ fn id_key(id: &Value) -> String {
     }
 }
 
+/// Whether a request carries a non-null `params.cursor`.
+fn has_cursor(message: &Value) -> bool {
+    message
+        .pointer("/params/cursor")
+        .is_some_and(|c| !c.is_null())
+}
+
 fn method_of(message: &Value) -> Option<&str> {
     message.get("method").and_then(Value::as_str)
 }
@@ -301,16 +331,14 @@ fn method_of(message: &Value) -> Option<&str> {
 #[derive(Debug, Clone)]
 enum Awaiting {
     ToolResult { tool: String },
-    ToolList { first_page: bool },
+    ToolList,
     Other,
 }
 
 impl Awaiting {
     fn of(message: &Value) -> Self {
         match method_of(message) {
-            Some("tools/list") => Self::ToolList {
-                first_page: message.pointer("/params/cursor").is_none_or(Value::is_null),
-            },
+            Some("tools/list") => Self::ToolList,
             _ => Self::Other,
         }
     }
@@ -425,6 +453,12 @@ struct Proxy {
     to_server: Mutex<Option<ChildStdin>>,
     /// Bounds the inspection threads ([`MAX_INSPECTIONS`]).
     inspections: Arc<Permits>,
+    /// Requests the proxy sent the server itself, by id, and where their
+    /// answers go.
+    internal: Mutex<HashMap<String, mpsc::Sender<Value>>>,
+    next_internal: AtomicU64,
+    /// This run's id, which makes the proxy's own request ids unique.
+    session_id: String,
 }
 
 impl Proxy {
@@ -488,6 +522,12 @@ impl Proxy {
         };
         let id = id_of(message).cloned();
 
+        if method == "tools/list" && has_cursor(message) {
+            if let Some(id) = &id {
+                self.write_client_value(&refusal(id, CURSOR_REFUSED));
+            }
+            return;
+        }
         if method != "tools/call" {
             if let Some(id) = &id {
                 if let Err(why) = self.track(&[(id_key(id), Awaiting::of(message))]) {
@@ -610,6 +650,13 @@ impl Proxy {
             refuse_all("a batch may contain only JSON-RPC objects");
             return;
         }
+        if items
+            .iter()
+            .any(|m| method_of(m) == Some("tools/list") && has_cursor(m))
+        {
+            refuse_all(CURSOR_REFUSED);
+            return;
+        }
         if items.iter().any(|m| method_of(m) == Some("tools/call")) {
             refuse_all(
                 "a batch containing tools/call cannot be checked; send tool calls one at a time",
@@ -656,6 +703,20 @@ impl Proxy {
                 .get(key)
                 .is_some_and(|p| p.since.elapsed() < PENDING_TTL)
         };
+        let lists = keys
+            .iter()
+            .filter(|(_, a)| matches!(a, Awaiting::ToolList))
+            .count();
+        if lists > 0
+            && lists
+                + pending
+                    .values()
+                    .filter(|p| matches!(p.awaiting, Awaiting::ToolList))
+                    .count()
+                > MAX_LIST_REQUESTS
+        {
+            return Err(TOO_MANY_LISTS);
+        }
         let mut seen = HashSet::with_capacity(keys.len());
         if keys.iter().any(|(key, _)| live(key) || !seen.insert(key)) {
             return Err("a request with this id is already pending");
@@ -750,6 +811,19 @@ impl Proxy {
     /// request's pending slot, once it has been written.
     fn handle_server_line(self: &Arc<Self>, raw: Vec<u8>) {
         let parsed = serde_json::from_slice::<Value>(&raw).ok();
+        // The answer to a request the proxy made itself (a later page of a
+        // tool list) goes to the thread waiting for it, never to the client.
+        if let Some(message @ Value::Object(_)) = &parsed {
+            let waiter = message
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|_| method_of(message).is_none())
+                .and_then(|id| lock(&self.internal).remove(id));
+            if let Some(waiter) = waiter {
+                let _ = waiter.send(message.clone());
+                return;
+            }
+        }
         let items: Vec<&Value> = match &parsed {
             Some(message @ Value::Object(_)) => vec![message],
             Some(Value::Array(items)) => items.iter().collect(),
@@ -876,13 +950,87 @@ impl Proxy {
                     },
                 }
             },
-            Awaiting::ToolList { first_page } => self.review_tool_list(&id, message, *first_page),
+            Awaiting::ToolList => match self.collect_tool_list(message) {
+                Ok(Some(tools)) => self.review_tool_list(&id, message, &tools),
+                Ok(None) => None,
+                Err(reason) => {
+                    log(&format!("refused tools/list: {reason}"));
+                    Some(refusal(
+                        &id,
+                        &format!("PromptGuard refused this server's tool list: {reason}"),
+                    ))
+                },
+            },
             Awaiting::Other => None,
         }
     }
 
-    fn review_tool_list(&self, id: &Value, message: &Value, first_page: bool) -> Option<Value> {
-        let tools = message.pointer("/result/tools").and_then(Value::as_array)?;
+    /// Every tool the server lists: the first page's, then each later page's,
+    /// fetched from the server by the proxy itself, so the whole list is
+    /// scanned and pinned. A server answering `tools: []` and a cursor must
+    /// not get past the pin by putting its tools on page two. `Ok(None)` is a
+    /// result with no tool list to read; `Err` refuses the list in every
+    /// mode, since a list the proxy cannot finish reading cannot be pinned.
+    fn collect_tool_list(
+        &self,
+        message: &Value,
+    ) -> std::result::Result<Option<Vec<Value>>, String> {
+        let Some(first) = message.pointer("/result/tools").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        let mut tools = first.clone();
+        let mut page = message.get("result").cloned().unwrap_or(Value::Null);
+        let mut cursors = HashSet::new();
+        loop {
+            let cursor = match page.get("nextCursor") {
+                None | Some(Value::Null) => return Ok(Some(tools)),
+                Some(Value::String(c)) => c.clone(),
+                Some(_) => return Err("its nextCursor is not text".to_string()),
+            };
+            if !cursors.insert(cursor.clone()) {
+                return Err("its pages repeat a cursor, so the list never ends".to_string());
+            }
+            if cursors.len() > MAX_PAGES {
+                return Err(format!("it has more than {MAX_PAGES} pages"));
+            }
+            page = self.fetch_page(&cursor)?;
+            let Some(more) = page.get("tools").and_then(Value::as_array) else {
+                return Err("a later page has no tools array".to_string());
+            };
+            tools.extend(more.iter().cloned());
+            if tools.len() > MAX_LISTED_TOOLS {
+                return Err(format!("it lists more than {MAX_LISTED_TOOLS} tools"));
+            }
+        }
+    }
+
+    /// Ask the server for the tool list page at `cursor`, under an id of the
+    /// proxy's own, and wait for its answer, which is not relayed.
+    fn fetch_page(&self, cursor: &str) -> std::result::Result<Value, String> {
+        let n = self.next_internal.fetch_add(1, Ordering::Relaxed);
+        let id = format!("promptguard-mcp-proxy:{}:{n}", self.session_id);
+        let (tx, rx) = mpsc::channel();
+        lock(&self.internal).insert(id.clone(), tx);
+        self.write_server(&canonical(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/list",
+            "params": {"cursor": cursor},
+        })));
+        let answer = rx.recv_timeout(check::CHECK_TIMEOUT);
+        lock(&self.internal).remove(&id);
+        match answer {
+            Ok(message) => message.get("result").cloned().ok_or_else(|| {
+                "the server answered a request for a later page with an error".to_string()
+            }),
+            Err(_) => Err(format!(
+                "the server did not send a later page within {}s",
+                check::CHECK_TIMEOUT.as_secs()
+            )),
+        }
+    }
+
+    fn review_tool_list(&self, id: &Value, message: &Value, tools: &[Value]) -> Option<Value> {
         let (stored, problem) = self.pins.as_ref().map_or((None, None), PinStore::load);
         let pins_path = self.pins.as_ref().map_or_else(
             || "the pins file".to_string(),
@@ -899,7 +1047,6 @@ impl Proxy {
                 server: &self.server,
                 pins_path: &pins_path,
                 stored: stored.as_ref(),
-                first_page,
                 now: chrono::Utc::now().to_rfc3339(),
             },
             tools,
@@ -952,7 +1099,10 @@ impl Proxy {
                 }
             }
         }
-        if review.withhold.is_empty() {
+        // A list read from one page and with nothing withheld is relayed as
+        // the server sent it; otherwise the whole list goes in one page.
+        let paged = message.pointer("/result/nextCursor").is_some();
+        if review.withhold.is_empty() && !paged {
             return None;
         }
         let kept: Vec<Value> = tools
@@ -963,6 +1113,9 @@ impl Proxy {
             .collect();
         let mut out = message.clone();
         out["result"]["tools"] = Value::Array(kept);
+        if let Some(result) = out["result"].as_object_mut() {
+            result.remove("nextCursor");
+        }
         Some(out)
     }
 

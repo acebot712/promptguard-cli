@@ -112,16 +112,13 @@ pub struct Review {
     pub matches_pin: bool,
 }
 
-/// Where the scan's context comes from: which server, its stored pin, and
-/// whether this page of the list is the one pinned.
+/// Where the scan's context comes from: which server, and its stored pin.
+/// The list is the whole list, every page of it.
 pub struct Context<'a> {
     pub mode: FailMode,
     pub server: &'a str,
     pub pins_path: &'a str,
-    /// The stored pin, for the first page only: a later page is scanned for
-    /// findings but neither compared nor pinned, since its cursor is opaque.
     pub stored: Option<&'a Pin>,
-    pub first_page: bool,
     pub now: String,
 }
 
@@ -186,7 +183,7 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
     let plan = plan(&scannable);
     let pin = ctx
         .stored
-        .filter(|_| ctx.first_page && plan.len() == 1)
+        .filter(|_| plan.len() == 1)
         .map(|p| p.sha256.as_str());
     let scans = match scan_all(ctx, tools, plan, pin, api, &mut review) {
         Ok(scans) => scans,
@@ -257,7 +254,7 @@ pub fn review(ctx: &Context, tools: &[Value], api: &dyn ManifestScanner) -> Revi
     // list (it compared the stored pin too); otherwise one made here from
     // the per-tool hashes, compared here. The same list always takes the
     // same path, so a pin is only ever compared with one made the same way.
-    if !ctx.first_page || scans.outage.is_some() {
+    if scans.outage.is_some() {
         return review;
     }
     let sha256 = match scans.whole_sha256 {
