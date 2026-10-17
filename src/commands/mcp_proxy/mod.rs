@@ -11,11 +11,14 @@
 //! is not JSON is dropped: see [`Proxy::handle_client_line`].
 //!
 //! The server's output is relayed byte for byte, except two kinds of
-//! response. A `tools/call` result has its text redacted through the guard
-//! endpoint ([`redact::review`]); a `tools/list` result is scanned by the
-//! manifest-scan endpoint against the pin stored for this server
-//! ([`manifest::review`], [`pins`]), and a tool flagged as poisoned is removed
-//! from it. Either is re-serialized only when it changed. The server's stderr
+//! response. A `tools/call` result (or error) has its text redacted through
+//! the guard endpoint ([`redact::review`]); a `tools/list` result is
+//! collected whole, every page of it, and scanned by the manifest-scan
+//! endpoint against the pin stored for this server ([`manifest::review`],
+//! [`pins`]), and a tool flagged as poisoned, or one the scan cannot take, is
+//! removed from it. Either is re-serialized only when it changed. A server
+//! line over 4 MiB is never relayed, and the answers to the proxy's own page
+//! requests go to the thread that asked. The server's stderr
 //! is inherited, so it reaches the client untouched; the proxy's own log
 //! lines go there too, prefixed `promptguard mcp-proxy:`. Nothing but relayed
 //! messages is ever written to stdout.
