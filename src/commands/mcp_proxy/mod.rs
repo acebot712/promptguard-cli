@@ -205,7 +205,10 @@ impl McpProxyCommand {
         };
         let scanner = ApiManifestScanner { client };
         let pins = match credentials_dir() {
-            Ok(dir) => Some(PinStore::new(dir, &self.command)),
+            Ok(dir) => {
+                let cwd = std::env::current_dir().and_then(|d| d.canonicalize()).ok();
+                Some(PinStore::new(dir, &self.command, cwd.as_deref()))
+            },
             Err(e) => {
                 log(&format!("tool lists are scanned but not pinned: {e}"));
                 None
@@ -1120,15 +1123,16 @@ impl Proxy {
     }
 
     fn review_tool_list(&self, id: &Value, message: &Value, tools: &[Value]) -> Option<Value> {
-        let (stored, problem) = self.pins.as_ref().map_or((None, None), PinStore::load);
+        let loaded = self.pins.as_ref().map(PinStore::load);
+        let (stored, writable) = loaded
+            .as_ref()
+            .map_or((None, false), |l| (l.pin.clone(), l.writable));
         let pins_path = self.pins.as_ref().map_or_else(
             || "the pins file".to_string(),
             |p| p.path().display().to_string(),
         );
-        if let Some(problem) = problem {
-            log(&format!(
-                "could not read {pins_path} ({problem}); re-pinning this server's tool list"
-            ));
+        if let Some(problem) = loaded.and_then(|l| l.problem) {
+            log(&format!("the pins file {pins_path}: {problem}"));
         }
         let review = manifest::review(
             &manifest::Context {
@@ -1151,7 +1155,7 @@ impl Proxy {
                 &format!("PromptGuard refused this server's tool list: {reason}"),
             ));
         }
-        if let (Some(pin), Some(store)) = (&review.new_pin, &self.pins) {
+        if let (Some(pin), Some(store), true) = (&review.new_pin, &self.pins, writable) {
             match store.save(pin) {
                 Ok(()) if review.repinned => {
                     // Once per run: a change later in the session is compared

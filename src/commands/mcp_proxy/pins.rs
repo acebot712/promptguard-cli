@@ -6,15 +6,23 @@
 //! pin it is sent. Keeping the pin is the caller's job, so it lives here, on
 //! the developer's machine, one per server.
 //!
-//! A server is identified by the SHA-256 of its command line, so the file
-//! never holds the arguments themselves, which can carry tokens. Nothing from
-//! the environment is part of the key or stored.
+//! A server is identified by the SHA-256 of its command line and the
+//! canonical directory it runs in (`npx server .` in two projects is two
+//! servers), so the file never holds the arguments or the path themselves,
+//! which can carry tokens and names. Nothing from the environment is part of
+//! the key or stored. Each entry keeps a readable label (`mcp-proxy:<program>`
+//! and, for a package runner, the package, with any credentials in a URL
+//! removed), and no other argument.
 //!
-//! The file is a cache of trust decisions, never a reason to fail: missing or
-//! unreadable, it is treated as empty and rewritten. Several proxies may run
-//! at once (one per server an agent uses), so a write takes a lock, re-reads
-//! the file under it, and replaces it with a rename, so a reader never sees a
-//! half-written file and no proxy's pin is lost to another's write.
+//! The file is a cache of trust decisions, never a reason to fail. Missing,
+//! it is created. Corrupt, it is moved aside as
+//! `mcp-pins.json.corrupt-<timestamp>`, so what was lost can be seen, and
+//! every server is pinned again. Written by a newer promptguard (a `version`
+//! above this one's), or unreadable, it is left untouched and the server runs
+//! unpinned. Several proxies may run at once (one per server an agent uses),
+//! so a write takes a lock, re-reads the file under it, and replaces it with
+//! a rename, so a reader never sees a half-written file and no proxy's pin is
+//! lost to another's write.
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -60,11 +68,33 @@ pub struct PinStore {
     key: String,
 }
 
+/// What [`PinStore::load`] found.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Loaded {
+    /// This server's pin, if one is stored and well formed.
+    pub pin: Option<Pin>,
+    /// What went wrong with the file, for the log; `None` when nothing did
+    /// (a missing file is not a problem).
+    pub problem: Option<String>,
+    /// Whether a pin may be saved: false for a file this version must leave
+    /// untouched.
+    pub writable: bool,
+}
+
+/// The file's state on disk.
+enum FileState {
+    Missing,
+    Read(PinFile),
+    Corrupt(String),
+    Newer(u64),
+    Unreadable(String),
+}
+
 impl PinStore {
-    pub fn new(dir: PathBuf, command: &[String]) -> Self {
+    pub fn new(dir: PathBuf, command: &[String], cwd: Option<&Path>) -> Self {
         Self {
             dir,
-            key: server_key(command),
+            key: server_key(command, cwd),
         }
     }
 
@@ -72,25 +102,99 @@ impl PinStore {
         self.dir.join(FILE_NAME)
     }
 
-    /// This server's pin, if one is stored and well formed. The second value
-    /// says why the file could not be read, when it could not; a missing file
-    /// is not a problem and says nothing.
-    pub fn load(&self) -> (Option<Pin>, Option<String>) {
-        let (file, problem) = read(&self.path());
-        let pin = file
-            .servers
-            .get(&self.key)
-            .filter(|p| is_pin(&p.sha256))
-            .cloned();
-        (pin, problem)
+    /// This server's pin, and what went wrong with the file. A corrupt file
+    /// is moved aside here, under the lock, so every server re-pins.
+    pub fn load(&self) -> Loaded {
+        let unpinned = |problem: String, writable| Loaded {
+            pin: None,
+            problem: Some(problem),
+            writable,
+        };
+        match read(&self.path()) {
+            FileState::Missing => Loaded {
+                pin: None,
+                problem: None,
+                writable: true,
+            },
+            FileState::Read(file) => Loaded {
+                pin: file
+                    .servers
+                    .get(&self.key)
+                    .filter(|p| is_pin(&p.sha256))
+                    .cloned(),
+                problem: None,
+                writable: true,
+            },
+            FileState::Newer(version) => unpinned(
+                format!(
+                    "its version {version} is newer than this promptguard understands, so it \
+                     was left untouched and this server runs unpinned; upgrade promptguard to \
+                     use it"
+                ),
+                false,
+            ),
+            FileState::Unreadable(e) => unpinned(
+                format!("it could not be read ({e}), so it was left untouched and this server runs unpinned"),
+                false,
+            ),
+            FileState::Corrupt(e) => match self.move_aside() {
+                Ok(Some(to)) => unpinned(
+                    format!(
+                        "it is corrupt ({e}); it was moved to {} and ALL pins were reset, for \
+                         every server: each is pinned again on its next run, and a rug-pull \
+                         from before now goes unreported",
+                        to.display()
+                    ),
+                    true,
+                ),
+                Ok(None) => self.load(),
+                Err(io) => unpinned(
+                    format!(
+                        "it is corrupt ({e}) and could not be moved aside ({io}), so it was \
+                         left untouched and this server runs unpinned"
+                    ),
+                    false,
+                ),
+            },
+        }
     }
 
-    /// Store this server's pin, keeping every other server's.
-    pub fn save(&self, pin: &Pin) -> io::Result<()> {
+    /// Move a corrupt file to `mcp-pins.json.corrupt-<timestamp>`, under the
+    /// lock. `None` when, re-read under the lock, it is no longer corrupt
+    /// (another proxy got there first).
+    fn move_aside(&self) -> io::Result<Option<PathBuf>> {
+        let lock = self.lock()?;
+        if !matches!(read(&self.path()), FileState::Corrupt(_)) {
+            return Ok(None);
+        }
+        let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%S%.3fZ");
+        let to = self.dir.join(format!("{FILE_NAME}.corrupt-{stamp}"));
+        fs::rename(self.path(), &to)?;
+        drop(lock);
+        Ok(Some(to))
+    }
+
+    fn lock(&self) -> io::Result<File> {
         create_private_dir(&self.dir)?;
         let lock = open_private(&self.dir.join(LOCK_NAME), false)?;
         lock.lock()?;
-        let (mut file, _) = read(&self.path());
+        Ok(lock)
+    }
+
+    /// Store this server's pin, replacing any it had and keeping every other
+    /// server's. Refused for a file this version must leave untouched.
+    pub fn save(&self, pin: &Pin) -> io::Result<()> {
+        let lock = self.lock()?;
+        let mut file = match read(&self.path()) {
+            FileState::Missing | FileState::Corrupt(_) => PinFile::default(),
+            FileState::Read(file) => file,
+            FileState::Newer(version) => {
+                return Err(io::Error::other(format!(
+                    "its version {version} is newer than this promptguard understands"
+                )))
+            },
+            FileState::Unreadable(e) => return Err(io::Error::other(e)),
+        };
         file.version = FORMAT_VERSION;
         file.servers.insert(self.key.clone(), pin.clone());
         let text = serde_json::to_string_pretty(&file).map_err(io::Error::other)?;
@@ -106,9 +210,14 @@ fn is_pin(s: &str) -> bool {
     s.len() == 64 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// The SHA-256 of the command line as a JSON array, in hex.
-pub fn server_key(command: &[String]) -> String {
-    sha256_hex(&serde_json::to_vec(command).unwrap_or_default())
+/// The SHA-256, in hex, of the command line and the canonical directory the
+/// server runs in, as JSON: `{"command": [...], "cwd": "..."}`.
+pub fn server_key(command: &[String], cwd: Option<&Path>) -> String {
+    let identity = serde_json::json!({
+        "command": command,
+        "cwd": cwd.map(|d| d.to_string_lossy()),
+    });
+    sha256_hex(&serde_json::to_vec(&identity).unwrap_or_default())
 }
 
 /// The SHA-256 of `bytes`, as 64 lowercase hex digits.
@@ -124,15 +233,23 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
-/// The file's contents, or an empty set and why it could not be read.
-fn read(path: &Path) -> (PinFile, Option<String>) {
-    match fs::read_to_string(path) {
-        Ok(text) => match serde_json::from_str(&text) {
-            Ok(file) => (file, None),
-            Err(e) => (PinFile::default(), Some(format!("it is not valid ({e})"))),
-        },
-        Err(e) if e.kind() == io::ErrorKind::NotFound => (PinFile::default(), None),
-        Err(e) => (PinFile::default(), Some(e.to_string())),
+/// The file as it is on disk. The version is read before the shape, so a
+/// newer file whose shape this version does not know is not taken for a
+/// corrupt one.
+fn read(path: &Path) -> FileState {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return FileState::Missing,
+        Err(e) => return FileState::Unreadable(e.to_string()),
+    };
+    let value: serde_json::Value = match serde_json::from_str(&text) {
+        Ok(value) => value,
+        Err(e) => return FileState::Corrupt(e.to_string()),
+    };
+    match value.get("version").and_then(serde_json::Value::as_u64) {
+        Some(version) if version > u64::from(FORMAT_VERSION) => FileState::Newer(version),
+        _ => serde_json::from_value(value)
+            .map_or_else(|e| FileState::Corrupt(e.to_string()), FileState::Read),
     }
 }
 
@@ -198,28 +315,28 @@ mod tests {
     }
 
     #[test]
-    fn the_key_is_a_hash_of_the_whole_command_line() {
-        let key = server_key(&cmd(&["npx", "-y", "server", "--token", "secret"]));
+    fn the_key_is_a_hash_of_the_whole_command_line_and_its_directory() {
+        let key = server_key(&cmd(&["npx", "-y", "server", "--token", "secret"]), None);
         assert_eq!(key.len(), 64);
         assert!(is_pin(&key));
         assert!(!key.contains("secret"));
-        assert_ne!(key, server_key(&cmd(&["npx", "-y", "server"])));
+        assert_ne!(key, server_key(&cmd(&["npx", "-y", "server"]), None));
         // Joining arguments differently is a different command.
         assert_ne!(
-            server_key(&cmd(&["a b", "c"])),
-            server_key(&cmd(&["a", "b c"]))
+            server_key(&cmd(&["a b", "c"]), None),
+            server_key(&cmd(&["a", "b c"]), None)
         );
-        // Known value: SHA-256 of `["x"]`.
-        assert_eq!(
-            server_key(&cmd(&["x"])),
-            "cd65ea2c2ad99e94a85b1b6df72efef9cb2ed0ae933a60c32ce16317f7d7d6aa"
-        );
+        let here = server_key(&cmd(&["x"]), Some(Path::new("/a")));
+        assert_ne!(here, server_key(&cmd(&["x"]), Some(Path::new("/b"))));
+        assert_ne!(here, server_key(&cmd(&["x"]), None));
+        // Known value: SHA-256 of `{"command":["x"],"cwd":"/a"}`.
+        assert_eq!(here, sha256_hex(br#"{"command":["x"],"cwd":"/a"}"#));
     }
 
     #[test]
     fn a_malformed_stored_pin_is_no_pin() {
         let dir = tempfile::TempDir::new().unwrap();
-        let store = PinStore::new(dir.path().to_path_buf(), &cmd(&["server"]));
+        let store = PinStore::new(dir.path().to_path_buf(), &cmd(&["server"]), None);
         let mut pin = Pin {
             server: "mcp-proxy:server".into(),
             sha256: "A".repeat(64),
@@ -227,9 +344,9 @@ mod tests {
             pinned_at: String::new(),
         };
         store.save(&pin).unwrap();
-        assert_eq!(store.load(), (None, None));
+        assert_eq!(store.load().pin, None);
         pin.sha256 = "a".repeat(64);
         store.save(&pin).unwrap();
-        assert_eq!(store.load(), (Some(pin), None));
+        assert_eq!(store.load().pin, Some(pin));
     }
 }
