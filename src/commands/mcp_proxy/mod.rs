@@ -115,6 +115,55 @@ const SCRUBBED_ENV: &[&str] = &["PROMPTGUARD_API_KEY"];
 /// rather than just `npx`.
 const PACKAGE_RUNNERS: &[&str] = &["npx", "pnpx", "bunx", "uvx"];
 
+/// The package runners' flags that take the next argument as their value,
+/// so it is not mistaken for the package: `uvx --from <url> <server>`. A
+/// value can carry a token (`--from git+https://TOKEN@github.com/...`). An
+/// unknown flag is taken to be a switch, like `-y`.
+const RUNNER_VALUE_FLAGS: &[&str] = &[
+    // npx, pnpx, bunx
+    "-p",
+    "--package",
+    "-c",
+    "--call",
+    "--registry",
+    "--cache",
+    "--userconfig",
+    "-w",
+    "--workspace",
+    // uvx
+    "--from",
+    "--with",
+    "--with-editable",
+    "--with-requirements",
+    "--python",
+    "--index",
+    "--default-index",
+    "--index-url",
+    "--extra-index-url",
+    "-f",
+    "--find-links",
+    "--constraints",
+    "--overrides",
+    "--build-constraints",
+    "--index-strategy",
+    "--keyring-provider",
+    "--resolution",
+    "--prerelease",
+    "--exclude-newer",
+    "--link-mode",
+    "--cache-dir",
+    "--directory",
+    "--project",
+    "--config-file",
+    "--env-file",
+    "--color",
+    "--allow-insecure-host",
+    "-P",
+    "--upgrade-package",
+    "--reinstall-package",
+    "--refresh-package",
+];
+
 pub struct McpProxyCommand {
     pub fail_mode: FailMode,
     pub agent_id: Option<String>,
@@ -261,7 +310,9 @@ impl McpProxyCommand {
 
 /// `mcp-proxy:<server>`, from the command's file name and, for a package
 /// runner, the package it runs. Never the full command line: arguments can
-/// carry tokens, and the agent id is sent to the API.
+/// carry tokens, and the agent id is sent to the API and stored in the pins
+/// file. So a flag's value is never taken for the package, and a package
+/// given as a URL loses its credentials, query and fragment.
 fn default_agent_id(command: &[String]) -> String {
     let name = |s: &str| {
         Path::new(s)
@@ -274,12 +325,44 @@ fn default_agent_id(command: &[String]) -> String {
     let program = name(program);
     let package = PACKAGE_RUNNERS
         .contains(&program.as_str())
-        .then(|| command[1..].iter().find(|a| !a.starts_with('-')))
+        .then(|| runner_package(&command[1..]))
         .flatten();
     match package {
-        Some(p) => format!("mcp-proxy:{program} {p}"),
+        Some(p) => format!("mcp-proxy:{program} {}", without_credentials(p)),
         None => format!("mcp-proxy:{program}"),
     }
+}
+
+/// The first argument that is neither a flag nor a flag's value.
+fn runner_package(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return args.next().map(String::as_str);
+        }
+        if !arg.starts_with('-') {
+            return Some(arg);
+        }
+        if !arg.contains('=') && RUNNER_VALUE_FLAGS.contains(&arg.as_str()) {
+            args.next();
+        }
+    }
+    None
+}
+
+/// `arg` with a URL's userinfo (`user:pass@`, `TOKEN@`), query and fragment
+/// removed; anything that is not a URL is returned as it is.
+fn without_credentials(arg: &str) -> String {
+    let Some((scheme, rest)) = arg.split_once("://") else {
+        return arg.to_string();
+    };
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(authority_end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{path}")
 }
 
 /// One id per proxy run, so the API can group a session's calls.
