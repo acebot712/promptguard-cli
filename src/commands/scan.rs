@@ -25,6 +25,33 @@ pub struct SecurityScanResponse {
     pub event_id: Option<String>,
     #[serde(default, rename = "processingTimeMs")]
     pub processing_time_ms: Option<f64>,
+    /// A detector's warn threshold flagged the content: allowed, not blocked,
+    /// and not clean (promptguard#970). Absent from older servers.
+    #[serde(default)]
+    pub flagged: bool,
+    /// The warn or block threshold that decided, when one did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold: Option<serde_json::Value>,
+}
+
+/// What a scan's answer means for the person reading it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ScanVerdict {
+    Blocked,
+    Flagged,
+    Clean,
+}
+
+impl SecurityScanResponse {
+    pub fn verdict(&self) -> ScanVerdict {
+        if self.blocked || self.decision == "block" {
+            ScanVerdict::Blocked
+        } else if self.flagged {
+            ScanVerdict::Flagged
+        } else {
+            ScanVerdict::Clean
+        }
+    }
 }
 
 /// Exit code for a clean scan (content allowed / no SDK findings).
@@ -96,10 +123,12 @@ impl ScanCommand {
             );
         } else {
             println!();
-            let decision_display = match response.decision.as_str() {
-                "block" => "🚫 BLOCKED",
-                "allow" => "✅ ALLOWED",
-                _ => &response.decision,
+            let verdict = response.verdict();
+            let decision_display = match (&verdict, response.decision.as_str()) {
+                (ScanVerdict::Blocked, _) => "🚫 BLOCKED",
+                (ScanVerdict::Flagged, _) => "⚠️ FLAGGED",
+                (ScanVerdict::Clean, "allow") => "✅ ALLOWED",
+                (ScanVerdict::Clean, other) => other,
             };
             println!("Decision: {decision_display}");
             println!("Confidence: {:.1}%", response.confidence * 100.0);
@@ -112,12 +141,15 @@ impl ScanCommand {
                 println!("Reason: {}", response.reason);
             }
 
-            if response.decision == "block" {
-                println!();
-                Output::warning("This content was flagged as potentially malicious.");
-            } else {
-                println!();
-                Output::success("No security threats detected.");
+            println!();
+            match verdict {
+                ScanVerdict::Blocked => {
+                    Output::warning("This content was flagged as potentially malicious.");
+                },
+                ScanVerdict::Flagged => Output::warning(
+                    "Allowed, but flagged for review: a detector scored it in its warn band.",
+                ),
+                ScanVerdict::Clean => Output::success("No security threats detected."),
             }
         }
 
