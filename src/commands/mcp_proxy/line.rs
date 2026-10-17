@@ -5,6 +5,7 @@
 //! is buffered only up to [`MAX_LINE_BYTES`]; past that the caller decides
 //! whether to drop the rest or stream it through.
 
+use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
 /// The longest message the proxy buffers and inspects: 4 MiB, as in the earlier rule set.
@@ -74,6 +75,182 @@ pub fn finish_line(reader: &mut impl BufRead, mut sink: Option<&mut dyn Write>) 
     }
 }
 
+/// The longest id [`IdScanner`] reads; a longer one is not an id worth
+/// answering.
+const MAX_ID_BYTES: usize = 256;
+
+/// The most messages [`IdScanner`] remembers from one line.
+const MAX_MESSAGES: usize = 1024;
+
+/// Finds the ids of the messages in a line too long to buffer, reading it a
+/// chunk at a time in constant memory, so a request whose answer is dropped
+/// can still be told so. Wherever the id sits in its message, before or after
+/// a 4 MiB `result`, it is found.
+///
+/// It reads only what it needs: the top-level keys of a single message, or
+/// of each object in a top-level batch. It does not validate the JSON, and a
+/// key spelled with escapes is not recognised; either way the worst outcome
+/// is an id it misses, whose request then waits until the client gives up.
+#[derive(Default)]
+pub struct IdScanner {
+    depth: usize,
+    /// The container kinds (`{` or `[`) at depths 1 and 2.
+    outer: [u8; 2],
+    in_string: bool,
+    escaped: bool,
+    /// The next string at message depth is a key.
+    expect_key: bool,
+    /// The key being read, while it is read.
+    key: Option<Vec<u8>>,
+    /// The last key read at message depth, until its value ends.
+    last_key: Vec<u8>,
+    /// The raw bytes of an `id` value, while it is read.
+    capture: Option<Vec<u8>>,
+    current: Scanned,
+    messages: Vec<Scanned>,
+}
+
+#[derive(Default, Clone)]
+struct Scanned {
+    id: Option<Value>,
+    has_method: bool,
+}
+
+impl IdScanner {
+    pub fn feed(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.byte(b);
+        }
+    }
+
+    /// The ids of the responses (messages with an id and no method) read so
+    /// far, in order.
+    pub fn response_ids(&self) -> impl Iterator<Item = &Value> {
+        self.messages
+            .iter()
+            .filter(|m| !m.has_method)
+            .filter_map(|m| m.id.as_ref())
+    }
+
+    /// The depth whose objects are messages: 1 for a single message, 2 for
+    /// the objects of a batch.
+    fn message_depth(&self) -> Option<usize> {
+        match self.outer {
+            [b'{', _] => Some(1),
+            [b'[', b'{'] => Some(2),
+            _ => None,
+        }
+    }
+
+    fn byte(&mut self, b: u8) {
+        if self.in_string {
+            self.string_byte(b);
+            return;
+        }
+        let at_message = Some(self.depth) == self.message_depth();
+        match b {
+            b'"' => {
+                self.in_string = true;
+                if at_message && self.expect_key {
+                    self.expect_key = false;
+                    self.key = Some(Vec::new());
+                } else {
+                    self.push_capture(b);
+                }
+            },
+            b'{' | b'[' => {
+                if at_message && self.capture.take().is_some() {
+                    // An id that is an object or array: not one to answer.
+                    self.current.id = None;
+                }
+                self.depth += 1;
+                if self.depth <= 2 {
+                    self.outer[self.depth - 1] = b;
+                }
+                if Some(self.depth) == self.message_depth() {
+                    self.current = Scanned::default();
+                    self.expect_key = true;
+                    self.last_key.clear();
+                }
+            },
+            b'}' | b']' => {
+                if at_message {
+                    self.end_value();
+                    if b == b'}' && self.messages.len() < MAX_MESSAGES {
+                        self.messages.push(std::mem::take(&mut self.current));
+                    }
+                }
+                self.depth = self.depth.saturating_sub(1);
+                if self.depth < 2 {
+                    self.outer[1] = 0;
+                }
+                if self.depth == 0 {
+                    self.outer[0] = 0;
+                }
+            },
+            b':' if at_message => match self.last_key.as_slice() {
+                b"id" => self.capture = Some(Vec::new()),
+                b"method" => self.current.has_method = true,
+                _ => {},
+            },
+            b',' if at_message => {
+                self.end_value();
+                self.expect_key = true;
+            },
+            _ if b.is_ascii_whitespace() => {},
+            _ => self.push_capture(b),
+        }
+    }
+
+    fn string_byte(&mut self, b: u8) {
+        let closing = !self.escaped && b == b'"';
+        self.escaped = !self.escaped && b == b'\\';
+        if closing {
+            self.in_string = false;
+            if let Some(key) = self.key.take() {
+                self.last_key = key;
+                return;
+            }
+        } else if let Some(key) = self.key.as_mut() {
+            // Longer than any key it looks for: kept unequal to them.
+            if key.len() <= 8 {
+                key.push(b);
+            }
+            return;
+        }
+        self.push_capture(b);
+    }
+
+    fn push_capture(&mut self, b: u8) {
+        if let Some(capture) = self.capture.as_mut() {
+            if capture.len() <= MAX_ID_BYTES {
+                capture.push(b);
+            }
+        }
+    }
+
+    fn end_value(&mut self) {
+        if let Some(raw) = self.capture.take() {
+            self.current.id = (raw.len() <= MAX_ID_BYTES)
+                .then(|| serde_json::from_slice::<Value>(&raw).ok())
+                .flatten()
+                .filter(|id| id.is_number() || id.is_string());
+        }
+        self.last_key.clear();
+    }
+}
+
+impl Write for IdScanner {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.feed(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::panic)]
 mod tests {
@@ -128,5 +305,37 @@ mod tests {
         ));
         let mut r = BufReader::new(&b"abcde\n"[..]);
         assert_eq!(complete(read_line(&mut r, 6).unwrap()), b"abcde\n");
+    }
+
+    fn ids_in(line: &str, chunk: usize) -> Vec<Value> {
+        let mut scanner = IdScanner::default();
+        for part in line.as_bytes().chunks(chunk) {
+            scanner.feed(part);
+        }
+        scanner.response_ids().cloned().collect()
+    }
+
+    #[test]
+    fn the_id_scanner_finds_response_ids_wherever_they_are() {
+        let big = "x".repeat(10_000);
+        for chunk in [1, 7, 4096] {
+            let first = format!(r#"{{"jsonrpc":"2.0","id":7,"result":{{"text":"{big}"}}}}"#);
+            assert_eq!(ids_in(&first, chunk), [serde_json::json!(7)]);
+            let last = format!(
+                r#"{{"result":{{"content":[{{"id":1,"text":"a\"id\":2 {big}"}}]}}, "id" : "abc"}}"#
+            );
+            assert_eq!(ids_in(&last, chunk), [serde_json::json!("abc")]);
+            let batch = format!(
+                r#"[{{"id":1,"result":"{big}"}},{{"id":2,"method":"x"}},{{"result":[],"id":3.0}}]"#
+            );
+            assert_eq!(
+                ids_in(&batch, chunk),
+                [serde_json::json!(1), serde_json::json!(3.0)]
+            );
+            let nested = r#"{"id":{"a":1},"result":{}}"#;
+            assert!(ids_in(nested, chunk).is_empty());
+            let request = r#"{"method":"m","id":4,"params":{}}"#;
+            assert!(ids_in(request, chunk).is_empty());
+        }
     }
 }

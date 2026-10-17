@@ -112,6 +112,25 @@ What the MCP proxy does with a tool call the API gives no verdict on: `open`,
 A tool call relayed without an API verdict because the fail mode allowed it.
 Always logged to stderr as unchecked.
 
+**Tool result redaction**:
+The MCP proxy sending the text of a `tools/call` result to the guard endpoint
+as output, and relaying the result with what it masked. Only strings change.
+An unredacted result (relayed because the fail mode allowed it) is always
+logged as unredacted.
+_Avoid_: result scan, output scan
+
+**Tool-list pin**:
+The opaque hash the manifest-scan endpoint returns for a server's tool list,
+stored in `~/.promptguard/mcp-pins.json` under a hash of the server's command
+line and sent back on the next scan, so a changed list raises a rug-pull
+finding. Kept until the developer removes it; a changed list never replaces it.
+_Avoid_: tool hash (that is one tool's hash, kept beside the pin), checksum
+
+**Withheld tool**:
+A tool removed from a tool list because the scan found something `high` on
+it. A call to it is refused.
+_Avoid_: blocked tool (the API's validate-tool blocks calls, not tools)
+
 ### The project side
 
 **Project**:

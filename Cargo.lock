@@ -1016,6 +1016,7 @@ name = "promptguard"
 version = "2.1.2"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "chrono",
  "clap",
  "colored",

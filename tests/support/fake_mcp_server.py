@@ -14,8 +14,27 @@ serde_json does. Those differences are what the proxy must not let a tool
 call hide behind.
 
 Methods:
-  initialize, tools/list, ping   answered normally
-  tools/call                     answered with "ran <tool name>"
+  initialize, ping               answered normally
+  tools/list                     the tools in the JSON file FAKE_MCP_TOOLS names,
+                                 or two default tools. With FAKE_MCP_PAGE_SIZE=n
+                                 the list is paginated: the first page is empty
+                                 (`tools: []` plus a cursor), and each cursor is
+                                 the offset of the next n tools. With
+                                 FAKE_MCP_CURSOR_LOOP=1 every page is empty and
+                                 hands back the same cursor.
+  tools/call                     answered with "ran <tool name>"; the tool
+                                 `echo` answers with its `text` argument
+                                 (`repeat` times), as a text block, an image
+                                 block and structuredContent
+  tools/call `fail`              answered with a JSON-RPC error whose message
+                                 and data carry params.arguments.text
+  tools/call `link`              answered with a resource_link block whose name
+                                 and description carry params.arguments.text
+  test/flood                     writes params["count"] results for ids nobody
+                                 asked for (each a text block holding an email),
+                                 then answers {}
+  test/huge                      answered with a result over 4 MiB; with
+                                 params["id_last"] the id is written after it
   test/hang                      never answered (fills the proxy's pending set)
   test/exit                      exits with params["code"]
 """
@@ -26,6 +45,21 @@ import os
 import sys
 
 LOG_PATH = os.environ.get("FAKE_MCP_LOG")
+TOOLS_PATH = os.environ.get("FAKE_MCP_TOOLS")
+PAGE_SIZE = int(os.environ.get("FAKE_MCP_PAGE_SIZE", "0"))
+CURSOR_LOOP = os.environ.get("FAKE_MCP_CURSOR_LOOP") == "1"
+
+DEFAULT_TOOLS = [
+    {"name": "read_file", "description": "Read a file", "inputSchema": {"type": "object"}},
+    {"name": "run_command", "description": "Run a shell command", "inputSchema": {"type": "object"}},
+]
+
+
+def tools():
+    if TOOLS_PATH:
+        with open(TOOLS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    return DEFAULT_TOOLS
 
 
 def log(entry):
@@ -82,14 +116,55 @@ while True:
                 "serverInfo": {"name": "fake-mcp-server", "version": "0.0.0"},
             },
         )
+    elif method == "tools/list" and CURSOR_LOOP:
+        reply(request_id, {"tools": [], "nextCursor": "loop"})
+    elif method == "tools/list" and PAGE_SIZE:
+        cursor = params.get("cursor")
+        if cursor is None:
+            reply(request_id, {"tools": [], "nextCursor": "0"})
+        else:
+            start = int(cursor)
+            page = {"tools": tools()[start : start + PAGE_SIZE]}
+            if start + PAGE_SIZE < len(tools()):
+                page["nextCursor"] = str(start + PAGE_SIZE)
+            reply(request_id, page)
     elif method == "tools/list":
+        reply(request_id, {"tools": tools()})
+    elif method == "tools/call" and params.get("name") in ("fail", "link"):
+        text = str((params.get("arguments") or {}).get("text", ""))
+        if params.get("name") == "fail":
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32000, "message": "failed: " + text, "data": {"detail": text, "n": 1}},
+                }
+            )
+        else:
+            link = {"type": "resource_link", "uri": "file:///notes.txt", "name": text, "description": text}
+            reply(request_id, {"content": [link]})
+    elif method == "test/flood":
+        for i in range(int(params.get("count", 0))):
+            reply("flood-%d" % i, {"content": [{"type": "text", "text": "flood %d jane@example.com" % i}]})
+        reply(request_id, {})
+    elif method == "test/huge":
+        result = json.dumps({"content": [{"type": "text", "text": "jane@example.com " * 300_000}]})
+        if params.get("id_last"):
+            sys.stdout.write('{"jsonrpc":"2.0","result":%s,"id":%s}\n' % (result, json.dumps(request_id)))
+            sys.stdout.flush()
+        else:
+            reply(request_id, json.loads(result))
+    elif method == "tools/call" and params.get("name") == "echo":
+        arguments = params.get("arguments") or {}
+        text = str(arguments.get("text", "")) * int(arguments.get("repeat", 1))
         reply(
             request_id,
             {
-                "tools": [
-                    {"name": "read_file", "description": "Read a file", "inputSchema": {"type": "object"}},
-                    {"name": "run_command", "description": "Run a shell command", "inputSchema": {"type": "object"}},
-                ]
+                "content": [
+                    {"type": "text", "text": text},
+                    {"type": "image", "data": "aGVsbG8=", "mimeType": "image/png"},
+                ],
+                "structuredContent": {"echo": text, "length": len(text)},
             },
         )
     elif method == "tools/call":

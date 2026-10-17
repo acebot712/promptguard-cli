@@ -3,14 +3,17 @@
 
 use super::destructive::is_destructive;
 use crate::api::{PromptGuardClient, RawResponse};
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use serde_json::Value;
+use std::sync::Arc;
 use std::time::Duration;
 
-/// How long one validate-tool request may take before the call is treated as
-/// unchecked. Shorter than the client's 30s default: an agent waits on every
-/// tool call, and the fail mode already says what to do when no verdict comes.
-const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long one API request from the proxy may take before its answer is
+/// treated as missing. Shorter than the client's 30s default: an agent waits
+/// on every tool call, and the fail mode already says what to do when no
+/// verdict comes.
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What the proxy does with a tool call when the API cannot give a verdict
 /// (ADR-0034).
@@ -68,10 +71,28 @@ pub enum ApiFailure {
     /// plan runs out is what ADR-0034 rejects, so the fail mode decides; it is
     /// logged as a plan limit, not as an outage.
     PlanLimit(String),
+    /// The endpoint does not take this content (too large, or a shape it
+    /// refuses): the proxy's own check of the documented limits, or a 413 or
+    /// 422 from an endpoint whose input the wrapped server wrote (a tool
+    /// result, a tool list). No verdict, so the fail mode decides, as for an
+    /// outage: refusing it in every mode would let a server break the agent
+    /// by padding what it sends.
+    ContentRefused(String),
     /// The API answered and the answer cannot be used: a rejected key,
     /// another 4xx, or a 200 that is not a verdict. Refused in every mode: a
     /// revoked key must not turn the proxy into a pass-through.
     Unusable(String),
+}
+
+impl ApiFailure {
+    pub fn message(&self) -> &str {
+        match self {
+            Self::Unavailable(m)
+            | Self::PlanLimit(m)
+            | Self::ContentRefused(m)
+            | Self::Unusable(m) => m,
+        }
+    }
 }
 
 /// Where a tool call's verdict comes from when the API is consulted.
@@ -82,7 +103,7 @@ pub trait Validator: Send + Sync {
 
 /// The validate-tool endpoint, through the CLI's own HTTP client.
 pub struct ApiValidator {
-    pub client: PromptGuardClient,
+    pub client: Arc<PromptGuardClient>,
     pub agent_id: String,
     pub session_id: String,
 }
@@ -107,6 +128,18 @@ impl Validator for ApiValidator {
 
 /// Turn the API's answer into a verdict, or say which kind of failure it is.
 pub fn classify(response: RawResponse) -> Result<ToolValidation, ApiFailure> {
+    classify_answer(response, "check the call", false)
+}
+
+/// Read the API's answer as a `T`, or say which kind of failure it is. With
+/// `content_refusals`, a 413 or 422 is [`ApiFailure::ContentRefused`]: for an
+/// endpoint whose input the wrapped server wrote, which the proxy checks
+/// against the documented limits before sending but cannot measure exactly.
+pub fn classify_answer<T: DeserializeOwned>(
+    response: RawResponse,
+    what: &str,
+    content_refusals: bool,
+) -> Result<T, ApiFailure> {
     let (status, body) = match response {
         RawResponse::NoAnswer(e) => {
             return Err(ApiFailure::Unavailable(format!("API unreachable: {e}")))
@@ -117,6 +150,10 @@ pub fn classify(response: RawResponse) -> Result<ToolValidation, ApiFailure> {
         200..=299 => serde_json::from_str(&body).map_err(|e| {
             ApiFailure::Unusable(format!("the API's answer was malformed ({status}: {e})"))
         }),
+        413 | 422 if content_refusals => Err(ApiFailure::ContentRefused(format!(
+            "the API could not {what} ({status}: {})",
+            error_message(&body)
+        ))),
         401 | 403 => Err(ApiFailure::Unusable(format!(
             "PromptGuard rejected the API key ({status}: {}); run `promptguard login` with a valid key",
             error_message(&body)
@@ -127,7 +164,7 @@ pub fn classify(response: RawResponse) -> Result<ToolValidation, ApiFailure> {
         ))),
         500..=599 => Err(ApiFailure::Unavailable(format!("the API returned {status}"))),
         _ => Err(ApiFailure::Unusable(format!(
-            "the API could not check the call ({status}: {})",
+            "the API could not {what} ({status}: {})",
             error_message(&body)
         ))),
     }
@@ -176,7 +213,9 @@ pub fn decide(mode: FailMode, tool: &str, arguments: &Value, api: &dyn Validator
         },
         Ok(_) => Decision::Relay,
         Err(ApiFailure::Unusable(reason)) => Decision::Refuse { reason },
-        Err(ApiFailure::Unavailable(e) | ApiFailure::PlanLimit(e)) => match mode {
+        Err(
+            ApiFailure::Unavailable(e) | ApiFailure::PlanLimit(e) | ApiFailure::ContentRefused(e),
+        ) => match mode {
             FailMode::Closed => Decision::Refuse {
                 reason: format!("the call could not be checked and --fail-mode is closed ({e})"),
             },

@@ -1,5 +1,6 @@
-//! `promptguard mcp-proxy -- <server command>`: wrap a stdio MCP server and
-//! check every tool call before it runs.
+//! `promptguard mcp-proxy -- <server command>`: wrap a stdio MCP server,
+//! check every tool call before it runs, redact every tool result, and scan
+//! and pin every tool list.
 //!
 //! The proxy spawns the server and relays newline-delimited JSON-RPC both
 //! ways. Each `tools/call` from the client is decided first by the local
@@ -7,41 +8,63 @@
 //! (see [`check::decide`]); a refusal is answered with JSON-RPC `-32600` and
 //! never reaches the server. Client messages are relayed as the proxy parsed
 //! them (re-serialized), never as the client's bytes, and a client line that
-//! is not JSON is dropped: see [`Proxy::handle_client_line`]. The server's
-//! output is relayed byte for byte. The server's stderr is inherited, so it
-//! reaches the client untouched; the proxy's own log lines go there too,
-//! prefixed `promptguard mcp-proxy:`. Nothing but relayed messages is ever
-//! written to stdout.
+//! is not JSON is dropped: see [`Proxy::handle_client_line`].
+//!
+//! The server's output is relayed byte for byte, except two kinds of
+//! response. A `tools/call` result (or error) has its text redacted through
+//! the guard endpoint ([`redact::review`]); a `tools/list` result is
+//! collected whole, every page of it, and scanned by the manifest-scan
+//! endpoint against the pin stored for this server ([`manifest::review`],
+//! [`pins`]), and a tool flagged as poisoned, or one the scan cannot take, is
+//! removed from it. Either is re-serialized only when it changed. A server
+//! line over 4 MiB is never relayed, and the answers to the proxy's own page
+//! requests go to the thread that asked. The server's stderr
+//! is inherited, so it reaches the client untouched; the proxy's own log
+//! lines go there too, prefixed `promptguard mcp-proxy:`. Nothing but relayed
+//! messages is ever written to stdout.
 //!
 //! Threads: the main thread reads the server; one thread reads the client;
-//! each `tools/call` is checked on its own short-lived thread so a slow API
-//! does not hold up pings, cancellations or other requests. The pending cap
-//! bounds how many of those exist at once. A `tools/call` without an id is
-//! refused at once, so it takes neither a slot nor a check.
+//! each `tools/call` is checked on its own short-lived thread, and each tool
+//! result or tool list is inspected on its own, so a slow API does not hold
+//! up pings, cancellations or other messages. A request keeps its pending
+//! slot until its answer has been written, so the pending cap bounds the
+//! check threads. Inspections are bounded on their own, since a server can
+//! send results nobody asked for: at most [`MAX_INSPECTIONS`] run at once,
+//! and while that many do the main thread stops reading the server, which
+//! slows the server down rather than dropping anything. A `tools/call`
+//! without an id is refused at once, so it takes neither a slot nor a check.
 //!
 //! So messages can overtake a `tools/call` that is still being checked. A
 //! `notifications/cancelled` for that call may reach the server first; the
 //! server ignores a cancellation for an id it does not know, and then runs
 //! the call when it arrives. Keeping order would mean holding every message
-//! behind every check, which is the stall the threads exist to avoid.
+//! behind every check, which is the stall the threads exist to avoid. For the
+//! same reason a server message can overtake a tool result being redacted.
 
 mod check;
 mod destructive;
 mod line;
+mod manifest;
+mod pins;
+mod redact;
 
 pub use check::FailMode;
 
 use crate::api::{PromptGuardClient, RawResponse};
-use crate::auth::resolve_session;
+use crate::auth::{credentials_dir, resolve_session};
 use crate::error::{PromptGuardError, Result};
 use check::{ApiValidator, Decision, Validator};
 use line::{Line, MAX_LINE_BYTES};
+use manifest::{ApiManifestScanner, ManifestScanner};
+use pins::PinStore;
+use redact::{ApiRedactor, Redactor};
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{self, BufReader, Write};
 use std::path::Path;
 use std::process::{ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -53,11 +76,36 @@ const MAX_PENDING: usize = 1024;
 /// answer, and answers too large for the proxy to read the id from.
 const PENDING_TTL: Duration = Duration::from_mins(10);
 
+/// Tool results and tool lists inspected at once. Each inspection is a thread
+/// waiting on the API; past this the proxy stops reading the server until one
+/// finishes, so a server flooding results slows itself down instead of
+/// starting a thread apiece, and nothing is dropped.
+const MAX_INSPECTIONS: usize = 64;
+
+/// `tools/list` requests the client may have in flight at once. Each can hold
+/// an inspection while it waits on the server for later pages, which only
+/// the main thread reads, so this keeps most of [`MAX_INSPECTIONS`] free for
+/// inspections that finish on their own and the main thread never waits on
+/// itself.
+const MAX_LIST_REQUESTS: usize = 8;
+
+/// Pages and tools one tool list may have before it is refused: more than
+/// any real server lists, and a bound on what the proxy holds.
+const MAX_PAGES: usize = 100;
+const MAX_LISTED_TOOLS: usize = 10_000;
+
 /// How long the startup key check may take. It delays the server's start.
 const STARTUP_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The refusal for a request past [`MAX_PENDING`].
 const TOO_MANY_PENDING: &str = "too many pending requests (limit 1024)";
+
+/// The refusal for a `tools/list` past [`MAX_LIST_REQUESTS`].
+const TOO_MANY_LISTS: &str = "too many pending tools/list requests (limit 8)";
+
+/// The refusal for a `tools/list` that sends a cursor.
+const CURSOR_REFUSED: &str = "mcp-proxy answers tools/list with the whole list in one page and \
+                              hands out no cursor, so it does not accept one";
 
 /// JSON-RPC "Invalid Request", the code every refusal carries.
 const INVALID_REQUEST: i64 = -32600;
@@ -70,9 +118,61 @@ const SCRUBBED_ENV: &[&str] = &["PROMPTGUARD_API_KEY"];
 /// rather than just `npx`.
 const PACKAGE_RUNNERS: &[&str] = &["npx", "pnpx", "bunx", "uvx"];
 
+/// The package runners' flags that take the next argument as their value,
+/// so it is not mistaken for the package: `uvx --from <url> <server>`. A
+/// value can carry a token (`--from git+https://TOKEN@github.com/...`). An
+/// unknown flag is taken to be a switch, like `-y`.
+const RUNNER_VALUE_FLAGS: &[&str] = &[
+    // npx, pnpx, bunx
+    "-p",
+    "--package",
+    "-c",
+    "--call",
+    "--registry",
+    "--cache",
+    "--userconfig",
+    "-w",
+    "--workspace",
+    // uvx
+    "--from",
+    "--with",
+    "--with-editable",
+    "--with-requirements",
+    "--python",
+    "--index",
+    "--default-index",
+    "--index-url",
+    "--extra-index-url",
+    "-f",
+    "--find-links",
+    "--constraints",
+    "--overrides",
+    "--build-constraints",
+    "--index-strategy",
+    "--keyring-provider",
+    "--resolution",
+    "--prerelease",
+    "--exclude-newer",
+    "--link-mode",
+    "--cache-dir",
+    "--directory",
+    "--project",
+    "--config-file",
+    "--env-file",
+    "--color",
+    "--allow-insecure-host",
+    "-P",
+    "--upgrade-package",
+    "--reinstall-package",
+    "--refresh-package",
+];
+
 pub struct McpProxyCommand {
     pub fail_mode: FailMode,
     pub agent_id: Option<String>,
+    /// Accept the server's current tool list: replace its pin on the first
+    /// complete scan instead of comparing with it.
+    pub repin: bool,
     /// The server command and its arguments.
     pub command: Vec<String>,
 }
@@ -89,15 +189,33 @@ impl McpProxyCommand {
         };
 
         let (api_key, base_url) = resolve_session()?;
-        let client = PromptGuardClient::new(api_key, Some(base_url))?;
+        let client = Arc::new(PromptGuardClient::new(api_key, Some(base_url))?);
         self.verify_key(&client)?;
+        let agent_id = self
+            .agent_id
+            .clone()
+            .unwrap_or_else(|| default_agent_id(&self.command));
+        let session_id = session_id();
         let validator = ApiValidator {
-            client,
-            agent_id: self
-                .agent_id
-                .clone()
-                .unwrap_or_else(|| default_agent_id(&self.command)),
-            session_id: session_id(),
+            client: Arc::clone(&client),
+            agent_id: agent_id.clone(),
+            session_id: session_id.clone(),
+        };
+        let redactor = ApiRedactor {
+            client: Arc::clone(&client),
+            agent_id,
+            session_id: session_id.clone(),
+        };
+        let scanner = ApiManifestScanner { client };
+        let pins = match credentials_dir() {
+            Ok(dir) => {
+                let cwd = std::env::current_dir().and_then(|d| d.canonicalize()).ok();
+                Some(PinStore::new(dir, &self.command, cwd.as_deref()))
+            },
+            Err(e) => {
+                log(&format!("tool lists are scanned but not pinned: {e}"));
+                None
+            },
         };
 
         let mut command = Command::new(program);
@@ -131,8 +249,18 @@ impl McpProxyCommand {
         let proxy = Arc::new(Proxy {
             fail_mode: self.fail_mode,
             validator: Box::new(validator),
+            redactor: Box::new(redactor),
+            scanner: Box::new(scanner),
+            server: default_agent_id(&self.command),
+            pins,
+            withheld: Mutex::new(HashSet::new()),
             pending: Mutex::new(HashMap::new()),
             to_server: Mutex::new(Some(to_server)),
+            repin: AtomicBool::new(self.repin),
+            inspections: Permits::new(MAX_INSPECTIONS),
+            internal: Mutex::new(HashMap::new()),
+            next_internal: AtomicU64::new(0),
+            session_id: session_id.clone(),
         });
 
         let client_side = Arc::clone(&proxy);
@@ -188,7 +316,9 @@ impl McpProxyCommand {
 
 /// `mcp-proxy:<server>`, from the command's file name and, for a package
 /// runner, the package it runs. Never the full command line: arguments can
-/// carry tokens, and the agent id is sent to the API.
+/// carry tokens, and the agent id is sent to the API and stored in the pins
+/// file. So a flag's value is never taken for the package, and a package
+/// given as a URL loses its credentials, query and fragment.
 fn default_agent_id(command: &[String]) -> String {
     let name = |s: &str| {
         Path::new(s)
@@ -201,12 +331,44 @@ fn default_agent_id(command: &[String]) -> String {
     let program = name(program);
     let package = PACKAGE_RUNNERS
         .contains(&program.as_str())
-        .then(|| command[1..].iter().find(|a| !a.starts_with('-')))
+        .then(|| runner_package(&command[1..]))
         .flatten();
     match package {
-        Some(p) => format!("mcp-proxy:{program} {p}"),
+        Some(p) => format!("mcp-proxy:{program} {}", without_credentials(p)),
         None => format!("mcp-proxy:{program}"),
     }
+}
+
+/// The first argument that is neither a flag nor a flag's value.
+fn runner_package(args: &[String]) -> Option<&str> {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            return args.next().map(String::as_str);
+        }
+        if !arg.starts_with('-') {
+            return Some(arg);
+        }
+        if !arg.contains('=') && RUNNER_VALUE_FLAGS.contains(&arg.as_str()) {
+            args.next();
+        }
+    }
+    None
+}
+
+/// `arg` with a URL's userinfo (`user:pass@`, `TOKEN@`), query and fragment
+/// removed; anything that is not a URL is returned as it is.
+fn without_credentials(arg: &str) -> String {
+    let Some((scheme, rest)) = arg.split_once("://") else {
+        return arg.to_string();
+    };
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    let authority_end = rest.find('/').unwrap_or(rest.len());
+    let (authority, path) = rest.split_at(authority_end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    format!("{scheme}://{host}{path}")
 }
 
 /// One id per proxy run, so the API can group a session's calls.
@@ -246,8 +408,46 @@ fn id_key(id: &Value) -> String {
     }
 }
 
+/// Whether a request carries a non-null `params.cursor`.
+fn has_cursor(message: &Value) -> bool {
+    message
+        .pointer("/params/cursor")
+        .is_some_and(|c| !c.is_null())
+}
+
 fn method_of(message: &Value) -> Option<&str> {
     message.get("method").and_then(Value::as_str)
+}
+
+/// What a client request is waiting for, so its response is inspected for
+/// what it is: a tool result is redacted, a tool list is scanned.
+#[derive(Debug, Clone)]
+enum Awaiting {
+    ToolResult { tool: String },
+    ToolList,
+    Other,
+}
+
+impl Awaiting {
+    fn of(message: &Value) -> Self {
+        match method_of(message) {
+            Some("tools/list") => Self::ToolList,
+            _ => Self::Other,
+        }
+    }
+}
+
+struct Pending {
+    since: Instant,
+    awaiting: Awaiting,
+}
+
+/// A server message that needs the API before it is relayed: its index in a
+/// batch (0 for a single message), its pending key, and what it answers.
+struct Inspection {
+    index: usize,
+    key: Option<String>,
+    awaiting: Awaiting,
 }
 
 fn refusal(id: &Value, message: &str) -> Value {
@@ -293,13 +493,67 @@ fn parse_tool_call(message: &Value) -> std::result::Result<(String, Value), Stri
     Ok((name.to_string(), arguments))
 }
 
+/// A counting semaphore: [`Permits::acquire`] blocks while `cap` permits are
+/// out, and a [`Permit`] gives its slot back when dropped.
+struct Permits {
+    out: Mutex<usize>,
+    freed: Condvar,
+    cap: usize,
+}
+
+struct Permit(Arc<Permits>);
+
+impl Permits {
+    fn new(cap: usize) -> Arc<Self> {
+        Arc::new(Self {
+            out: Mutex::new(0),
+            freed: Condvar::new(),
+            cap,
+        })
+    }
+
+    fn acquire(self: &Arc<Self>) -> Permit {
+        let mut out = lock(&self.out);
+        while *out >= self.cap {
+            out = self.freed.wait(out).unwrap_or_else(PoisonError::into_inner);
+        }
+        *out += 1;
+        Permit(Arc::clone(self))
+    }
+}
+
+impl Drop for Permit {
+    fn drop(&mut self) {
+        *lock(&self.0.out) -= 1;
+        self.0.freed.notify_one();
+    }
+}
+
 struct Proxy {
     fail_mode: FailMode,
     validator: Box<dyn Validator>,
+    redactor: Box<dyn Redactor>,
+    scanner: Box<dyn ManifestScanner>,
+    /// The server's name in logs and the pins file (`mcp-proxy:<program>`).
+    server: String,
+    /// `None` when there is no home directory to keep pins in.
+    pins: Option<PinStore>,
+    /// Tools removed from a tool list for a finding; a call to one is refused.
+    withheld: Mutex<HashSet<String>>,
     /// Client requests awaiting a server response, by serialized id.
-    pending: Mutex<HashMap<String, Instant>>,
+    pending: Mutex<HashMap<String, Pending>>,
     /// `None` once the client has gone and the server's stdin is closed.
     to_server: Mutex<Option<ChildStdin>>,
+    /// `--repin`, until the first complete scan has replaced the pin.
+    repin: AtomicBool,
+    /// Bounds the inspection threads ([`MAX_INSPECTIONS`]).
+    inspections: Arc<Permits>,
+    /// Requests the proxy sent the server itself, by id, and where their
+    /// answers go.
+    internal: Mutex<HashMap<String, mpsc::Sender<Value>>>,
+    next_internal: AtomicU64,
+    /// This run's id, which makes the proxy's own request ids unique.
+    session_id: String,
 }
 
 impl Proxy {
@@ -363,9 +617,15 @@ impl Proxy {
         };
         let id = id_of(message).cloned();
 
+        if method == "tools/list" && has_cursor(message) {
+            if let Some(id) = &id {
+                self.write_client_value(&refusal(id, CURSOR_REFUSED));
+            }
+            return;
+        }
         if method != "tools/call" {
             if let Some(id) = &id {
-                if let Err(why) = self.track(&[id_key(id)]) {
+                if let Err(why) = self.track(&[(id_key(id), Awaiting::of(message))]) {
                     self.write_client_value(&refusal(id, why));
                     return;
                 }
@@ -394,8 +654,22 @@ impl Proxy {
                 return;
             },
         };
+        if lock(&self.withheld).contains(&tool) {
+            log(&format!(
+                "refused tools/call `{tool}`: the tool was withheld from the tool list"
+            ));
+            self.write_client_value(&refusal(
+                &id,
+                &format!(
+                    "PromptGuard refused tool call `{tool}`: the tool was withheld from this \
+                     server's tool list for a security finding"
+                ),
+            ));
+            return;
+        }
         let key = id_key(&id);
-        if let Err(why) = self.track(std::slice::from_ref(&key)) {
+        let awaiting = Awaiting::ToolResult { tool: tool.clone() };
+        if let Err(why) = self.track(&[(key.clone(), awaiting)]) {
             self.write_client_value(&refusal(&id, why));
             return;
         }
@@ -471,6 +745,13 @@ impl Proxy {
             refuse_all("a batch may contain only JSON-RPC objects");
             return;
         }
+        if items
+            .iter()
+            .any(|m| method_of(m) == Some("tools/list") && has_cursor(m))
+        {
+            refuse_all(CURSOR_REFUSED);
+            return;
+        }
         if items.iter().any(|m| method_of(m) == Some("tools/call")) {
             refuse_all(
                 "a batch containing tools/call cannot be checked; send tool calls one at a time",
@@ -481,7 +762,11 @@ impl Proxy {
             refuse_all(TOO_MANY_PENDING);
             return;
         }
-        let keys: Vec<String> = requests.iter().copied().map(id_key).collect();
+        let keys: Vec<(String, Awaiting)> = items
+            .iter()
+            .filter(|m| method_of(m).is_some())
+            .filter_map(|m| id_of(m).map(|id| (id_key(id), Awaiting::of(m))))
+            .collect();
         if let Err(why) = self.track(&keys) {
             refuse_all(why);
             return;
@@ -497,13 +782,13 @@ impl Proxy {
     /// controls: the cap is checked first, duplicates are found by hashing,
     /// and expired entries are swept only when the set is otherwise full (an
     /// expired id is not a duplicate, swept or not).
-    fn track(&self, keys: &[String]) -> std::result::Result<(), &'static str> {
+    fn track(&self, keys: &[(String, Awaiting)]) -> std::result::Result<(), &'static str> {
         if keys.len() > MAX_PENDING {
             return Err(TOO_MANY_PENDING);
         }
         let mut pending = lock(&self.pending);
         if pending.len() + keys.len() > MAX_PENDING {
-            pending.retain(|_, since| since.elapsed() < PENDING_TTL);
+            pending.retain(|_, p| p.since.elapsed() < PENDING_TTL);
             if pending.len() + keys.len() > MAX_PENDING {
                 return Err(TOO_MANY_PENDING);
             }
@@ -511,17 +796,42 @@ impl Proxy {
         let live = |key: &String| {
             pending
                 .get(key)
-                .is_some_and(|since| since.elapsed() < PENDING_TTL)
+                .is_some_and(|p| p.since.elapsed() < PENDING_TTL)
         };
+        let lists = keys
+            .iter()
+            .filter(|(_, a)| matches!(a, Awaiting::ToolList))
+            .count();
+        if lists > 0
+            && lists
+                + pending
+                    .values()
+                    .filter(|p| matches!(p.awaiting, Awaiting::ToolList))
+                    .count()
+                > MAX_LIST_REQUESTS
+        {
+            return Err(TOO_MANY_LISTS);
+        }
         let mut seen = HashSet::with_capacity(keys.len());
-        if keys.iter().any(|key| live(key) || !seen.insert(key)) {
+        if keys.iter().any(|(key, _)| live(key) || !seen.insert(key)) {
             return Err("a request with this id is already pending");
         }
         let now = Instant::now();
-        for key in keys {
-            pending.insert(key.clone(), now);
+        for (key, awaiting) in keys {
+            pending.insert(
+                key.clone(),
+                Pending {
+                    since: now,
+                    awaiting: awaiting.clone(),
+                },
+            );
         }
         Ok(())
+    }
+
+    /// What a pending request is waiting for, leaving it pending.
+    fn awaiting(&self, key: &str) -> Option<Awaiting> {
+        lock(&self.pending).get(key).map(|p| p.awaiting.clone())
     }
 
     fn untrack(&self, key: &str) {
@@ -543,23 +853,22 @@ impl Proxy {
 
     // -- server -> client ---------------------------------------------------
 
-    fn relay_server_to_client(&self, from_server: ChildStdout) {
+    fn relay_server_to_client(self: &Arc<Self>, from_server: ChildStdout) {
         let mut reader = BufReader::new(from_server);
         loop {
             match line::read_line(&mut reader, MAX_LINE_BYTES) {
                 Ok(None) => break,
-                Ok(Some(Line::Complete(raw))) => self.handle_server_line(&raw),
+                Ok(Some(Line::Complete(raw))) => self.handle_server_line(raw),
                 Ok(Some(Line::Oversized(prefix))) => {
-                    // Streamed through unread, so memory stays bounded and a
-                    // large tool result still arrives. Its pending slot, if
-                    // any, expires after PENDING_TTL.
-                    log("relayed a server message over 4 MiB without inspecting it");
-                    let stdout = io::stdout();
-                    let mut out = stdout.lock();
-                    let streamed = out.write_all(&prefix).is_ok()
-                        && line::finish_line(&mut reader, Some(&mut out)).is_ok();
-                    let _ = out.flush();
-                    if !streamed {
+                    // Too large to redact or scan, so it is dropped in every
+                    // mode: relaying it would let a server skip both by
+                    // padding. Its ids are read as it is skipped, so each
+                    // request it answered gets an error instead of waiting.
+                    let mut ids = line::IdScanner::default();
+                    ids.feed(&prefix);
+                    let skipped = line::finish_line(&mut reader, Some(&mut ids));
+                    self.drop_oversized(&ids);
+                    if skipped.is_err() {
                         break;
                     }
                 },
@@ -571,26 +880,380 @@ impl Proxy {
         }
     }
 
-    /// Relay a server line byte for byte, first freeing the pending slot of
-    /// each response in it. (acebot712/promptguard#954 inspects responses
-    /// here, to redact tool results and pin tool lists.)
-    fn handle_server_line(&self, raw: &[u8]) {
-        match serde_json::from_slice::<Value>(raw) {
-            Ok(message @ Value::Object(_)) => self.answered(&message),
-            Ok(Value::Array(items)) => items.iter().for_each(|m| self.answered(m)),
-            _ => {},
+    /// Answer each pending request a dropped oversized server line answered.
+    fn drop_oversized(&self, ids: &line::IdScanner) {
+        log(
+            "dropped a server message over 4 MiB in every fail mode: too large to redact \
+             or scan, so it was not relayed",
+        );
+        for id in ids.response_ids() {
+            let key = id_key(id);
+            if self.awaiting(&key).is_none() {
+                continue;
+            }
+            self.untrack(&key);
+            self.write_client_value(&refusal(
+                id,
+                "PromptGuard withheld the server's answer: it is over 4 MiB, too large to \
+                 redact or scan",
+            ));
         }
-        self.write_client(raw);
     }
 
-    /// A response (an id and no method) ends that request's pending slot.
-    /// Server requests and notifications carry a method and hold none.
-    fn answered(&self, message: &Value) {
-        if method_of(message).is_none() {
-            if let Some(id) = id_of(message) {
-                self.untrack(&id_key(id));
+    /// Relay a server line. A line holding a tool result or a tool list is
+    /// inspected on its own thread and relayed when that is done; any other
+    /// line is relayed byte for byte at once. Either way a response frees its
+    /// request's pending slot, once it has been written.
+    fn handle_server_line(self: &Arc<Self>, raw: Vec<u8>) {
+        let parsed = serde_json::from_slice::<Value>(&raw).ok();
+        // The answer to a request the proxy made itself (a later page of a
+        // tool list) goes to the thread waiting for it, never to the client.
+        if let Some(message @ Value::Object(_)) = &parsed {
+            let waiter = message
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|_| method_of(message).is_none())
+                .and_then(|id| lock(&self.internal).remove(id));
+            if let Some(waiter) = waiter {
+                let _ = waiter.send(message.clone());
+                return;
             }
         }
+        let items: Vec<&Value> = match &parsed {
+            Some(message @ Value::Object(_)) => vec![message],
+            Some(Value::Array(items)) => items.iter().collect(),
+            _ => Vec::new(),
+        };
+        let mut inspections = Vec::new();
+        for (index, message) in items.into_iter().enumerate() {
+            // A response is an id and no method. Server requests and
+            // notifications carry a method and hold no slot.
+            if method_of(message).is_some() {
+                continue;
+            }
+            let key = id_of(message).map(id_key);
+            let awaiting = key.as_deref().and_then(|k| self.awaiting(k));
+            // A tool call answered with an error is inspected too: servers
+            // put the failed call's output in it.
+            let result = message.get("result");
+            let call_error = message.get("error").is_some()
+                && matches!(awaiting, Some(Awaiting::ToolResult { .. }));
+            if result.is_none() && !call_error {
+                key.inspect(|k| self.untrack(k));
+                continue;
+            }
+            let awaiting = match awaiting {
+                Some(a @ (Awaiting::ToolResult { .. } | Awaiting::ToolList)) => a,
+                // A result whose request is no longer pending (it expired) is
+                // still redacted if it has a tool result's shape.
+                None if result
+                    .and_then(|r| r.get("content"))
+                    .is_some_and(Value::is_array) =>
+                {
+                    Awaiting::ToolResult {
+                        tool: "unknown".to_string(),
+                    }
+                },
+                _ => {
+                    key.inspect(|k| self.untrack(k));
+                    continue;
+                },
+            };
+            inspections.push(Inspection {
+                index,
+                key,
+                awaiting,
+            });
+        }
+
+        let Some(parsed) = parsed.filter(|_| !inspections.is_empty()) else {
+            self.write_client(&raw);
+            return;
+        };
+        // Blocks the server reader while MAX_INSPECTIONS are running: the
+        // backpressure that bounds the threads below.
+        let permit = self.inspections.acquire();
+        let line = Arc::new((raw, parsed, inspections));
+        let (proxy, work) = (Arc::clone(self), Arc::clone(&line));
+        let spawned = thread::Builder::new()
+            .name("mcp-proxy-inspect".to_string())
+            .spawn(move || {
+                proxy.inspect_and_relay(&work.0, work.1.clone(), &work.2);
+                drop(permit);
+            });
+        if let Err(e) = spawned {
+            // Inspect it here instead, holding up the server's later lines,
+            // rather than relay it uninspected or not at all.
+            log(&format!("could not start an inspection thread: {e}"));
+            self.inspect_and_relay(&line.0, line.1.clone(), &line.2);
+        }
+    }
+
+    /// Redact the tool results and review the tool lists in one server line,
+    /// then relay it: as the server sent it when nothing changed.
+    fn inspect_and_relay(&self, raw: &[u8], mut parsed: Value, inspections: &[Inspection]) {
+        let mut changed = false;
+        for inspection in inspections {
+            let message = match &mut parsed {
+                Value::Array(items) => &mut items[inspection.index],
+                single => single,
+            };
+            if let Some(replacement) = self.inspect(message, &inspection.awaiting) {
+                *message = replacement;
+                changed = true;
+            }
+        }
+        if changed {
+            self.write_client(&canonical(&parsed));
+        } else {
+            self.write_client(raw);
+        }
+        for key in inspections.iter().filter_map(|i| i.key.as_deref()) {
+            self.untrack(key);
+        }
+    }
+
+    /// The message to relay in place of `message`, a response with a result
+    /// (or a tool call's error), or `None` to relay it as it is.
+    fn inspect(&self, message: &Value, awaiting: &Awaiting) -> Option<Value> {
+        let id = message.get("id").cloned().unwrap_or(Value::Null);
+        match awaiting {
+            Awaiting::ToolResult { tool } => {
+                let (field, outcome) = if let Some(result) = message.get("result") {
+                    let outcome = redact::review(
+                        self.fail_mode,
+                        tool,
+                        result,
+                        self.redactor.as_ref(),
+                        redact::RESULT_DEADLINE,
+                    );
+                    ("result", outcome)
+                } else {
+                    let error = message.get("error")?;
+                    let outcome = redact::review_error(
+                        self.fail_mode,
+                        tool,
+                        error,
+                        self.redactor.as_ref(),
+                        redact::RESULT_DEADLINE,
+                    );
+                    ("error", outcome)
+                };
+                let with_result = |result: Value| {
+                    let mut out = message.clone();
+                    out[field] = result;
+                    out
+                };
+                match outcome {
+                    redact::Outcome::Unchanged => None,
+                    redact::Outcome::Redacted(result) => {
+                        log(&format!("redacted the result of tools/call `{tool}`"));
+                        Some(with_result(result))
+                    },
+                    redact::Outcome::Unredacted { result, why } => {
+                        log(&format!(
+                            "unredacted: relayed the result of tools/call `{tool}` without \
+                             PromptGuard redaction (fail mode {}): {why}",
+                            self.fail_mode.as_str()
+                        ));
+                        Some(with_result(result))
+                    },
+                    redact::Outcome::Withhold { reason } => {
+                        log(&format!(
+                            "withheld the result of tools/call `{tool}`: {reason}"
+                        ));
+                        Some(refusal(
+                            &id,
+                            &format!(
+                                "PromptGuard withheld the result of tool call `{tool}`: {reason}"
+                            ),
+                        ))
+                    },
+                }
+            },
+            Awaiting::ToolList => match self.collect_tool_list(message) {
+                Ok(Some(tools)) => self.review_tool_list(&id, message, &tools),
+                Ok(None) => None,
+                Err(reason) => {
+                    log(&format!("refused tools/list: {reason}"));
+                    Some(refusal(
+                        &id,
+                        &format!("PromptGuard refused this server's tool list: {reason}"),
+                    ))
+                },
+            },
+            Awaiting::Other => None,
+        }
+    }
+
+    /// Every tool the server lists: the first page's, then each later page's,
+    /// fetched from the server by the proxy itself, so the whole list is
+    /// scanned and pinned. A server answering `tools: []` and a cursor must
+    /// not get past the pin by putting its tools on page two. `Ok(None)` is a
+    /// result with no tool list to read; `Err` refuses the list in every
+    /// mode, since a list the proxy cannot finish reading cannot be pinned.
+    fn collect_tool_list(
+        &self,
+        message: &Value,
+    ) -> std::result::Result<Option<Vec<Value>>, String> {
+        let Some(first) = message.pointer("/result/tools").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        let mut tools = first.clone();
+        let mut page = message.get("result").cloned().unwrap_or(Value::Null);
+        let mut cursors = HashSet::new();
+        loop {
+            let cursor = match page.get("nextCursor") {
+                None | Some(Value::Null) => return Ok(Some(tools)),
+                Some(Value::String(c)) => c.clone(),
+                Some(_) => return Err("its nextCursor is not text".to_string()),
+            };
+            if !cursors.insert(cursor.clone()) {
+                return Err("its pages repeat a cursor, so the list never ends".to_string());
+            }
+            if cursors.len() > MAX_PAGES {
+                return Err(format!("it has more than {MAX_PAGES} pages"));
+            }
+            page = self.fetch_page(&cursor)?;
+            let Some(more) = page.get("tools").and_then(Value::as_array) else {
+                return Err("a later page has no tools array".to_string());
+            };
+            tools.extend(more.iter().cloned());
+            if tools.len() > MAX_LISTED_TOOLS {
+                return Err(format!("it lists more than {MAX_LISTED_TOOLS} tools"));
+            }
+        }
+    }
+
+    /// Ask the server for the tool list page at `cursor`, under an id of the
+    /// proxy's own, and wait for its answer, which is not relayed.
+    fn fetch_page(&self, cursor: &str) -> std::result::Result<Value, String> {
+        let n = self.next_internal.fetch_add(1, Ordering::Relaxed);
+        let id = format!("promptguard-mcp-proxy:{}:{n}", self.session_id);
+        let (tx, rx) = mpsc::channel();
+        lock(&self.internal).insert(id.clone(), tx);
+        self.write_server(&canonical(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "tools/list",
+            "params": {"cursor": cursor},
+        })));
+        let answer = rx.recv_timeout(check::CHECK_TIMEOUT);
+        lock(&self.internal).remove(&id);
+        match answer {
+            Ok(message) => message.get("result").cloned().ok_or_else(|| {
+                "the server answered a request for a later page with an error".to_string()
+            }),
+            Err(_) => Err(format!(
+                "the server did not send a later page within {}s",
+                check::CHECK_TIMEOUT.as_secs()
+            )),
+        }
+    }
+
+    fn review_tool_list(&self, id: &Value, message: &Value, tools: &[Value]) -> Option<Value> {
+        let loaded = self.pins.as_ref().map(PinStore::load);
+        let (stored, writable) = loaded
+            .as_ref()
+            .map_or((None, false), |l| (l.pin.clone(), l.writable));
+        let pins_path = self.pins.as_ref().map_or_else(
+            || "the pins file".to_string(),
+            |p| p.path().display().to_string(),
+        );
+        if let Some(problem) = loaded.and_then(|l| l.problem) {
+            log(&format!("the pins file {pins_path}: {problem}"));
+        }
+        let review = manifest::review(
+            &manifest::Context {
+                mode: self.fail_mode,
+                server: &self.server,
+                pins_path: &pins_path,
+                stored: stored.as_ref(),
+                now: chrono::Utc::now().to_rfc3339(),
+                repin: self.repin.load(Ordering::Relaxed),
+            },
+            tools,
+            self.scanner.as_ref(),
+        );
+        review.log.iter().for_each(|line| log(line));
+
+        if let Some(reason) = review.refuse {
+            log(&format!("refused tools/list: {reason}"));
+            return Some(refusal(
+                id,
+                &format!("PromptGuard refused this server's tool list: {reason}"),
+            ));
+        }
+        if let (Some(pin), Some(store), true) = (&review.new_pin, &self.pins, writable) {
+            match store.save(pin) {
+                Ok(()) if review.repinned => {
+                    // Once per run: a change later in the session is compared
+                    // with the list just accepted.
+                    self.repin.store(false, Ordering::Relaxed);
+                    log(&format!(
+                        "re-pinned the tool list of `{}` ({} tools) in {pins_path}, as --repin \
+                         asked: its old pin was replaced; no other server's pin changed",
+                        self.server,
+                        tools.len()
+                    ));
+                },
+                Ok(()) => {
+                    self.repin.store(false, Ordering::Relaxed);
+                    log(&format!(
+                        "pinned the tool list of `{}` ({} tools) in {pins_path}",
+                        self.server,
+                        tools.len()
+                    ));
+                },
+                Err(e) => log(&format!(
+                    "could not save the tool list's pin to {pins_path}: {e}"
+                )),
+            }
+        }
+        if review.matches_pin {
+            log(&format!(
+                "the tool list of `{}` ({} tools) matches its pin",
+                self.server,
+                tools.len()
+            ));
+        }
+
+        // A name is withheld when any tool of that name is, so a duplicate
+        // cannot carry a withheld tool's calls through.
+        let name_of = |t: &Value| t.get("name").and_then(Value::as_str).map(str::to_string);
+        let withheld_names: HashSet<String> = review
+            .withhold
+            .iter()
+            .filter_map(|&i| tools.get(i).and_then(name_of))
+            .collect();
+        {
+            let mut withheld = lock(&self.withheld);
+            for name in tools.iter().filter_map(name_of) {
+                if withheld_names.contains(&name) {
+                    withheld.insert(name);
+                } else {
+                    withheld.remove(&name);
+                }
+            }
+        }
+        // A list read from one page and with nothing withheld is relayed as
+        // the server sent it; otherwise the whole list goes in one page.
+        let paged = message.pointer("/result/nextCursor").is_some();
+        if review.withhold.is_empty() && !paged {
+            return None;
+        }
+        let kept: Vec<Value> = tools
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| !review.withhold.contains(i))
+            .map(|(_, t)| t.clone())
+            .collect();
+        let mut out = message.clone();
+        out["result"]["tools"] = Value::Array(kept);
+        if let Some(result) = out["result"].as_object_mut() {
+            result.remove("nextCursor");
+        }
+        Some(out)
     }
 
     fn write_client(&self, raw: &[u8]) {
@@ -637,6 +1300,57 @@ mod tests {
             default_agent_id(&cmd(&["python3", "server.py"])),
             "mcp-proxy:python3"
         );
+    }
+
+    #[test]
+    fn default_agent_id_skips_flag_values_and_strips_url_credentials() {
+        for (command, expected) in [
+            (
+                &["uvx", "--from", "git+https://TOKEN@github.com/x/y", "srv"][..],
+                "mcp-proxy:uvx srv",
+            ),
+            (
+                &["uvx", "--from=git+https://TOKEN@github.com/x/y", "srv"][..],
+                "mcp-proxy:uvx srv",
+            ),
+            (
+                &[
+                    "uvx",
+                    "--with",
+                    "httpx",
+                    "--python",
+                    "3.12",
+                    "mcp-server-fetch",
+                ][..],
+                "mcp-proxy:uvx mcp-server-fetch",
+            ),
+            (
+                &["uvx", "git+https://user:pass@github.com/x/y?token=abc#frag"][..],
+                "mcp-proxy:uvx git+https://github.com/x/y",
+            ),
+            (
+                &[
+                    "npx",
+                    "-y",
+                    "--registry",
+                    "https://u:p@npm.example",
+                    "@scope/server",
+                ][..],
+                "mcp-proxy:npx @scope/server",
+            ),
+            (
+                &["npx", "--package", "https://TOKEN@host/pkg.tgz", "server"][..],
+                "mcp-proxy:npx server",
+            ),
+            (
+                &["npx", "https://TOKEN@host/pkg.tgz"][..],
+                "mcp-proxy:npx https://host/pkg.tgz",
+            ),
+        ] {
+            let id = default_agent_id(&cmd(command));
+            assert_eq!(id, expected, "{command:?}");
+            assert!(!id.contains("TOKEN") && !id.contains("pass"), "{id}");
+        }
     }
 
     #[test]
