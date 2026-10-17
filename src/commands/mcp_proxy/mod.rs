@@ -655,33 +655,16 @@ impl Proxy {
             match line::read_line(&mut reader, MAX_LINE_BYTES) {
                 Ok(None) => break,
                 Ok(Some(Line::Complete(raw))) => self.handle_server_line(raw),
-                Ok(Some(Line::Oversized(_))) if self.fail_mode == FailMode::Closed => {
-                    // Too large to redact or scan, and its id is unreadable,
-                    // so there is no error to answer with. Its pending slot
-                    // expires after PENDING_TTL; the client times it out.
-                    log(
-                        "dropped a server message over 4 MiB: too large to redact or scan, \
-                         and --fail-mode is closed",
-                    );
-                    if line::finish_line(&mut reader, None).is_err() {
-                        break;
-                    }
-                },
                 Ok(Some(Line::Oversized(prefix))) => {
-                    // Streamed through unread, so memory stays bounded and a
-                    // large tool result still arrives. Its pending slot, if
-                    // any, expires after PENDING_TTL.
-                    log(&format!(
-                        "relayed a server message over 4 MiB without inspecting it: a tool \
-                         result in it is unredacted, a tool list unscanned (fail mode {})",
-                        self.fail_mode.as_str()
-                    ));
-                    let stdout = io::stdout();
-                    let mut out = stdout.lock();
-                    let streamed = out.write_all(&prefix).is_ok()
-                        && line::finish_line(&mut reader, Some(&mut out)).is_ok();
-                    let _ = out.flush();
-                    if !streamed {
+                    // Too large to redact or scan, so it is dropped in every
+                    // mode: relaying it would let a server skip both by
+                    // padding. Its ids are read as it is skipped, so each
+                    // request it answered gets an error instead of waiting.
+                    let mut ids = line::IdScanner::default();
+                    ids.feed(&prefix);
+                    let skipped = line::finish_line(&mut reader, Some(&mut ids));
+                    self.drop_oversized(&ids);
+                    if skipped.is_err() {
                         break;
                     }
                 },
@@ -690,6 +673,26 @@ impl Proxy {
                     break;
                 },
             }
+        }
+    }
+
+    /// Answer each pending request a dropped oversized server line answered.
+    fn drop_oversized(&self, ids: &line::IdScanner) {
+        log(
+            "dropped a server message over 4 MiB in every fail mode: too large to redact \
+             or scan, so it was not relayed",
+        );
+        for id in ids.response_ids() {
+            let key = id_key(id);
+            if self.awaiting(&key).is_none() {
+                continue;
+            }
+            self.untrack(&key);
+            self.write_client_value(&refusal(
+                id,
+                "PromptGuard withheld the server's answer: it is over 4 MiB, too large to \
+                 redact or scan",
+            ));
         }
     }
 
@@ -877,16 +880,21 @@ impl Proxy {
             ));
         }
 
+        // A name is withheld when any tool of that name is, so a duplicate
+        // cannot carry a withheld tool's calls through.
+        let name_of = |t: &Value| t.get("name").and_then(Value::as_str).map(str::to_string);
+        let withheld_names: HashSet<String> = review
+            .withhold
+            .iter()
+            .filter_map(|&i| tools.get(i).and_then(name_of))
+            .collect();
         {
             let mut withheld = lock(&self.withheld);
-            for name in tools
-                .iter()
-                .filter_map(|t| t.get("name").and_then(Value::as_str))
-            {
-                if review.withhold.contains(name) {
-                    withheld.insert(name.to_string());
+            for name in tools.iter().filter_map(name_of) {
+                if withheld_names.contains(&name) {
+                    withheld.insert(name);
                 } else {
-                    withheld.remove(name);
+                    withheld.remove(&name);
                 }
             }
         }
@@ -895,12 +903,9 @@ impl Proxy {
         }
         let kept: Vec<Value> = tools
             .iter()
-            .filter(|t| {
-                !t.get("name")
-                    .and_then(Value::as_str)
-                    .is_some_and(|n| review.withhold.contains(n))
-            })
-            .cloned()
+            .enumerate()
+            .filter(|(i, _)| !review.withhold.contains(i))
+            .map(|(_, t)| t.clone())
             .collect();
         let mut out = message.clone();
         out["result"]["tools"] = Value::Array(kept);

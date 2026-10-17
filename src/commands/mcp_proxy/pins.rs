@@ -108,8 +108,12 @@ fn is_pin(s: &str) -> bool {
 
 /// The SHA-256 of the command line as a JSON array, in hex.
 pub fn server_key(command: &[String]) -> String {
-    let encoded = serde_json::to_vec(command).unwrap_or_default();
-    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, &encoded);
+    sha256_hex(&serde_json::to_vec(command).unwrap_or_default())
+}
+
+/// The SHA-256 of `bytes`, as 64 lowercase hex digits.
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, bytes);
     digest
         .as_ref()
         .iter()

@@ -1442,24 +1442,6 @@ impl Proxy {
         self.send(&json!({"jsonrpc": "2.0", "id": id, "method": "tools/list"}));
         self.recv_id(id)
     }
-
-    /// Whether any stdout message up to a ping's answer carries `id`.
-    fn answered_before_a_ping(&mut self, id: u64) -> bool {
-        let ping = 9_500_000 + u64::from(self.syncs);
-        self.syncs += 1;
-        self.send(&json!({"jsonrpc": "2.0", "id": ping, "method": "ping"}));
-        let mut seen = false;
-        loop {
-            let line = self.recv_line();
-            let Ok(value) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            seen |= value["id"] == json!(id);
-            if value["id"] == json!(ping) {
-                return seen;
-            }
-        }
-    }
 }
 
 const EMAIL_TEXT: &str = "write to jane@example.com today";

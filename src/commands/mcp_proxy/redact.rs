@@ -31,9 +31,9 @@ const MAX_REQUEST_CHARS: usize = 90_000;
 /// Messages per guard request; the endpoint takes 512.
 const MAX_REQUEST_MESSAGES: usize = 512;
 
-/// Guard requests one result may cost. Each is a scan against the plan, so a
-/// result needing more (over about 1.4 million characters of text) is not
-/// redacted, and the fail mode decides.
+/// Guard requests one result may cost. Each is a scan against the plan, so
+/// in a result needing more (over about 1.4 million characters of text) only
+/// the text these cover is redacted, and the fail mode decides the rest.
 const MAX_REQUESTS: usize = 16;
 
 /// The guard endpoint joins messages with U+001E to scan them as one text,
@@ -138,33 +138,36 @@ pub fn review(mode: FailMode, tool: &str, result: &Value, api: &dyn Redactor) ->
     let mut pieces = pieces;
     let batches = batches(&pieces);
 
-    let failure = if batches.len() > MAX_REQUESTS {
-        Some(ApiFailure::ContentRefused(format!(
-            "the result has more text than {MAX_REQUESTS} redaction requests take"
-        )))
-    } else {
-        let mut failure = None;
-        for batch in batches {
-            let texts: Vec<String> = pieces[batch.clone()]
-                .iter()
-                .map(|p| p.original.replace(RECORD_SEPARATOR, "\u{fffd}"))
-                .collect();
-            match answer(api.redact(tool, &texts), texts.len()) {
-                Ok(Verdict::Allow) => {},
-                Ok(Verdict::Redact(redacted)) => {
-                    for (piece, text) in pieces[batch].iter_mut().zip(redacted) {
-                        piece.redacted = Some(text);
-                    }
-                },
-                Ok(Verdict::Block(reason)) => return Outcome::Withhold { reason },
-                Err(e) => {
-                    failure = Some(e);
-                    break;
-                },
-            }
+    // A result needing more than MAX_REQUESTS still has its first ones
+    // sent, so a block in them is enforced; the text past them is left to
+    // the fail mode. Sending nothing would skip the guard's block.
+    let over = batches.len() > MAX_REQUESTS;
+    let mut failure = None;
+    for batch in batches.into_iter().take(MAX_REQUESTS) {
+        let texts: Vec<String> = pieces[batch.clone()]
+            .iter()
+            .map(|p| p.original.replace(RECORD_SEPARATOR, "\u{fffd}"))
+            .collect();
+        match answer(api.redact(tool, &texts), texts.len()) {
+            Ok(Verdict::Allow) => {},
+            Ok(Verdict::Redact(redacted)) => {
+                for (piece, text) in pieces[batch].iter_mut().zip(redacted) {
+                    piece.redacted = Some(text);
+                }
+            },
+            Ok(Verdict::Block(reason)) => return Outcome::Withhold { reason },
+            Err(e) => {
+                failure = Some(e);
+                break;
+            },
         }
-        failure
-    };
+    }
+    if over && failure.is_none() {
+        failure = Some(ApiFailure::ContentRefused(format!(
+            "the result has more text than {MAX_REQUESTS} redaction requests take; the text \
+             past them was not redacted"
+        )));
+    }
 
     let rebuilt = rebuild(result, &slots, &pieces);
     match failure {
