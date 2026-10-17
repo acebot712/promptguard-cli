@@ -2019,3 +2019,45 @@ fn tools_a_scan_never_reaches_are_withheld_in_every_mode() {
         proxy.wait_stderr("did not reach");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Inspection threads are bounded
+// ---------------------------------------------------------------------------
+
+/// The most tool results and tool lists the proxy inspects at once.
+const MAX_INSPECTIONS: usize = 64;
+
+/// Results whose id nobody is waiting for still get redacted, each on its own
+/// thread; a server flooding them must not start a thread apiece. The proxy
+/// stops reading the server while the cap is full, and drops none.
+#[test]
+fn inspections_are_bounded_and_none_are_dropped() {
+    let api = FakeApi::guard(Endpoint::Slow(Duration::from_millis(300)));
+    let mut proxy = Proxy::start(&api.base_url, &[]);
+    proxy.initialize();
+
+    let count = 200;
+    proxy.send(
+        &json!({"jsonrpc": "2.0", "id": 250, "method": "test/flood", "params": {"count": count}}),
+    );
+    let mut seen = std::collections::HashSet::new();
+    let mut answered = false;
+    while seen.len() < count || !answered {
+        let Ok(value) = serde_json::from_str::<Value>(&proxy.recv_line()) else {
+            continue;
+        };
+        if value["id"] == json!(250) {
+            answered = true;
+        } else if let Some(id) = value["id"].as_str().filter(|i| i.starts_with("flood-")) {
+            let text = value["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.ends_with("[EMAIL_REDACTED]"), "{value}");
+            seen.insert(id.to_string());
+        }
+    }
+    assert_eq!(api.requests_to("/guard").len(), count);
+    let max = api.max_concurrent_guard_requests();
+    assert!(
+        max <= MAX_INSPECTIONS,
+        "{max} results were inspected at once; the cap is {MAX_INSPECTIONS}"
+    );
+}
