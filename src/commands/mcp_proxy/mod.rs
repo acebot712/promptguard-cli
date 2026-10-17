@@ -1187,6 +1187,57 @@ mod tests {
     }
 
     #[test]
+    fn default_agent_id_skips_flag_values_and_strips_url_credentials() {
+        for (command, expected) in [
+            (
+                &["uvx", "--from", "git+https://TOKEN@github.com/x/y", "srv"][..],
+                "mcp-proxy:uvx srv",
+            ),
+            (
+                &["uvx", "--from=git+https://TOKEN@github.com/x/y", "srv"][..],
+                "mcp-proxy:uvx srv",
+            ),
+            (
+                &[
+                    "uvx",
+                    "--with",
+                    "httpx",
+                    "--python",
+                    "3.12",
+                    "mcp-server-fetch",
+                ][..],
+                "mcp-proxy:uvx mcp-server-fetch",
+            ),
+            (
+                &["uvx", "git+https://user:pass@github.com/x/y?token=abc#frag"][..],
+                "mcp-proxy:uvx git+https://github.com/x/y",
+            ),
+            (
+                &[
+                    "npx",
+                    "-y",
+                    "--registry",
+                    "https://u:p@npm.example",
+                    "@scope/server",
+                ][..],
+                "mcp-proxy:npx @scope/server",
+            ),
+            (
+                &["npx", "--package", "https://TOKEN@host/pkg.tgz", "server"][..],
+                "mcp-proxy:npx server",
+            ),
+            (
+                &["npx", "https://TOKEN@host/pkg.tgz"][..],
+                "mcp-proxy:npx https://host/pkg.tgz",
+            ),
+        ] {
+            let id = default_agent_id(&cmd(command));
+            assert_eq!(id, expected, "{command:?}");
+            assert!(!id.contains("TOKEN") && !id.contains("pass"), "{id}");
+        }
+    }
+
+    #[test]
     fn tool_call_arguments_must_be_an_object() {
         let call =
             |params: Value| parse_tool_call(&json!({"method": "tools/call", "params": params}));

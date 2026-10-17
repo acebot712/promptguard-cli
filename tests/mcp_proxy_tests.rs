@@ -2309,3 +2309,55 @@ fn repin_accepts_the_current_list_and_leaves_other_pins_alone() {
     let (proxy, _) = list_run(&api, home.path(), &before, &[], &["--instance=b"]);
     proxy.wait_stderr("matches its pin");
 }
+
+// ---------------------------------------------------------------------------
+// The server's label never carries a secret
+// ---------------------------------------------------------------------------
+
+/// The label (`mcp-proxy:uvx srv`) is stored in the pins file, logged, and
+/// sent to the API as the agent id, so a flag's value or a URL's credentials
+/// must never end up in it.
+#[cfg(unix)]
+#[test]
+fn a_token_in_a_package_runner_url_never_reaches_the_pins_file_logs_or_api() {
+    let api = FakeApi::start();
+    let home = TempDir::new().unwrap();
+    let uvx = wrapper_script(home.path(), "uvx");
+    let mut proxy = Proxy::launch(&Launch {
+        home: home.path(),
+        cwd: home.path(),
+        program: Some(&uvx),
+        base_url: &api.base_url,
+        flags: &[],
+        server_args: &[
+            "--from",
+            "git+https://ghp_SEKRETTOKEN@github.com/x/y",
+            "srv",
+        ],
+        env: &[],
+    });
+    proxy.initialize();
+    assert_eq!(tool_names(&proxy.list_tools(280)).len(), 2);
+    let (tool, args) = READ_ONLY;
+    assert_relayed(&proxy.call(281, tool, &args()), tool);
+    let stderr = proxy.wait_stderr("pinned");
+
+    let pins = std::fs::read_to_string(pins_path(home.path())).unwrap();
+    let pins_json: Value = serde_json::from_str(&pins).unwrap();
+    let label = pins_json["servers"]
+        .as_object()
+        .unwrap()
+        .values()
+        .next()
+        .unwrap()["server"]
+        .clone();
+    assert_eq!(label, "mcp-proxy:uvx srv", "{pins}");
+    let agent_id = api.requests()[0].body["agent_id"].clone();
+    assert_eq!(agent_id, "mcp-proxy:uvx srv");
+    for (what, text) in [("pins file", &pins), ("stderr", &stderr)] {
+        assert!(
+            !text.contains("SEKRET"),
+            "the token reached the {what}:\n{text}"
+        );
+    }
+}
