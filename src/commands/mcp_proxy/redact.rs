@@ -4,9 +4,11 @@
 //! the result reaches the agent.
 //!
 //! Only strings are sent and only strings change: each text block's `text`,
-//! each embedded resource's `text`, and every string value in
-//! `structuredContent`. The JSON-RPC envelope, the block order and every other
-//! block (an image, a resource link) are relayed as the server sent them.
+//! each embedded resource's `text`, a resource link's `name`, `title` and
+//! `description` (not its `uri`), every string value in `structuredContent`,
+//! and, for a call answered with a JSON-RPC error, the error's `message` and
+//! every string in its `data`. The JSON-RPC envelope, the block order and
+//! every other block (an image, audio) are relayed as the server sent them.
 //!
 //! What happens when the API gives no answer is the fail mode's call, as for a
 //! tool call (ADR-0034), with one difference. `mixed` relays an unredacted
@@ -145,8 +147,38 @@ pub fn review(
     api: &dyn Redactor,
     deadline: Duration,
 ) -> Outcome {
+    review_slots(mode, tool, result, &text_slots(result), api, deadline)
+}
+
+/// As [`review`], for the `error` of a `tools/call` answered with one: its
+/// `message` and every string in its `data`, where a server often puts the
+/// output of the failed call.
+pub fn review_error(
+    mode: FailMode,
+    tool: &str,
+    error: &Value,
+    api: &dyn Redactor,
+    deadline: Duration,
+) -> Outcome {
+    let mut slots = Vec::new();
+    if let Some(message) = error.get("message") {
+        strings_in(message, "/message".to_string(), &mut slots);
+    }
+    if let Some(data) = error.get("data") {
+        strings_in(data, "/data".to_string(), &mut slots);
+    }
+    review_slots(mode, tool, error, &slots, api, deadline)
+}
+
+fn review_slots(
+    mode: FailMode,
+    tool: &str,
+    result: &Value,
+    slots: &[(String, String)],
+    api: &dyn Redactor,
+    deadline: Duration,
+) -> Outcome {
     let started = Instant::now();
-    let slots = text_slots(result);
     let pieces: Vec<Piece> = slots
         .iter()
         .enumerate()
@@ -210,7 +242,7 @@ pub fn review(
         )));
     }
 
-    let rebuilt = rebuild(result, &slots, &pieces);
+    let rebuilt = rebuild(result, slots, &pieces);
     match failure {
         None => rebuilt.map_or(Outcome::Unchanged, Outcome::Redacted),
         Some(ApiFailure::Unusable(reason)) => Outcome::Withhold { reason },
@@ -291,22 +323,26 @@ struct Piece {
 }
 
 /// Every non-empty string a result's text lives in, as a JSON pointer and
-/// the text: text blocks, embedded resources' text, and the string values of
-/// `structuredContent` (keys are not sent).
+/// the text: text blocks, embedded resources' text, a resource link's name,
+/// title and description, and the string values of `structuredContent`
+/// (keys are not sent).
 fn text_slots(result: &Value) -> Vec<(String, String)> {
     let mut slots = Vec::new();
     if let Some(blocks) = result.get("content").and_then(Value::as_array) {
         for (i, block) in blocks.iter().enumerate() {
-            let at = match block.get("type").and_then(Value::as_str) {
-                Some("text") => block.get("text").map(|t| (t, format!("/content/{i}/text"))),
-                Some("resource") => block
-                    .pointer("/resource/text")
-                    .map(|t| (t, format!("/content/{i}/resource/text"))),
-                _ => None,
+            let fields: &[&str] = match block.get("type").and_then(Value::as_str) {
+                Some("text") => &["text"],
+                Some("resource") => &["resource/text"],
+                // A link's own text; its uri is left, or the link would break.
+                Some("resource_link") => &["name", "title", "description"],
+                _ => &[],
             };
-            if let Some((Value::String(text), pointer)) = at {
-                if !text.is_empty() {
-                    slots.push((pointer, text.clone()));
+            for field in fields {
+                let pointer = format!("/content/{i}/{field}");
+                if let Some(Value::String(text)) = result.pointer(&pointer) {
+                    if !text.is_empty() {
+                        slots.push((pointer, text.clone()));
+                    }
                 }
             }
         }
@@ -434,6 +470,7 @@ mod tests {
                 {"type": "image", "data": "x", "mimeType": "image/png"},
                 {"type": "resource", "resource": {"uri": "file:///a", "text": "two"}},
                 {"type": "text", "text": ""},
+                {"type": "resource_link", "uri": "file:///b", "name": "five", "description": "six"},
             ],
             "structuredContent": {"a/b": ["three", 4, {"c": "four"}]},
             "isError": false,
@@ -444,6 +481,8 @@ mod tests {
             [
                 "/content/0/text",
                 "/content/2/resource/text",
+                "/content/4/name",
+                "/content/4/description",
                 "/structuredContent/a~1b/0",
                 "/structuredContent/a~1b/2/c",
             ]

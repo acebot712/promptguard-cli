@@ -930,15 +930,23 @@ impl Proxy {
             }
             let key = id_of(message).map(id_key);
             let awaiting = key.as_deref().and_then(|k| self.awaiting(k));
-            let Some(result) = message.get("result") else {
+            // A tool call answered with an error is inspected too: servers
+            // put the failed call's output in it.
+            let result = message.get("result");
+            let call_error = message.get("error").is_some()
+                && matches!(awaiting, Some(Awaiting::ToolResult { .. }));
+            if result.is_none() && !call_error {
                 key.inspect(|k| self.untrack(k));
                 continue;
-            };
+            }
             let awaiting = match awaiting {
                 Some(a @ (Awaiting::ToolResult { .. } | Awaiting::ToolList { .. })) => a,
                 // A result whose request is no longer pending (it expired) is
                 // still redacted if it has a tool result's shape.
-                None if result.get("content").is_some_and(Value::is_array) => {
+                None if result
+                    .and_then(|r| r.get("content"))
+                    .is_some_and(Value::is_array) =>
+                {
                     Awaiting::ToolResult {
                         tool: "unknown".to_string(),
                     }
@@ -1002,23 +1010,35 @@ impl Proxy {
         }
     }
 
-    /// The message to relay in place of `message`, a response with a result,
-    /// or `None` to relay it as it is.
+    /// The message to relay in place of `message`, a response with a result
+    /// (or a tool call's error), or `None` to relay it as it is.
     fn inspect(&self, message: &Value, awaiting: &Awaiting) -> Option<Value> {
         let id = message.get("id").cloned().unwrap_or(Value::Null);
-        let result = message.get("result")?;
         match awaiting {
             Awaiting::ToolResult { tool } => {
-                let outcome = redact::review(
-                    self.fail_mode,
-                    tool,
-                    result,
-                    self.redactor.as_ref(),
-                    redact::RESULT_DEADLINE,
-                );
+                let (field, outcome) = if let Some(result) = message.get("result") {
+                    let outcome = redact::review(
+                        self.fail_mode,
+                        tool,
+                        result,
+                        self.redactor.as_ref(),
+                        redact::RESULT_DEADLINE,
+                    );
+                    ("result", outcome)
+                } else {
+                    let error = message.get("error")?;
+                    let outcome = redact::review_error(
+                        self.fail_mode,
+                        tool,
+                        error,
+                        self.redactor.as_ref(),
+                        redact::RESULT_DEADLINE,
+                    );
+                    ("error", outcome)
+                };
                 let with_result = |result: Value| {
                     let mut out = message.clone();
-                    out["result"] = result;
+                    out[field] = result;
                     out
                 };
                 match outcome {
