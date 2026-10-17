@@ -308,3 +308,37 @@ impl ScanCommand {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    fn response(body: &str) -> SecurityScanResponse {
+        serde_json::from_str(body).unwrap()
+    }
+
+    #[test]
+    fn a_flagged_allow_is_reported_as_flagged_not_clean() {
+        // A detector's warn threshold flagged it: allowed, not blocked, and
+        // not "no security threats detected" (promptguard#970).
+        let flagged = response(
+            r#"{"blocked": false, "decision": "allow", "flagged": true,
+                "confidence": 0.7, "reason": "Flagged, not blocked", "threatType": "toxicity",
+                "threshold": {"band": "warn", "warn": 0.5, "block": 0.9, "score": 0.7}}"#,
+        );
+        assert_eq!(flagged.verdict(), ScanVerdict::Flagged);
+    }
+
+    #[test]
+    fn a_clean_allow_and_a_block_keep_their_verdicts() {
+        let clean = response(
+            r#"{"blocked": false, "decision": "allow", "confidence": 0.02, "reason": ""}"#,
+        );
+        let blocked = response(
+            r#"{"blocked": true, "decision": "block", "confidence": 0.95, "reason": "x"}"#,
+        );
+        assert_eq!(clean.verdict(), ScanVerdict::Clean);
+        assert_eq!(blocked.verdict(), ScanVerdict::Blocked);
+    }
+}
