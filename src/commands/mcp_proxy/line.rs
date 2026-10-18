@@ -333,9 +333,9 @@ mod tests {
                 [serde_json::json!(1), serde_json::json!(3.0)]
             );
             let nested = r#"{"id":{"a":1},"result":{}}"#;
-            assert!(ids_in(nested, chunk).is_empty());
+            assert_eq!(ids_in(nested, chunk), Vec::<Value>::new());
             let request = r#"{"method":"m","id":4,"params":{}}"#;
-            assert!(ids_in(request, chunk).is_empty());
+            assert_eq!(ids_in(request, chunk), Vec::<Value>::new());
         }
     }
 }
