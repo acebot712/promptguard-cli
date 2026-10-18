@@ -12,6 +12,19 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Security
+
+- **Replaced the deprecated `serde_yaml` with `serde-saphyr`**, a YAML library
+  in safe Rust, for `policy apply`, `policy diff` and `policy export`.
+  `serde_yaml` pulled in `unsafe-libyaml`, which is unmaintained
+  (RUSTSEC-2024-0449). Existing policy files read exactly as before (YAML 1.2:
+  `yes`/`on` stay strings, `<<` is an ordinary key). The differences:
+  `policy export` now quotes strings with double quotes rather than single,
+  and quotes `yes`; a value of `.inf`, `.nan` or with an unknown `!tag`, which
+  used to reach the API silently as `null` or a one-key object, is now a
+  `YAML parse error`; and a number with a redundant leading zero (`017`)
+  reads as 17 where it used to be the string `"017"`.
+
 ## [2.2.1] - 2026-10-18
 
 ### Security

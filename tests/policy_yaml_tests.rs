@@ -10,7 +10,9 @@
 //!
 //! These tests pin both, byte for byte where the output is user-visible, so
 //! the YAML library underneath can change without a policy file that already
-//! works changing meaning, and without `export` output changing shape.
+//! works changing meaning, and without `export` output changing shape. The
+//! few deliberate differences from `serde_yaml` are each pinned by a test
+//! that says so.
 //! `diff` against an empty live config prints each desired top-level section
 //! as one JSON object, which makes it a direct window onto what the read path
 //! produced. The expected strings were captured from `serde_yaml` 0.9, the
@@ -270,9 +272,11 @@ const LIVE_CONFIG: &str = r#"{"guardrails": {
 }}"#;
 
 /// `export` output is what users redirect into `policy.yaml` and commit, so
-/// its exact shape is part of the contract. Note `needs_quoting: yes` is
-/// written bare: under YAML 1.2 it reads back as the string, which
-/// `export_round_trips_through_diff` holds the reader to.
+/// its exact shape is part of the contract. Layout, key order, indentation
+/// and plain scalars are what `serde_yaml` wrote; quoted strings now use
+/// double quotes where it used single, and `yes` is quoted (it was bare),
+/// so YAML 1.1 readers cannot take it for a boolean.
+/// `export_round_trips_through_diff` holds the reader to the same values.
 #[test]
 fn export_output_is_unchanged() {
     let dir = TempDir::new().unwrap();
@@ -281,15 +285,14 @@ fn export_output_is_unchanged() {
     assert!(out.status.success(), "stderr: {}", stderr(&out));
     assert_eq!(
         stdout(&out),
-        "\
-guardrails:
+        r#"guardrails:
   custom:
-    empty: ''
-    multi: 'a: b'
-    needs_quoting: yes
+    empty: ""
+    multi: "a: b"
+    needs_quoting: "yes"
     nested:
       list: []
-    numeric_string: '0.5'
+    numeric_string: "0.5"
   data_exfiltration:
     level: permissive
     note: null
@@ -305,7 +308,7 @@ guardrails:
   toxicity:
     max_retries: 3
     threshold: 0.7
-"
+"#
     );
 }
 
@@ -323,5 +326,130 @@ fn export_round_trips_through_diff() {
         stdout(&out).contains("No differences - policy matches live config."),
         "{}",
         stdout(&out)
+    );
+}
+
+/// Less common scalar spellings, where YAML 1.1 and 1.2 parsers disagree.
+#[test]
+fn edge_scalars_keep_their_meaning() {
+    let out = diff_against_empty(
+        "\
+guardrails:
+  custom:
+    no_word: no
+    off_word: off
+    y_word: y
+    title_true: True
+    upper_false: FALSE
+    octal: 0o17
+    hex: 0x1F
+    plus: +5
+    dot_float: .5
+    tagged_str: !!str 5
+",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "  custom:\n    - (none)\n    + {\"dot_float\":0.5,\"hex\":31,\"no_word\":\"no\",\
+             \"octal\":15,\"off_word\":\"off\",\"plus\":5,\"tagged_str\":\"5\",\
+             \"title_true\":true,\"upper_false\":false,\"y_word\":\"y\"}\n"
+        ),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// `<<` is an ordinary key to the reader, not a YAML 1.1 merge.
+#[test]
+fn merge_key_is_an_ordinary_key() {
+    let out = diff_against_empty(
+        "\
+base: &base
+  level: strict
+guardrails:
+  prompt_injection:
+    <<: *base
+    level: moderate
+",
+    );
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains(
+            "  prompt_injection:\n    - (none)\n    + {\"<<\":{\"level\":\"strict\"},\"level\":\"moderate\"}\n"
+        ),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// Values no guardrail can hold. `serde_yaml` turned `.inf`/`.nan` into
+/// `null` and an unknown tag into a one-key object (`{"!custom": "strict"}`),
+/// both silently. They are now refused, so a policy never reaches the API
+/// meaning something other than what the file says.
+#[test]
+fn values_with_no_json_meaning_are_refused() {
+    for (yaml, why) in [
+        (
+            "guardrails:\n  toxicity:\n    threshold: .inf\n",
+            "non-finite float",
+        ),
+        (
+            "guardrails:\n  toxicity:\n    threshold: .nan\n",
+            "non-finite float",
+        ),
+        (
+            "guardrails:\n  prompt_injection:\n    level: !custom strict\n",
+            "unsupported tag",
+        ),
+    ] {
+        let out = diff_against_empty(yaml);
+        assert!(!out.status.success(), "{yaml:?} should be rejected");
+        let err = stderr(&out);
+        assert!(
+            err.contains("YAML parse error:") && err.contains(why),
+            "{yaml:?}: {err}"
+        );
+    }
+}
+
+/// A decimal with a redundant leading zero (`017`) is the one spelling whose
+/// meaning moved: `serde_yaml` kept it as the string `"017"`, `serde-saphyr`
+/// reads it as the number 17. No guardrail field takes such a value; pinned
+/// so the difference is a decision, not a surprise.
+#[test]
+fn leading_zero_decimal_reads_as_a_number() {
+    let out = diff_against_empty("guardrails:\n  custom:\n    v: 017\n");
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("  custom:\n    - (none)\n    + {\"v\":17.0}\n"),
+        "{}",
+        stdout(&out)
+    );
+}
+
+/// Strings that look like other YAML types must be quoted on export, or the
+/// re-imported policy would change meaning.
+#[test]
+fn export_round_trips_strings_that_look_like_other_types() {
+    let dir = TempDir::new().unwrap();
+    let url = serve_json(
+        r##"{"guardrails": {"custom": {
+        "t": "true", "n": "null", "tilde": "~", "on": "on", "no": "no",
+        "zero": "017", "exp": "1e3", "hex": "0x1F", "inf": ".inf",
+        "lines": "a\nb", "hash": "#x", "dash": "- x", "colon": "k: v",
+        "space": " lead", "quote": "it's \"q\"", "unicode": "café", "tag": "!x"
+    }}}"##,
+    );
+    let exported = run_policy(&dir, &url, &["export"]);
+    assert!(exported.status.success(), "stderr: {}", stderr(&exported));
+    std::fs::write(dir.path().join("policy.yaml"), &exported.stdout).unwrap();
+    let out = run_policy(&dir, &url, &["diff", "policy.yaml"]);
+    assert!(
+        stdout(&out).contains("No differences - policy matches live config."),
+        "exported:\n{}\ndiff:\n{}{}",
+        stdout(&exported),
+        stdout(&out),
+        stderr(&out)
     );
 }
