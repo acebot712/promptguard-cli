@@ -79,12 +79,9 @@ impl PolicyCommand {
         // error 2)".
         let content = super::read_file_friendly(path)?;
 
-        let parsed: serde_yaml::Value = serde_yaml::from_str(&content)
-            .map_err(|e| PromptGuardError::Config(format!("YAML parse error: {e}")))?;
-
-        let json_value = serde_json::to_value(&parsed).map_err(|e| {
-            PromptGuardError::Config(format!("Failed to convert YAML to JSON: {e}"))
-        })?;
+        let json_value: serde_json::Value =
+            serde_saphyr::from_str_with_options(&content, Self::yaml_options())
+                .map_err(|e| PromptGuardError::Config(format!("YAML parse error: {e}")))?;
 
         let guardrails = json_value
             .get("guardrails")
@@ -95,6 +92,21 @@ impl PolicyCommand {
 
         Self::validate(&guardrails)?;
         Ok(guardrails)
+    }
+
+    /// How a policy file is read. `serde-saphyr` defaults lean YAML 1.1;
+    /// these keep the meaning a file had under `serde_yaml` 0.9 (YAML 1.2
+    /// core), which is what every existing policy file was written against:
+    /// `yes`/`on`/`no`/`off` stay strings, and `<<` is an ordinary key rather
+    /// than a merge. An unknown tag is refused instead of becoming a
+    /// `{"!tag": value}` object the API would never expect. Pinned end to end
+    /// by `tests/policy_yaml_tests.rs`.
+    fn yaml_options() -> serde_saphyr::Options {
+        let mut options = serde_saphyr::Options::default();
+        options.strict_booleans = true;
+        options.merge_keys = serde_saphyr::MergeKeyPolicy::AsOrdinary;
+        options.reject_unsupported_tags = true;
+        options
     }
 
     fn validate(guardrails: &serde_json::Value) -> Result<()> {
@@ -279,9 +291,7 @@ impl PolicyCommand {
         let current = self.fetch_current(client)?;
 
         let wrapper = serde_json::json!({ "guardrails": current });
-        let yaml_value: serde_yaml::Value = serde_json::from_value(wrapper)
-            .map_err(|e| PromptGuardError::Config(format!("Failed to convert config: {e}")))?;
-        let yaml_str = serde_yaml::to_string(&yaml_value)
+        let yaml_str = serde_saphyr::to_string(&wrapper)
             .map_err(|e| PromptGuardError::Config(format!("Failed to serialize YAML: {e}")))?;
 
         print!("{yaml_str}");
