@@ -1,6 +1,7 @@
 {
   "provenance": {
-    "source": "the earlier rule set internal/security/detection (Go regexp, RE2 syntax)",
+    "source": "the copyright holder's own earlier private rule set, internal/security/detection (Go regexp, RE2 syntax)",
+    "license": "The patterns and corpus were ported by the copyright holder from their own earlier private rule set, and are licensed by that copyright holder under this repository's Apache-2.0 licence.",
     "files": [
       {
         "path": "injection.go",
@@ -27,13 +28,13 @@
         "sha256": "9bd8dd55b049bb351fa5209b9e497e7be157130a143db83f770d951141b8079b"
       }
     ],
-    "generated_on": "2026-10-16",
-    "regenerate_with": "scripts/local-rules/regenerate.sh <path-to-earlier-rules-checkout>",
+    "generated_on": "2026-10-18",
+    "regenerate_with": "scripts/local-rules/regenerate.sh <path-to-source-checkout>",
     "match_semantics": [
-      "injection rules match case-insensitively; the earlier rule set lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
+      "injection rules match case-insensitively; the source lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
       "rules with min_entropy count a match only when its Shannon entropy (bits per character) is at least that value",
-      "findings are scored and gated by the pipeline block below, as the earlier rule set's DefaultInputSteps do, including each detector's combination bonus",
-      "indirect_injection rules run only on content marked untrusted (the earlier rule set runs them only for tool, retrieval and memory roles)",
+      "findings are scored and gated by the pipeline block below, as the source's DefaultInputSteps do, including each detector's combination bonus",
+      "indirect_injection rules run only on content marked untrusted (the source runs them only for tool, retrieval and memory roles)",
       "a rule in demoted can at most warn; a rule in dropped is not in the pack"
     ],
     "excluded": {
@@ -45,7 +46,7 @@
       "topic.go": "per-tenant topic policy, configured at run time, with no default rules"
     },
     "dropped": {
-      "jailbreak/authority.admin_override#4": "slash_admin matches any /dev, /root, /admin or /debug path (/dev/null in every shell script, /admin routes in every web app); under the earlier rule set's jailbreak thresholds it can only warn, so in a file scan it is pure noise"
+      "jailbreak/authority.admin_override#4": "slash_admin matches any /dev, /root, /admin or /debug path (/dev/null in every shell script, /admin routes in every web app); under the source's jailbreak thresholds it can only warn, so in a file scan it is pure noise"
     },
     "demoted": {
       "injection/extraction.direct": "blocks \"Never reveal your system prompt\" and \"Summarize the context below\", the defensive and task lines most system prompts are made of; it fires on the noun, not on intent",

@@ -1,5 +1,6 @@
-//! The local destructive-action check, ported from the earlier rule set's
-//! `internal/mcp/inspect.go` (`dangerousAction` / `containsDangerousAction`)
+//! The local destructive-action check, ported from the copyright holder's own
+//! earlier private rule set ("the source"): its `internal/mcp/inspect.go`
+//! (`dangerousAction` / `containsDangerousAction`)
 //! and extended with forms that pattern misses ([`OURS`]).
 //!
 //! ADR-0034 makes this regex a safety boundary of its own: under the default
@@ -21,11 +22,11 @@ use std::sync::OnceLock;
 /// a check that gives up must fail closed.
 const MAX_DEPTH: usize = 32;
 
-/// the earlier rule set's pattern, byte for byte: recursive forced removal in one flag
+/// The source's pattern, byte for byte: recursive forced removal in one flag
 /// (`-rf`, `-fr`), dropping or truncating a table or database, making a
 /// filesystem, piping a download into a shell, reading the shadow file, and
 /// climbing two directories at once.
-const ORIGINAL: &str = r"\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b|\b(drop|truncate)\s+(table|database)\b|\bmkfs\b|\b(curl|wget)\b[^\n]*\|\s*(sh|bash)\b|/etc/shadow|\.\.[/\\]\.\.[/\\]";
+const PORTED: &str = r"\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b|\b(drop|truncate)\s+(table|database)\b|\bmkfs\b|\b(curl|wget)\b[^\n]*\|\s*(sh|bash)\b|/etc/shadow|\.\.[/\\]\.\.[/\\]";
 
 // Fragments shared by several of [`OURS`]'s patterns. Macros, because
 // `concat!` takes only literals.
@@ -58,7 +59,7 @@ macro_rules! sql_name {
     };
 }
 
-/// Ours, not the earlier rule set's: forms its pattern misses.
+/// Ours, not the source's: forms its pattern misses.
 ///
 /// - `rm` with the recursive and force flags as separate words, short or
 ///   long (abbreviated, as GNU allows: `--rec`, `--forc`), in either order,
@@ -133,7 +134,7 @@ fn pattern() -> Option<&'static Regex> {
     static PATTERN: OnceLock<Option<Regex>> = OnceLock::new();
     PATTERN
         .get_or_init(|| {
-            let alternatives = std::iter::once(ORIGINAL).chain(OURS).collect::<Vec<_>>();
+            let alternatives = std::iter::once(PORTED).chain(OURS).collect::<Vec<_>>();
             Regex::new(&format!("(?i)(?:{})", alternatives.join("|"))).ok()
         })
         .as_ref()
@@ -167,7 +168,7 @@ fn matches(s: &str) -> bool {
 /// Whether any string in a tool call's arguments looks destructive.
 ///
 /// Strings are checked after JSON decoding, so `\u0072\u006d -rf` is caught
-/// as `rm -rf`. Object keys are checked as well as values: the earlier rule set checked only
+/// as `rm -rf`. Object keys are checked as well as values: the source checked only
 /// values, and a key is just as able to carry a command to a server that
 /// interpolates it.
 pub fn is_destructive(arguments: &Value) -> bool {
@@ -196,7 +197,7 @@ mod tests {
         serde_json::from_str(raw).unwrap()
     }
 
-    /// the earlier rule set's own cases (`TestInspectRealDecisions`), plus the remaining
+    /// The source's own cases (`TestInspectRealDecisions`), plus the remaining
     /// alternatives of the pattern.
     #[test]
     fn destructive_arguments_are_caught() {
@@ -221,10 +222,10 @@ mod tests {
         }
     }
 
-    /// Ours, not the earlier rule set's: forms its pattern misses, which during an outage
+    /// Ours, not the source's: forms its pattern misses, which during an outage
     /// under `mixed` would otherwise run unchecked.
     #[test]
-    fn extensions_beyond_the_earlier-rules_port_are_caught() {
+    fn extensions_beyond_the_ported_pattern_are_caught() {
         for command in [
             "rm -r -f /",
             "rm -f -r /",

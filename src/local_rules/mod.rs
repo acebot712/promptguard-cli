@@ -5,18 +5,19 @@
 //! no key. It is a local subset: the API also runs ML classifiers and applies
 //! the project's policy, and nothing here stands in for that.
 //!
-//! `pack.json` is generated, never hand-edited. It holds the earlier rule set's Go detector
-//! tables (Go `regexp`, RE2 syntax, which the `regex` crate accepts as is) and
+//! `pack.json` is generated, never hand-edited. It holds the Go detector
+//! tables of the copyright holder's own earlier private rule set ("the
+//! source"; Go `regexp`, RE2 syntax, which the `regex` crate accepts as is) and
 //! the scoring pipeline they run under there, both dumped by
 //! `scripts/local-rules/regenerate.sh`. Its `provenance` block names the source
-//! files and their hashes, how matching differs from the earlier rule set, which detectors
+//! files and their hashes, how matching differs from the source, which detectors
 //! and rules were left out or demoted, and why.
 //!
-//! Scoring follows the earlier rule set's `DefaultInputSteps`: a finding's weighted score is
+//! Scoring follows the source's `DefaultInputSteps`: a finding's weighted score is
 //! its severity's score times its confidence (after the detector's combination
 //! bonus), and each pipeline step applies its strategy when the score reaches
 //! the step's threshold. Every number comes from `pack.json` except the
-//! combination bonuses, which are detector code in the earlier rule set rather than data.
+//! combination bonuses, which are detector code in the source rather than data.
 
 use crate::error::{PromptGuardError, Result};
 use regex::{Regex, RegexBuilder};
@@ -39,7 +40,7 @@ const SECRET_PREFIX_CHARS: usize = 4;
 /// The detector whose rules run only on untrusted content.
 const UNTRUSTED_ONLY_DETECTOR: &str = "indirect_injection";
 
-/// the earlier rule set's confidence cap for the combination bonus (`min(c+bonus, 0.99)`
+/// The source's confidence cap for the combination bonus (`min(c+bonus, 0.99)`
 /// in `injection.go` and `jailbreak.go`).
 const BONUS_CONFIDENCE_CAP: f64 = 0.99;
 
@@ -72,7 +73,7 @@ impl Severity {
 }
 
 /// What a finding does, weakest first. Only `Block` fails a scan. `Mask` is
-/// what the earlier rule set's pipeline does with a secret: it would be redacted in flight,
+/// what the source's pipeline does with a secret: it would be redacted in flight,
 /// so it is reported but, as there, it does not block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Effect {
@@ -108,7 +109,7 @@ impl Effect {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ScanOptions {
     /// The content comes from outside the operator: tool output, retrieved
-    /// documents, memory. Turns on the indirect-injection rules, which the earlier rule set
+    /// documents, memory. Turns on the indirect-injection rules, which the source
     /// runs only for those roles.
     pub untrusted: bool,
 }
@@ -158,7 +159,7 @@ pub struct Rule {
     pub category: String,
     pub severity: Severity,
     confidence: f64,
-    /// the earlier rule set's severity score for `severity`.
+    /// The source's severity score for `severity`.
     severity_score: f64,
     /// A match counts only at or above this Shannon entropy; 0 means always.
     min_entropy: f64,
@@ -184,7 +185,7 @@ pub struct LocalFinding {
     pub score: f64,
     /// What this pack does with the finding.
     pub effect: Effect,
-    /// What the earlier rule set's pipeline would do, before this pack's demotions.
+    /// What the source's pipeline would do, before this pack's demotions.
     pub upstream_effect: Effect,
     pub demoted: bool,
     /// `effect == Effect::Block`: this finding fails the scan.
@@ -274,7 +275,7 @@ impl RulePack {
     }
 
     /// Every rule that matches `text`, at most one finding per rule (its
-    /// first counted match), in pack order, each scored as the earlier rule set would.
+    /// first counted match), in pack order, each scored as the source would.
     pub fn scan(&self, text: &str, options: &ScanOptions) -> Vec<LocalFinding> {
         let matches: Vec<(&Rule, regex::Match<'_>)> = self
             .rules
@@ -330,7 +331,7 @@ impl RulePack {
     }
 }
 
-/// The confidence the earlier rule set adds to every finding of a detector when several of
+/// The confidence the source adds to every finding of a detector when several of
 /// its rules fire together. Ported from the detectors' `Detect` methods:
 /// injection adds 0.1 once its findings span two categories; jailbreak adds
 /// 0.1 for two attack families (the sub-category's first segment) and 0.2 for
@@ -365,7 +366,7 @@ fn combination_bonus(detector: &str, matches: &[(&Rule, regex::Match<'_>)]) -> f
     }
 }
 
-/// `jailbreak/persona.dan#2` -> `persona`: the earlier rule set's `topLevel(SubCategory)`.
+/// `jailbreak/persona.dan#2` -> `persona`: the source's `topLevel(SubCategory)`.
 fn family(id: &str) -> &str {
     let sub = id.split_once('/').map_or(id, |(_, s)| s);
     let sub = sub.split_once('#').map_or(sub, |(s, _)| s);
@@ -375,7 +376,7 @@ fn family(id: &str) -> &str {
 fn compile(raw: RawRule, severity_score: f64, demoted: bool) -> Result<Rule> {
     let mut builder = RegexBuilder::new(&raw.regex);
     match raw.detector.as_str() {
-        // the earlier rule set lowercases the input before its injection rules run. Matching
+        // The source lowercases the input before its injection rules run. Matching
         // case-insensitively is the same thing, except that it also lets the
         // two uppercase `[INST]` rules match, which lowercased input never could.
         "injection" => {
@@ -420,7 +421,7 @@ fn excerpt(detector: &str, matched: &str) -> String {
     }
 }
 
-/// Bits per character, computed as the earlier rule set does: character counts over the
+/// Bits per character, computed as the source does: character counts over the
 /// byte length, which is the same thing for the ASCII values its rules match.
 #[allow(clippy::cast_precision_loss)] // counts are far below 2^52
 fn shannon_entropy(s: &str) -> f64 {

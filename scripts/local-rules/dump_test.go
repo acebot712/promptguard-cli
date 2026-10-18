@@ -1,6 +1,6 @@
 // This file is not compiled by promptguard-cli. scripts/local-rules/regenerate.sh
-// copies it into a scratch copy of the earlier rule set's internal/security/detection package
-// and runs it there, so it can read the detectors' unexported pattern tables.
+// copies it into a scratch copy of the source rule set's
+// internal/security/detection package and runs it there, so it can read the detectors' unexported pattern tables.
 // It writes the pattern pack (rules plus the scoring pipeline they run under)
 // and the corpus that tests/local_rules_tests.rs checks the Rust port against.
 
@@ -17,7 +17,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/earlier-rules-ai/earlier-rules/internal/security"
+	"SOURCE_MODULE/internal/security"
 )
 
 type packPattern struct {
@@ -37,12 +37,12 @@ type packPattern struct {
 var portedFiles = []string{"injection.go", "jailbreak.go", "indirect_injection.go", "secrets.go", "../steps.go", "../engine.go"}
 
 // Rules taken out of the pack entirely. Only noise in a repository scan:
-// the rule's own effect can never exceed warn under the earlier rule set's thresholds.
+// the rule's own effect can never exceed warn under the source's thresholds.
 var dropped = map[string]string{
-	"jailbreak/authority.admin_override#4": "slash_admin matches any /dev, /root, /admin or /debug path (/dev/null in every shell script, /admin routes in every web app); under the earlier rule set's jailbreak thresholds it can only warn, so in a file scan it is pure noise",
+	"jailbreak/authority.admin_override#4": "slash_admin matches any /dev, /root, /admin or /debug path (/dev/null in every shell script, /admin routes in every web app); under the source's jailbreak thresholds it can only warn, so in a file scan it is pure noise",
 }
 
-// Rules kept but capped at warn: under the earlier rule set's thresholds they block, and in
+// Rules kept but capped at warn: under the source's thresholds they block, and in
 // a file scan they block ordinary system prompts and documentation.
 var demoted = map[string]string{
 	"injection/override.imperative": "blocks at exactly the 0.72 threshold on any imperative near \"the ... rules/context/message\" within one sentence (\"skip the rules section\", \"override the default message\"); the narrow override.* rules still block the real phrasings",
@@ -60,6 +60,7 @@ var excluded = map[string]string{
 
 type provenance struct {
 	Source         string            `json:"source"`
+	License        string            `json:"license"`
 	Files          []sourceFile      `json:"files"`
 	GeneratedOn    string            `json:"generated_on"`
 	RegenerateWith string            `json:"regenerate_with"`
@@ -69,7 +70,7 @@ type provenance struct {
 	Demoted        map[string]string `json:"demoted"`
 }
 
-// The scoring pipeline, read from the earlier rule set rather than restated: a finding's
+// The scoring pipeline, read from the source rather than restated: a finding's
 // weighted score is severity_scores[severity] x confidence, and each input
 // step applies its strategy when a detector's best weighted score reaches its
 // threshold (DefaultInputSteps, steps.go).
@@ -98,18 +99,18 @@ type packFile struct {
 }
 
 // Matches is what each Go regex matched (rule by rule). The two verdicts are
-// what the earlier rule set's own engine decided, running DefaultInputSteps over the sample
+// what the source's own engine decided, running DefaultInputSteps over the sample
 // as user content and as tool output.
 type corpusSample struct {
 	Name             string   `json:"name"`
 	Text             string   `json:"text"`
 	Benign           bool     `json:"benign"`
-	Matches          []string `json:"earlier-rules_matches"`
-	VerdictUser      string   `json:"earlier-rules_verdict_user"`
-	VerdictUntrusted string   `json:"earlier-rules_verdict_untrusted"`
+	Matches          []string `json:"source_matches"`
+	VerdictUser      string   `json:"source_verdict_user"`
+	VerdictUntrusted string   `json:"source_verdict_untrusted"`
 	// Structural is true when the jailbreak detector's non-regex layer
 	// (structuralFindings, not ported) produced findings on the sample.
-	Structural bool `json:"earlier-rules_structural"`
+	Structural bool `json:"source_structural"`
 }
 
 func TestDumpOfflinePack(t *testing.T) {
@@ -169,7 +170,7 @@ func TestDumpOfflinePack(t *testing.T) {
 			})
 	}
 
-	// Parity corpus: the earlier rule set's handwritten eval sets plus the jailbreak
+	// Parity corpus: the source's handwritten eval sets plus the jailbreak
 	// corpus. secrets.json and pii.json are left out on purpose — their
 	// samples are credential-shaped and would trip the secret scanner on
 	// push; the Rust tests build secret-shaped strings at run time instead.
@@ -245,15 +246,16 @@ func TestDumpOfflinePack(t *testing.T) {
 	}
 	write("pack.json", packFile{
 		Provenance: provenance{
-			Source:         "the earlier rule set internal/security/detection (Go regexp, RE2 syntax)",
+			Source:         "the copyright holder's own earlier private rule set, internal/security/detection (Go regexp, RE2 syntax)",
+			License:        "The patterns and corpus were ported by the copyright holder from their own earlier private rule set, and are licensed by that copyright holder under this repository's Apache-2.0 licence.",
 			Files:          files,
 			GeneratedOn:    os.Getenv("GENERATED_ON"),
-			RegenerateWith: "scripts/local-rules/regenerate.sh <path-to-earlier-rules-checkout>",
+			RegenerateWith: "scripts/local-rules/regenerate.sh <path-to-source-checkout>",
 			MatchSemantics: []string{
-				"injection rules match case-insensitively; the earlier rule set lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
+				"injection rules match case-insensitively; the source lowercases the input before matching, which is equivalent except that it left the uppercase [INST] rules unable to match anything",
 				"rules with min_entropy count a match only when its Shannon entropy (bits per character) is at least that value",
-				"findings are scored and gated by the pipeline block below, as the earlier rule set's DefaultInputSteps do, including each detector's combination bonus",
-				"indirect_injection rules run only on content marked untrusted (the earlier rule set runs them only for tool, retrieval and memory roles)",
+				"findings are scored and gated by the pipeline block below, as the source's DefaultInputSteps do, including each detector's combination bonus",
+				"indirect_injection rules run only on content marked untrusted (the source runs them only for tool, retrieval and memory roles)",
 				"a rule in demoted can at most warn; a rule in dropped is not in the pack",
 			},
 			Excluded: excluded,
