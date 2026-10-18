@@ -588,7 +588,13 @@ mod tests {
         }
     }
 
-    /// Sleeps before answering like `Upper`, and records each timeout given.
+    /// Answers the first request after `delay`, like `Upper`; every later
+    /// one hangs for the whole timeout it is given. Records each timeout.
+    ///
+    /// Only the first call sleeps a fixed time, and a sleep never ends early,
+    /// so what the test asserts does not depend on how late a loaded runner
+    /// wakes the thread: the second call always gets at least `delay` less
+    /// than the first, and always exhausts the deadline.
     struct Slow {
         delay: Duration,
         timeouts: Mutex<Vec<Duration>>,
@@ -601,8 +607,12 @@ mod tests {
             texts: &[String],
             timeout: Duration,
         ) -> Result<GuardAnswer, ApiFailure> {
-            self.timeouts.lock().unwrap().push(timeout);
-            if self.delay > timeout {
+            let first = {
+                let mut timeouts = self.timeouts.lock().unwrap();
+                timeouts.push(timeout);
+                timeouts.len() == 1
+            };
+            if !first {
                 std::thread::sleep(timeout);
                 return Err(ApiFailure::Unavailable("timed out".into()));
             }
@@ -615,9 +625,13 @@ mod tests {
     fn requests_share_one_deadline_and_the_rest_follows_the_fail_mode() {
         let text = ("x".repeat(1000) + "\n").repeat(300); // 4 requests
         let result = json!({"content": [{"type": "text", "text": text}]});
-        let deadline = Duration::from_millis(250);
+        // The deadline also covers splitting the text, which on a starved
+        // macOS runner took 350ms in a debug build; leave room for that and
+        // the first answer.
+        let deadline = Duration::from_secs(1);
+        let delay = Duration::from_millis(50);
         let api = Slow {
-            delay: Duration::from_millis(100),
+            delay,
             timeouts: Mutex::new(vec![]),
         };
         let outcome = review(FailMode::Mixed, "t", &result, &api, deadline);
@@ -631,15 +645,20 @@ mod tests {
             "the first requests are kept"
         );
         let timeouts = api.timeouts.lock().unwrap();
-        assert_eq!(timeouts.len(), 3, "{timeouts:?}");
+        assert_eq!(
+            timeouts.len(),
+            2,
+            "no request after the deadline: {timeouts:?}"
+        );
         assert!(timeouts.iter().all(|t| *t <= deadline));
         assert!(
-            timeouts[2] < Duration::from_millis(100),
-            "the last gets what is left"
+            timeouts[1] + delay <= timeouts[0],
+            "the second gets only what is left: {timeouts:?}"
         );
         drop(timeouts);
+        // Every later call hangs, so a short deadline is enough here.
         assert!(matches!(
-            review(FailMode::Closed, "t", &result, &api, deadline),
+            review(FailMode::Closed, "t", &result, &api, delay),
             Outcome::Withhold { .. }
         ));
     }
