@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.2] - 2026-10-18
+
 ### Security
 
 - **Replaced the deprecated `serde_yaml` with `serde-saphyr`**, a YAML library

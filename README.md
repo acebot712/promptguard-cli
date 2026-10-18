@@ -17,7 +17,7 @@ Single 5.3MB binary. No runtime interpreter required. Real AST transformations. 
 |--------|---------|
 | **Shell script** (macOS, Linux x86_64) | `curl -fsSL https://raw.githubusercontent.com/acebot712/promptguard-cli/main/install.sh \| sh` |
 | **Binary** | Download from [GitHub Releases](https://github.com/acebot712/promptguard-cli/releases/latest) |
-| **Cargo** (build from source) | `cargo install --locked --git https://github.com/acebot712/promptguard-cli --tag cli-v2.2.1` |
+| **Cargo** (build from source) | `cargo install --locked --git https://github.com/acebot712/promptguard-cli --tag cli-v2.2.2` |
 
 Every release publishes these prebuilt binaries, each with a `.sha256` checksum
 beside it (the shell script verifies it before installing):
