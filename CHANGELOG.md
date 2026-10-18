@@ -12,6 +12,14 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.1] - 2026-10-18
+
+### Security
+
+- **Updated `rustls` to 0.23.46 and `quinn-proto` to 0.11.19**, which fix
+  RUSTSEC-2026-0338 to 0342 (quinn-proto) and RUSTSEC-2026-0346 to 0349
+  (rustls). 2.2.0 shipped with the affected versions; upgrade to 2.2.1.
+
 ## [2.2.0] - 2026-10-18
 
 ### Added
