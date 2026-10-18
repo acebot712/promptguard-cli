@@ -8,7 +8,7 @@
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 
-/// The longest message the proxy buffers and inspects: 4 MiB, as in the earlier rule set.
+/// The longest message the proxy buffers and inspects: 4 MiB, as in the source rule set.
 pub const MAX_LINE_BYTES: usize = 4 * 1024 * 1024;
 
 pub enum Line {
