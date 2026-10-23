@@ -12,6 +12,8 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+## [2.2.3] - 2026-10-23
+
 ### Security
 
 - **`rustls-webpki` 0.103.16 and `webpki-root-certs` 1.0.11**, so certificate
