@@ -12,6 +12,13 @@ survives three releases is a changelog nobody is maintaining.
 
 ## [Unreleased]
 
+### Security
+
+- **`rustls-webpki` 0.103.16 and `webpki-root-certs` 1.0.11**, so certificate
+  verification no longer accepts distrusted intermediates (RUSTSEC-2026-0382)
+  and the bundled roots no longer trust the distrusted emSign intermediates
+  (RUSTSEC-2026-0383).
+
 ## [2.2.2] - 2026-10-18
 
 ### Security
